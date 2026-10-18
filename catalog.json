@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "provider_id": "official",
+  "catalog_id": null,
+  "name": "Minih-Agent-Desktop Plugins",
+  "homepage": "https://github.com/minih-git/minih-agent-plugins",
+  "updated_at": "2026-10-18T12:14:37Z",
+  "generated_at": "2026-10-18T12:14:37Z",
+  "policy_version": null,
+  "artifact_base_url": "https://raw.githubusercontent.com/minih-git/minih-agent-plugins/main",
+  "plugins": [
+    {
+      "id": "cn.star.computer-use",
+      "name": "Computer Use",
+      "description": "Windows desktop automation with Office knowledge and application workflows.",
+      "author": "TheFlareStar",
+      "icon_url": null,
+      "categories": [],
+      "verified": false,
+      "trust": "community",
+      "publisher_id": "minih-git",
+      "homepage": null,
+      "repository": null,
+      "safety_notes": "Spawns the machine's cua-driver MCP server, which can screenshot windows and send mouse/keyboard input through UI Automation. High-risk tools. Built-in denylist blocks password managers, terminals, lock screen, Windows Security, PI-Desktop, ChatGPT, and Codex. An optional allowlist further restricts targets. Screenshots stay in the plugin process and are returned to the agent; they are not uploaded by this plugin. Installing the driver runs the official script from cua.ai after panel confirmation.",
+      "i18n": {
+        "en": {
+          "name": "Computer Use",
+          "description": "Windows desktop automation with Office knowledge and application workflows.",
+          "safetyNotes": "Spawns the machine's cua-driver MCP server, which can screenshot windows and send mouse/keyboard input through UI Automation. High-risk tools. Built-in denylist blocks password managers, terminals, lock screen, Windows Security, PI-Desktop, ChatGPT, and Codex. An optional allowlist further restricts targets. Screenshots stay in the plugin process and are returned to the agent; they are not uploaded by this plugin. Installing the driver runs the official script from cua.ai after panel confirmation."
+        },
+        "zh-CN": {
+          "name": "Computer Use",
+          "description": "Windows 桌面控制，内置 Office 知识和应用操作技能。",
+          "safetyNotes": "插件进程会拉起本机 cua-driver MCP，可截取窗口并通过 UI Automation 发送键鼠。动作为高风险。内置拒绝密码管理器、终端、锁屏、Windows 安全中心、PI-Desktop、ChatGPT、Codex。可选允许列表进一步限制目标。截图只留在插件进程并回给 Agent，本插件不上传。安装驱动会在面板确认后运行 cua.ai 官方脚本。"
+        }
+      },
+      "versions": [
+        {
+          "version": "0.4.0",
+          "publishedAt": "2026-10-18T12:14:37Z",
+          "shasum": "db0a94c28a846d87f2f4f86118e6e7692fcc9ee22afa6aee1c465dbca188354f",
+          "url": "packages/cn.star.computer-use-0.4.0.piplug",
+          "sizeBytes": 644151,
+          "permissions": [
+            "ui.panel",
+            "agent.tool.register",
+            "agent.prompt.inject"
+          ],
+          "yanked": false,
+          "minMinihAgent": ">=0.14.0"
+        }
+      ]
+    },
+    {
+      "id": "local.remote-tools",
+      "name": "Remote SSH Tools",
+      "description": "SSH 远程读取、写入、编辑与命令执行；适配 @oresk/pi-remote-tools。需要已配置的密钥和可信主机。",
+      "author": "jiege6-66",
+      "icon_url": null,
+      "categories": [],
+      "verified": false,
+      "trust": "community",
+      "publisher_id": "minih-git",
+      "homepage": "https://github.com/jiege6-66/pi-desktop-remote-tools",
+      "repository": "https://github.com/jiege6-66/pi-desktop-remote-tools",
+      "safety_notes": "高风险 agent.extension 扩展：在 Agent sidecar 中使用 Node 和系统 SSH，按请求读取、写入、编辑远端文件并执行命令。使用现有 SSH 配置与认证，不收集或捆绑凭证，不修改 SSH 配置，不自动接受陌生主机密钥。仅对可信且获授权的主机使用；取消本地 SSH 不保证远端后台进程停止。",
+      "i18n": {
+        "en": {
+          "name": "Remote SSH Tools",
+          "description": "Read, write, edit files and run commands over SSH in PI-Desktop. An independent adapter of @oresk/pi-remote-tools; requires configured authentication and trusted hosts.",
+          "safetyNotes": "High-risk agent.extension: runs Node and system SSH in the Agent sidecar to read, write and edit remote files and execute requested commands. Uses existing SSH configuration and authentication; does not collect or bundle credentials, alter SSH configuration or automatically trust unknown host keys. Use only trusted, authorized hosts. Cancelling local SSH does not guarantee remote background processes stop."
+        },
+        "zh-CN": {
+          "name": "SSH 远程工具",
+          "description": "在 PI-Desktop 中通过 SSH 读取、写入、编辑远端文件并执行命令。基于 @oresk/pi-remote-tools 的独立适配，需要已配置的认证和可信主机。",
+          "safetyNotes": "高风险 agent.extension 扩展：在 Agent sidecar 中使用 Node 和系统 SSH，按请求读取、写入、编辑远端文件并执行命令。使用现有 SSH 配置与认证，不收集或捆绑凭证，不修改 SSH 配置，不自动接受陌生主机密钥。仅对可信且获授权的主机使用；取消本地 SSH 不保证远端后台进程停止。"
+        }
+      },
+      "versions": [
+        {
+          "version": "0.1.0",
+          "publishedAt": "2026-10-18T12:14:37Z",
+          "shasum": "49cd1a282cecb31a37af65c6296913c2eee096d039a712068c84febbc72fa977",
+          "url": "packages/local.remote-tools-0.1.0.piplug",
+          "sizeBytes": 55209,
+          "permissions": [
+            "agent.extension"
+          ],
+          "yanked": false,
+          "minMinihAgent": ">=0.15.9",
+          "provenance": {
+            "sourceRepository": "https://github.com/jiege6-66/pi-desktop-remote-tools",
+            "sourceRef": "v0.1.0",
+            "builder": "repack@minih-agent-plugins",
+            "sourcePath": "plugins/local.remote-tools"
+          }
+        }
+      ]
+    },
+    {
+      "id": "pi.file-manager",
+      "name": "文件管理器",
+      "description": "在右侧工作面板中浏览、查看并编辑当前项目的文件：完整目录树（图标随文件类型变化）、左右分栏（左侧文件列表可整块收起）、代码高亮编辑与保存、Markdown 预览、PDF 预览（连续滚动、双页与导航侧栏）、图片与音视频查看、CSV/JSON 结构化查看、右键新建、重命名/移动、按文件名搜索、项目组里的多文件夹切换（宿主把一个项目注册成多个本地文件夹时，面板左上角的文件夹名就是切换器，按项目记住看的是哪个 folder），以及宿主驱动的打开请求——宿主可以让视图直接打开某个文件，包括项目之外的会话临时 / 附件路径。右键菜单新增「复制相对路径」「复制绝对路径」，以及二级子菜单「通过…打开」——鼠标移上去即展开，列出这台机器上真实存在的程序（系统默认应用，以及 VS Code、Zed、Chrome、Edge、Zen 等装了哪几个就列哪几个；按文件类型过滤——编辑器什么都能打开，浏览器只出现在它真能渲染的网页类文件上，不拿 Chrome 去开 .tsx），选中即用那个程序打开当前条目。编辑器探测在启动时做一次、按天缓存并落盘（多开共享同一次结果），靠注册表 App Paths / StartMenuInternet、PATH 与少数固定安装位置定位，不遍历目录。右键菜单还支持删除文件或文件夹（目录整体删除，删前先弹确认框）。另外与 git 联动：文件列表里直接标出哪些文件被修改、哪些是新增（目录上给的是整棵子树的汇总），改动行数一眼可见（+N/−N），打开文件后右侧可以看它相对上次提交的具体变更（逐行对照；未跟踪的新文件按全文新增展示，已暂存与未暂存分开标注）。没有 git 或不是仓库时这些标记整体消失，其余功能照旧。这次还加上了文件监听：文件在编辑器之外被改动（外部编辑器、git checkout、构建产物、另一个窗口的改动）会自动重新读取并刷新列表，不必再点「刷新」——两个手动刷新按钮原样保留，顶部还有一个开关可以随时关掉自动刷新。打开有改动的文件时，工具栏是「编辑 / 预览 / 变更」一组互斥页签：从任何一侧都能进「变更」，再切回来即回到原先那一种看法，两种内容不会同时出现在内容区。",
+      "author": "Tioit-Wang",
+      "icon_url": null,
+      "categories": [
+        "productivity",
+        "community"
+      ],
+      "verified": false,
+      "trust": "community",
+      "publisher_id": "minih-git",
+      "homepage": null,
+      "repository": null,
+      "safety_notes": "fs.read 仅用于「用默认应用打开」与「在文件夹中显示」这两个由宿主代为执行的动作（权限与范围同内置的 Files 视图：root workspace、scope **）；插件自身的读写走自己进程内的 Node fs——宿主的权限网关不介入这些调用，manifest 也无法申报「整树写入」。删除也走同一条链路：同样由插件自己进程内的 Node fs 执行，受同一套根内包含校验与凭据黑名单约束，明确拒绝删除项目根目录本身，并记入写入审计。路径的访问范围由插件自身限定在项目**当前选中的那个已注册文件夹根**（folder root）内：解析后的路径必须仍在根内（拒绝符号链接与 junction 逃逸）、拒绝凭据类路径（.env*、.ssh/、*.pem、.git/**）。项目注册了多个文件夹时，包含基点仍然是**其中一个** root、绝不放大成整个组的并集；宿主请求打开的绝对路径若落在同项目的另一个 root 下，插件会先把基点切到包含它的那个 root，再按「相对该 root」解析，根内包含校验一条不减。另有一条刻意的例外，它不在上面这条包含保证之内：宿主可以要求本视图打开由宿主自己选定的项目外文件（会话临时目录 / 附件的绝对路径），插件对这些路径走原生 Node fs 读写、不做根内包含校验；凭据类路径黑名单在两种模式下都照旧全量生效（原始字符串、规范化后与 realpath 之后各查一遍），这类路径同样原子写并记审计。保存采用原子写（临时文件 + 重命名）、覆盖在编辑器外被改动过的文件前会先询问。图片与音视频按各自上限（8 MiB / 24 MiB）读取后以 base64 data URI 交给视图；数据库一律以只读方式打开（readOnly + PRAGMA query_only），SQL 框只接受单条只读语句，只能浏览、绝无修改；zip、exe 这类二进制只报「不支持预览」，不做任何解码。无网络访问；插件数据目录只保存设置与写入审计日志。git 联动只调用工作区里 git 的只读子命令（status / diff / rev-parse），不写索引、不联网、不碰 .git/**：状态以 GIT_OPTIONAL_LOCKS=0 / GIT_TERMINAL_PROMPT=0 / GIT_LITERAL_PATHSPECS=1 运行，每个子命令 5s 超时并有输出上限，PATH 上没有 git 时按常见安装位置兜底探测，仍不可用就只是「没有状态」——列目录、读写、保存、删除一条都不受影响。传给 git 的是根相对路径并先过根内包含校验与凭据黑名单，git 只被问「这些文件怎么样了」。差异内容对已跟踪文件用 git diff，未跟踪的新文件由插件自己读文件、逐行加前缀（上限 256 KiB），超限与二进制都明确说明而不是硬截。徽标与行数来自同一次快照并缓存 2s，本插件自己的保存会立刻作废该缓存。文件监听（0.8.0）用 Node 自带的 fs.watch 对**当前基点 root** 开一只递归监听，persistent: false（没有变化时不吊住插件进程），并且：只把变化当数据看，不写入、不联网、不碰 .git/**（.git/ 与 node_modules/ 的事件直接丢弃，凭据类路径照旧不上报，监听不是绕过黑名单的后门）；每个子进程没有额外权限，沿用插件进程本已有的 Node 能力；本插件自己的写盘（临时文件 + rename）先记一笔，1.5 秒内到达的同名事件不算「外部改动」，否则每按一次 Ctrl+S 都会把自己的文档重装一遍；变化去抖 250ms 后并入游标历史（上限 400 条），视图每 1.2 秒取一次增量（宿主没有给插件向视图推送的通道），面板不可见时跳过这一轮。**没有未保存改动时自动重新读取打开的文件；有未保存改动时只提示、不覆盖**——静默丢掉用户刚敲的字是最糟的一种「自动」。基点一换，监听跟着换；插件卸载时监听一并关闭。运行时不支持递归 fs.watch 时只是关掉自动刷新，手动刷新与其它功能一律不受影响。「通过…打开」由本插件主进程 spawn 目标编辑器，用的是插件进程本已有的 Node 能力、没有额外权限：可执行文件只能来自插件自己探测出来的那份列表（视图只递 id、递不了路径），被打开的条目先过同一套根内包含校验与凭据黑名单；spawn 不经 shell，参数只有一条绝对路径（没有命令行注入面）；子进程 detached + stdio ignore + unref，编辑器不随面板关闭而消失，也不会吊住插件进程；每次打开都记一条写入审计。编辑器探测只读注册表与 PATH、不写任何东西，结果按日期缓存在插件数据目录（editors.json）；探测不可用时只是少一层菜单，其余功能不受影响。",
+      "i18n": {
+        "en": {
+          "name": "File Manager",
+          "description": "Browse, view and edit the open project in the right work panel: a full directory tree with per-file-type icons, a left file list that can be collapsed as a whole, syntax-highlighted editing, a Markdown preview, PDF previews, image and media viewing, CSV/JSON structured views, read-only SQLite browsing with a SQL query box, a context menu for creating and renaming, filename search, switching between the folders of a multi-folder project (the folder name in the header opens the list of folders and the choice is remembered per project), and host-driven open requests for a single file (including session scratch and attachment paths outside the project). Files and folders can also be deleted from the context menu (directories are removed as a whole, with a confirmation prompt first). It also tracks git: the file list marks which files are modified and which are new (folders carry a rollup of the whole subtree), shows the changed line counts (+N/−N), and the right pane can show a file's actual changes against the last commit (line by line; untracked files read as all-new, staged and unstaged edits labelled separately). With no git, or outside a repository, the marks disappear and everything else behaves as before. It also watches the project: changes made outside this view (another editor, a git checkout, a build step, a second window) are picked up and re-read automatically instead of requiring the refresh button — both refresh buttons are unchanged, and a toolbar switch turns auto-refresh off. For a file with changes the toolbar is one mutually exclusive tab group — Edit / Preview / Changes — so Changes is reachable from either side and the two views can never occupy the content area at the same time.The context menu also offers \"Copy relative path\" and \"Copy absolute path\", plus an \"Open with…\" submenu that expands on hover and lists the editors actually installed on this machine (the system default app, plus VS Code, Zed, Chrome, Edge, Zen and the like — only those really present), filtered by file type so a browser is offered only for the web files it can actually render (never for a .tsx), so a file or folder can be handed straight to one of them. That probe runs once at startup and is cached per day on disk, shared between windows; it locates editors through the App Paths / StartMenuInternet registry keys, PATH and a few fixed install locations, and never walks directories. Files and folders can also be deleted from the context menu (directories are removed as a whole, with a confirmation prompt first). It also tracks git: the file list marks which files are modified and which are new (folders carry a rollup of the whole subtree), shows the changed line counts (+N/−N), and the right pane can show a file's actual changes against the last commit (line by line; untracked files read as all-new, staged and unstaged edits labelled separately). With no git, or outside a repository, the marks disappear and everything else behaves as before. It also watches the project: changes made outside this view (another editor, a git checkout, a build step, a second window) are picked up and re-read automatically instead of requiring the refresh button — both refresh buttons are unchanged, and a toolbar switch turns auto-refresh off. For a file with changes the toolbar is one mutually exclusive tab group — Edit / Preview / Changes — so Changes is reachable from either side and the two views can never occupy the content area at the same time.",
+          "safetyNotes": "Databases are opened strictly read-only (readOnly + PRAGMA query_only) and the query box only accepts single read-only statements, so a database can be browsed but never modified. fs.read is declared only for the two host-mediated actions \"open with default app\" and \"show in folder\" (same permission and scope as the bundled Files view); the plugin's own reading and writing goes through Node's fs inside the plugin's own process — the host permission gateway does not mediate these calls, and the manifest cannot declare a whole-tree write. Deletion goes through the same path: it is performed by the plugin's own Node fs, is bound by the same root containment checks and credential deny list, explicitly refuses to delete the project root itself, and is recorded in the write audit log. Root-relative paths are confined by the plugin itself to the selected registered folder root of the project: resolved paths must stay inside that root (symlink and junction escapes are refused), and credential paths (.env*, .ssh/, *.pem, .git/**) are refused. When a project is registered as several local folders, the containment base is still exactly one of those roots at a time — never their union — and an absolute path the host asks this view to open that lies under another root of the same project is accepted by first switching the base to the containing root and then resolving that path relative to it, with the same containment checks applied. One exception is deliberate and is NOT covered by that containment guarantee: when the host asks this view to open a file it picked itself outside the project (a session scratch or attachment path), the request is an absolute OS path and the plugin reads and writes it with raw Node fs, with no root containment; the credential deny list is still enforced for those paths (checked against the raw, the normalised and the realpath form), and they are still written atomically and audited. Saves are atomic (temp file + rename), and overwriting a file changed outside the editor asks first. Images and media are read up to their own size limits (8 MiB / 24 MiB) and handed to the view as base64 data URIs; binaries such as zip or exe are never decoded, only reported as unsupported. No network access; the plugin data directory only holds settings and a write audit log.Git integration only runs git's read-only subcommands (status / diff / rev-parse) from the user's own working copy: no index writes, no network, nothing inside .git/**. Status runs with GIT_OPTIONAL_LOCKS=0 / GIT_TERMINAL_PROMPT=0 / GIT_LITERAL_PATHSPECS=1; every subcommand has a 5s timeout and an output cap, and if git is not on PATH the plugin probes the usual install locations once. When git still isn't available the only consequence is \"no status\" — listing, reading, writing, saving and deleting are untouched. Paths handed to git are root-relative and pass the root containment check and the credential deny list first; git is merely asked how those files are doing. Diffs come from git diff for tracked files; an untracked new file is read by the plugin and shown with every line added (256 KiB cap), and oversized or binary files say so instead of being silently truncated. Badges and counts come from one snapshot cached for 2s, and the plugin's own saves invalidate it immediately. File watching (0.8.0) uses Node's own fs.watch on the **currently selected folder root**, recursive and non-persistent (it never holds the plugin process awake when nothing changes). Changes are only read, never written, no network, nothing inside .git/** — events under .git/ and node_modules/ are dropped outright and credential paths are still never reported (watching is not a back door around the deny list). The plugin's own writes (temp file + rename) are noted first, so a same-path event within 1.5s does not count as an external change; without that, every Ctrl+S would re-load the user's own document. Events are debounced for 250ms into a bounded cursor history (400 entries) which the view collects every 1.2s (the host gives plugins no push channel to a view), and the round is skipped while the panel is hidden. **An open file with no unsaved changes is re-read automatically; with unsaved changes the view only warns and never overwrites** — silently discarding what someone just typed is the worst kind of automation. Switching the base switches the watcher, and unloading the plugin closes it. If the runtime cannot watch recursively, auto-refresh is simply off while manual refresh and everything else behave exactly as before. \"Open with…\" is performed by this plugin's own main process, which spawns the chosen editor using Node capabilities that process already had and no extra permission: the executable can only come from the list the plugin detected itself (the view passes an id, never a path), the target passes the same root containment check and credential deny list as every other channel, the spawn goes through no shell with a single absolute path as its argument (so there is no command-line injection surface), and the child is detached with stdio ignored so the editor outlives the panel without holding the plugin process open. Every launch is recorded in the write audit log. Detection only reads the registry and PATH, writes nothing outside the plugin data directory, and caches its result per day (editors.json); if the probe is unavailable the only consequence is one menu layer fewer."
+        },
+        "zh-CN": {
+          "name": "文件管理器",
+          "description": "在右侧工作面板中浏览、查看并编辑当前项目的文件：完整目录树（图标随文件类型变化）、左右分栏（左侧文件列表可整块收起，宿主请求打开文件时自动收起）、代码高亮编辑与保存、Markdown 预览、PDF 预览、图片与音视频查看、CSV/JSON 结构化查看、SQLite 只读浏览与 SQL 查询、右键新建、重命名/移动、按文件名搜索、项目组里的多文件夹切换（宿主把一个项目注册成多个本地文件夹时，面板左上角的文件夹名就是切换器，按项目记住看的是哪个 folder），以及宿主驱动的打开请求——宿主可以让视图直接打开某个文件，包括项目之外的会话临时 / 附件路径。右键菜单还支持删除文件或文件夹（目录整体删除，删前先弹确认框）。另外与 git 联动：文件列表里直接标出哪些文件被修改、哪些是新增（目录上给的是整棵子树的汇总），改动行数一眼可见（+N/−N），打开文件后右侧可以看它相对上次提交的具体变更（逐行对照；未跟踪的新文件按全文新增展示，已暂存与未暂存分开标注）。没有 git 或不是仓库时这些标记整体消失，其余功能照旧。这次还加上了文件监听：文件在编辑器之外被改动（外部编辑器、git checkout、构建产物、另一个窗口的改动）会自动重新读取并刷新列表，不必再点「刷新」——两个手动刷新按钮原样保留，顶部还有一个开关可以随时关掉自动刷新。打开有改动的文件时，工具栏是「编辑 / 预览 / 变更」一组互斥页签：从任何一侧都能进「变更」，再切回来即回到原先那一种看法，两种内容不会同时出现在内容区。右键菜单新增「复制相对路径」「复制绝对路径」，以及二级子菜单「通过…打开」——鼠标移上去即展开，列出这台机器上真实存在的程序（系统默认应用，以及 VS Code、Zed、Chrome、Edge、Zen 等装了哪几个就列哪几个；按文件类型过滤——编辑器什么都能打开，浏览器只出现在它真能渲染的网页类文件上，不拿 Chrome 去开 .tsx），选中即用那个程序打开当前条目。编辑器探测在启动时做一次、按天缓存并落盘（多开共享同一次结果），靠注册表 App Paths / StartMenuInternet、PATH 与少数固定安装位置定位，不遍历目录。右键菜单还支持删除文件或文件夹（目录整体删除，删前先弹确认框）。另外与 git 联动：文件列表里直接标出哪些文件被修改、哪些是新增（目录上给的是整棵子树的汇总），改动行数一眼可见（+N/−N），打开文件后右侧可以看它相对上次提交的具体变更（逐行对照；未跟踪的新文件按全文新增展示，已暂存与未暂存分开标注）。没有 git 或不是仓库时这些标记整体消失，其余功能照旧。这次还加上了文件监听：文件在编辑器之外被改动（外部编辑器、git checkout、构建产物、另一个窗口的改动）会自动重新读取并刷新列表，不必再点「刷新」——两个手动刷新按钮原样保留，顶部还有一个开关可以随时关掉自动刷新。打开有改动的文件时，工具栏是「编辑 / 预览 / 变更」一组互斥页签：从任何一侧都能进「变更」，再切回来即回到原先那一种看法，两种内容不会同时出现在内容区。",
+          "safetyNotes": "数据库一律以只读方式打开（readOnly + PRAGMA query_only），SQL 框只接受单条只读语句，因此只能浏览、绝无修改；fs.read 仅用于「用默认应用打开」与「在文件夹中显示」这两个由宿主代为执行的动作（权限与范围同内置的 Files 视图），插件自身的读写仍走自己进程内的 Node fs——宿主的权限网关不介入这些调用，manifest 也无法申报「整树写入」。路径的访问范围由插件自身限定在项目**当前选中的那个已注册文件夹根**（folder root）内：解析后的路径必须仍在根内（拒绝符号链接与 junction 逃逸）、拒绝凭据类路径（.env*、.ssh/、*.pem、.git/**）。项目注册了多个文件夹时，包含基点仍然是**其中一个** root、绝不放大成整个组的并集；宿主请求打开的绝对路径若落在同项目的另一个 root 下，插件会先把基点切到包含它的那个 root，再按「相对该 root」解析，根内包含校验一条不减。另有一条刻意的例外，它不在上面这条包含保证之内：宿主可以要求本视图打开由宿主自己选定的项目外文件（会话临时目录 / 附件的绝对路径），插件对这些路径走原生 Node fs 读写、不做根内包含校验；凭据类路径黑名单在两种模式下都照旧全量生效（原始字符串、规范化后与 realpath 之后各查一遍），这类路径同样原子写并记审计。保存采用原子写（临时文件 + 重命名）、覆盖在编辑器外被改动过的文件前会先询问。图片与音视频按各自上限（8 MiB / 24 MiB）读取后以 base64 data URI 交给视图；zip、exe 这类二进制只报「不支持预览」，不做任何解码。无网络访问；插件数据目录只保存设置与写入审计日志。git 联动只调用工作区里 git 的只读子命令（status / diff / rev-parse），不写索引、不联网、不碰 .git/**：状态以 GIT_OPTIONAL_LOCKS=0 / GIT_TERMINAL_PROMPT=0 / GIT_LITERAL_PATHSPECS=1 运行，每个子命令 5s 超时并有输出上限，PATH 上没有 git 时按常见安装位置兜底探测，仍不可用就只是「没有状态」——列目录、读写、保存、删除一条都不受影响。传给 git 的是根相对路径并先过根内包含校验与凭据黑名单，git 只被问「这些文件怎么样了」。差异内容对已跟踪文件用 git diff，未跟踪的新文件由插件自己读文件、逐行加前缀（上限 256 KiB），超限与二进制都明确说明而不是硬截。徽标与行数来自同一次快照并缓存 2s，本插件自己的保存会立刻作废该缓存。文件监听（0.8.0）用 Node 自带的 fs.watch 对**当前基点 root** 开一只递归监听，persistent: false（没有变化时不吊住插件进程），并且：只把变化当数据看，不写入、不联网、不碰 .git/**（.git/ 与 node_modules/ 的事件直接丢弃，凭据类路径照旧不上报，监听不是绕过黑名单的后门）；每个子进程没有额外权限，沿用插件进程本已有的 Node 能力；本插件自己的写盘（临时文件 + rename）先记一笔，1.5 秒内到达的同名事件不算「外部改动」，否则每按一次 Ctrl+S 都会把自己的文档重装一遍；变化去抖 250ms 后并入游标历史（上限 400 条），视图每 1.2 秒取一次增量（宿主没有给插件向视图推送的通道），面板不可见时跳过这一轮。**没有未保存改动时自动重新读取打开的文件；有未保存改动时只提示、不覆盖**——静默丢掉用户刚敲的字是最糟的一种「自动」。基点一换，监听跟着换；插件卸载时监听一并关闭。运行时不支持递归 fs.watch 时只是关掉自动刷新，手动刷新与其它功能一律不受影响。「通过…打开」由本插件主进程 spawn 目标编辑器，用的是插件进程本已有的 Node 能力、没有额外权限：可执行文件只能来自插件自己探测出来的那份列表（视图只递 id、递不了路径），被打开的条目先过同一套根内包含校验与凭据黑名单；spawn 不经 shell，参数只有一条绝对路径（没有命令行注入面）；子进程 detached + stdio ignore + unref，编辑器不随面板关闭而消失，也不会吊住插件进程；每次打开都记一条写入审计。编辑器探测只读注册表与 PATH、不写任何东西，结果按日期缓存在插件数据目录（editors.json）；探测不可用时只是少一层菜单，其余功能不受影响。"
+        }
+      },
+      "versions": [
+        {
+          "version": "0.9.0",
+          "publishedAt": "2026-10-18T12:14:37Z",
+          "shasum": "d7e60a64f4b6fb6cbc4d4cf029f8e0dc1ccc933292610033031d24094bc0b49c",
+          "url": "packages/pi.file-manager-0.9.0.piplug",
+          "sizeBytes": 6911826,
+          "permissions": [
+            "ui.view",
+            "fs.read"
+          ],
+          "yanked": false,
+          "minMinihAgent": ">=0.9.0"
+        }
+      ]
+    }
+  ]
+}

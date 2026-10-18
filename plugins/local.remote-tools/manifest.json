@@ -1,0 +1,38 @@
+{
+  "activationEvents": [
+    "onStartup"
+  ],
+  "author": "jiege6-66",
+  "contributes": {
+    "agentExtensions": [
+      "extension.mjs"
+    ]
+  },
+  "description": "SSH 远程读取、写入、编辑与命令执行；适配 @oresk/pi-remote-tools。需要已配置的密钥和可信主机。",
+  "engines": {
+    "piDesktop": ">=0.15.9"
+  },
+  "homepage": "https://github.com/jiege6-66/pi-desktop-remote-tools",
+  "i18n": {
+    "en": {
+      "name": "Remote SSH Tools",
+      "description": "Read, write, edit files and run commands over SSH in PI-Desktop. An independent adapter of @oresk/pi-remote-tools; requires configured authentication and trusted hosts.",
+      "safetyNotes": "High-risk agent.extension: runs Node and system SSH in the Agent sidecar to read, write and edit remote files and execute requested commands. Uses existing SSH configuration and authentication; does not collect or bundle credentials, alter SSH configuration or automatically trust unknown host keys. Use only trusted, authorized hosts. Cancelling local SSH does not guarantee remote background processes stop."
+    },
+    "zh-CN": {
+      "name": "SSH 远程工具",
+      "description": "在 PI-Desktop 中通过 SSH 读取、写入、编辑远端文件并执行命令。基于 @oresk/pi-remote-tools 的独立适配，需要已配置的认证和可信主机。",
+      "safetyNotes": "高风险 agent.extension 扩展：在 Agent sidecar 中使用 Node 和系统 SSH，按请求读取、写入、编辑远端文件并执行命令。使用现有 SSH 配置与认证，不收集或捆绑凭证，不修改 SSH 配置，不自动接受陌生主机密钥。仅对可信且获授权的主机使用；取消本地 SSH 不保证远端后台进程停止。"
+    }
+  },
+  "id": "local.remote-tools",
+  "license": "MIT",
+  "main": "main.js",
+  "name": "Remote SSH Tools",
+  "permissions": [
+    "agent.extension"
+  ],
+  "safetyNotes": "高风险 agent.extension 扩展：在 Agent sidecar 中使用 Node 和系统 SSH，按请求读取、写入、编辑远端文件并执行命令。使用现有 SSH 配置与认证，不收集或捆绑凭证，不修改 SSH 配置，不自动接受陌生主机密钥。仅对可信且获授权的主机使用；取消本地 SSH 不保证远端后台进程停止。",
+  "schemaVersion": 1,
+  "version": "0.1.0"
+}

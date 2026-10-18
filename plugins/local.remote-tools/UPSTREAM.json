@@ -1,0 +1,22 @@
+{
+  "package": "@oresk/pi-remote-tools",
+  "version": "0.2.0",
+  "license": "MIT",
+  "repository": "https://github.com/oresk/pi-remote-tools",
+  "gitHead": "8abf3dba5a869b537ee9c4141faa5f498f1194f1",
+  "sourceSha256": "70c6930ed3b4c366e6ec8f672f6780c00e396bccddf2018e0613cf1a4c4a9cfd",
+  "npmIntegrity": "sha512-1ezdOHDG4OX0jDY2gOg2koBHbDkB32vu8qrGupJyEjf3KaXSCuKp7TyZhEniPVXTl7VRmsKCnI5YT4adrX97cw==",
+  "desktopReferenceCommit": "b684e661797996db3ac64c3c5bdf5764a38fd522",
+  "changes": [
+    "Desktop-compatible Bash helper",
+    "Remove terminal rendering",
+    "Bounded cancellable SSH transport and lock waits",
+    "Per-session read state",
+    "Remote-home relative paths",
+    "Literal edit replacements",
+    "Shared 8 MiB write limit",
+    "Preserve original non-POSIX write errors",
+    "Consistent read line counts and EOF windows",
+    "UTF-8-safe bounded Bash output"
+  ]
+}
