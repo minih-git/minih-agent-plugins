@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="pi-plugin-chrome" content="v2" />
+    <title>Answer me with HTML</title>
+    <link rel="stylesheet" href="./panel.css" />
+    <script src="./panel.js" defer></script>
+  </head>
+  <body>
+    <header class="toolbar">
+      <div class="brand">
+        <span class="brand-name" data-i18n="title">用 HTML 回答</span>
+        <span class="chip" id="version">—</span>
+      </div>
+      <div class="toolbar-actions">
+        <button type="button" id="refresh" data-i18n="refresh">刷新</button>
+        <button type="button" id="reveal" data-i18n="reveal">打开页面目录</button>
+        <button type="button" id="clean" data-i18n="clean">清理旧页面</button>
+        <button type="button" class="danger" id="clean-all" data-i18n="cleanAll">全部清理</button>
+      </div>
+    </header>
+
+    <main class="content">
+      <section class="summary" id="summary" aria-live="polite"></section>
+
+      <section class="list-head">
+        <h1 data-i18n="pagesTitle">已生成的页面</h1>
+        <span class="hint" id="count"></span>
+      </section>
+
+      <ul class="pages" id="pages"></ul>
+
+      <p class="empty" id="empty" hidden data-i18n="empty">
+        还没有页面。让 Agent 解释一个流程、做个对比或排查一个问题，它就会写一页 HTML。
+      </p>
+
+      <p class="note" id="note"></p>
+    </main>
+
+    <div class="status" id="status" role="status" hidden></div>
+  </body>
+</html>

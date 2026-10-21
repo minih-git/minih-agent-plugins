@@ -4,8 +4,8 @@
   "catalog_id": null,
   "name": "Minih-Agent-Desktop Plugins",
   "homepage": "https://github.com/minih-git/minih-agent-plugins",
-  "updated_at": "2026-10-18T12:14:37Z",
-  "generated_at": "2026-10-18T12:14:37Z",
+  "updated_at": "2026-10-21T05:16:37Z",
+  "generated_at": "2026-10-21T05:16:37Z",
   "policy_version": null,
   "artifact_base_url": "https://raw.githubusercontent.com/minih-git/minih-agent-plugins/main",
   "plugins": [
@@ -94,6 +94,52 @@
             "builder": "repack@minih-agent-plugins",
             "sourcePath": "plugins/local.remote-tools"
           }
+        }
+      ]
+    },
+    {
+      "id": "minih.answer-me-with-html",
+      "name": "Answer me with HTML",
+      "description": "Answer a hard question with a one-page HTML explainer, and keep the pages in one place: the Agent writes a short Markdown draft, the bundled am CLI draws the page, the reply ends with a card the plugin draws in the conversation, and the panel lists what was made so you can open, copy, delete or clean it.",
+      "author": "minih-git",
+      "icon_url": null,
+      "categories": [
+        "productivity"
+      ],
+      "verified": false,
+      "trust": "community",
+      "publisher_id": "minih-git",
+      "homepage": "https://github.com/QingYunA/answer-me-with-html",
+      "repository": "https://github.com/minih-git/minih-agent-plugins",
+      "safety_notes": "Adds one skill (instructions the Agent loads on demand) and the am CLI it runs over Bash, plus a panel and one renderer slot. The panel reads the CLI's own data directory (AM_HOME or ~/.answer-me-with-html) with this plugin's own Node fs, because the host file gateway is rooted in the workspace and cannot address that folder; only the CLI's pages folders are read, only a plain .html file directly inside one of them can be opened, copied or deleted (one file at a time, after a confirmation in the panel), and a symlink or directory is refused. The renderer slot draws one card in the app's own reply area and runs with the host's React inside the host renderer, which is why renderer.extension is a high-risk permission; the card asks the plugin for one page's title, size and time, and its two buttons open that page or copy its path. The card's path comes from the reply text, so it is checked before use: absolute, a plain .html file name, an existing regular file (never a symlink or a folder). Cleaning old pages is not re-implemented: the panel runs the CLI's own am clean, which owns the age rule and also clears the voice-over cache. Opening a page first asks the app's own browser panel to show it (browser.cdp, which is broader than this one use: the host exposes no narrower browser API, and the browser surface only accepts work while its view is the visible work-panel tab keyed by an active session, which a reply card does not have). When that is refused — panel closed, no active session, permission not granted — the plugin hands the path to the operating system's default application instead; the executable is fixed in the plugin (open / xdg-open / start), the path is never passed through a shell, and the child is detached so the window outlives the panel. The card says which of the two happened. No network access, no credentials, nothing written outside the CLI's own folders.",
+      "i18n": {
+        "en": {
+          "name": "Answer me with HTML",
+          "description": "Answer a hard question with a one-page HTML explainer, and keep the pages in one place: the Agent writes a short Markdown draft, the bundled am CLI draws the page, the reply ends with a card the plugin draws in the conversation, and the panel lists what was made so you can open, copy, delete or clean it.",
+          "safetyNotes": "Adds one skill (instructions the Agent loads on demand) and the am CLI it runs over Bash, plus a panel and one renderer slot. The panel reads the CLI's own data directory (AM_HOME or ~/.answer-me-with-html) with this plugin's own Node fs, because the host file gateway is rooted in the workspace and cannot address that folder; only the CLI's pages folders are read, only a plain .html file directly inside one of them can be opened, copied or deleted (one file at a time, after a confirmation in the panel), and a symlink or directory is refused. The renderer slot draws one card in the app's own reply area and runs with the host's React inside the host renderer, which is why renderer.extension is a high-risk permission; the card asks the plugin for one page's title, size and time, and its two buttons open that page or copy its path. The card's path comes from the reply text, so it is checked before use: absolute, a plain .html file name, an existing regular file (never a symlink or a folder). Cleaning old pages is not re-implemented: the panel runs the CLI's own am clean, which owns the age rule and also clears the voice-over cache. Opening a page first asks the app's own browser panel to show it (browser.cdp, which is broader than this one use: the host exposes no narrower browser API, and the browser surface only accepts work while its view is the visible work-panel tab keyed by an active session, which a reply card does not have). When that is refused — panel closed, no active session, permission not granted — the plugin hands the path to the operating system's default application instead; the executable is fixed in the plugin (open / xdg-open / start), the path is never passed through a shell, and the child is detached so the window outlives the panel. The card says which of the two happened. No network access, no credentials, nothing written outside the CLI's own folders."
+        },
+        "zh-CN": {
+          "name": "用 HTML 回答",
+          "description": "用一个 HTML 页面回答复杂问题，并把生成的页面集中管理：Agent 只写一份简短的 Markdown 草稿，内置的 am CLI 负责画页面，回复末尾由插件在对话里画一张页面卡片，面板列出已生成的页面，可以打开、复制路径、删除或清理。",
+          "safetyNotes": "本插件带来一个技能（Agent 按需加载的指令）和它通过 Bash 调用的 am CLI，外加一个面板和一个 renderer 插槽。面板用本插件自己的 Node fs 读取 CLI 的数据目录（AM_HOME 或 ~/.answer-me-with-html）——宿主文件网关以工作区为根，根本到不了那个目录；面板只读 CLI 的 pages 目录，只能打开 / 复制 / 删除其中的单个 .html 文件（一次一个，删除前在面板里确认），符号链接与目录一律拒绝。renderer 插槽在应用自己的回复区里画一张卡片，模块在宿主渲染器里用宿主的 React 运行，因此 renderer.extension 属高风险权限；卡片只向插件要一个页面的标题、体积和时间，两个按钮分别打开该页面与复制其路径。卡片收到的路径来自回复文本，因此使用前会校验：绝对路径、纯 .html 文件名、存在且是普通文件（符号链接与目录一律拒绝）。清理旧页面不做二次实现：面板调用 CLI 自己的 am clean，由它决定“旧”的定义（同时清空配音缓存）。打开页面时先请应用内置浏览面板显示该页（browser.cdp 这条权限的范围比此处用途更宽——宿主只提供这一个浏览器 API，而且该面板要求自己正是当前可见的工作面板标签页、并带活跃会话，回复卡片没有会话）。被拒时（面板未打开、无活跃会话、权限未授予）改为把路径交给操作系统默认程序，可执行文件在插件里写死（open / xdg-open / start），路径不经 shell，子进程 detached 以免随面板关闭而消失；卡片会说明实际落在哪一边。无网络访问、不碰凭据、不写 CLI 自己的目录以外的任何地方。"
+        }
+      },
+      "versions": [
+        {
+          "version": "0.1.0",
+          "publishedAt": "2026-10-21T02:27:05Z",
+          "shasum": "cf20da321eeadc0dec50d6879cec7953c0b5c4e990c91a2f6d56e1e6a6931afe",
+          "url": "packages/minih.answer-me-with-html-0.1.0.piplug",
+          "sizeBytes": 1096584,
+          "permissions": [
+            "ui.panel",
+            "agent.prompt.inject",
+            "clipboard.write",
+            "browser.cdp",
+            "renderer.extension"
+          ],
+          "yanked": false,
+          "minMinihAgent": ">=0.20.0"
         }
       ]
     },

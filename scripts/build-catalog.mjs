@@ -139,7 +139,9 @@ async function main() {
       trust: "community",
       publisher_id: PUBLISHER_ID,
       homepage: manifest.homepage ?? null,
-      repository: PROVENANCE[manifest.id]?.sourceRepository ?? null,
+      // A redistributed plugin gets the upstream URL from PROVENANCE; a plugin
+      // of this project names its own repository in the manifest.
+      repository: PROVENANCE[manifest.id]?.sourceRepository ?? manifest.repository ?? null,
       safety_notes: manifest.safetyNotes ?? null,
       i18n: manifest.i18n ?? null,
       versions,

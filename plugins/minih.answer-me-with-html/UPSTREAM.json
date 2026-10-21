@@ -1,0 +1,28 @@
+{
+  "component": "answer-me-with-html skill and bundled am CLI",
+  "package": "answer-me-with-html",
+  "version": "0.5.6",
+  "license": "MIT",
+  "author": "QingYunA",
+  "repository": "https://github.com/QingYunA/answer-me-with-html",
+  "gitHead": "e00b254c26d18783d274ade55585b2e63dc31f34",
+  "sourcePath": "skills/answer-me-with-html",
+  "bundledUnder": "skills/answer-me-with-html",
+  "files": {
+    "skills/answer-me-with-html/SKILL.md": "a4a7b4779bdb0e769031539021407f4787393a37e03d6d968fb4842ee8ae230f",
+    "skills/answer-me-with-html/references/settings.md": "9eb1b4a4aa11b1c8c951650d5fc19a5e732085288270870e4aa0055e31b26903",
+    "skills/answer-me-with-html/references/video.md": "02cd567f901e4bbd8fb2c1c5970bf1fc6ab4eedeac8e82099ced788d4e8d1a94",
+    "skills/answer-me-with-html/scripts/am.mjs": "23e156dced13bcc7ca1c2ad30b2dd503c93166dfeac8ba7bcf20ffbfb7ce26a3",
+    "skills/answer-me-with-html/licenses/OFL-Bangers.txt": "09ef36fcae68a2ba21cc319fd44c09ba40f43163076bcafc14fdfe4cc033e7a2"
+  },
+  "unchanged": [
+    "skills/answer-me-with-html/scripts/am.mjs",
+    "skills/answer-me-with-html/references/settings.md",
+    "skills/answer-me-with-html/references/video.md",
+    "skills/answer-me-with-html/licenses/OFL-Bangers.txt"
+  ],
+  "changes": [
+    "SKILL.md: added a \"Host: Minih-Agent-Desktop\" note (the skill directory comes from the Skill tool's Location line; there are no slash commands; a reply ends with the plugin's page card fence; where pages are written; and when a page is worth making), plus two host-specific sentences in the workflow and reply sections. The rest of the document is upstream text, byte for byte."
+  ],
+  "update": "Replace the four unchanged files from the upstream tag, then re-apply the SKILL.md note and refresh the hashes above."
+}
