@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1 — 2026-10-21
+
+修掉「打开页面」总是落到系统浏览器、却给出一句没核实过的原因：卡片原本文案写死「应用内浏览面板没打开」，而真实原因可能是面板不是当前标签页、属于其他会话、权限未授予或加载失败。
+
+- `onRendererCall("openPage")` 现在把宿主返回的原因码一起带回（`UNAVAILABLE` / `OTHER_SESSION` / `PERMISSION_DENIED` / `NO_API` / `LOAD_FAILED` / `UNKNOWN`），卡片按码给一句对应提示，不再猜。
+- 新增测试锁住这条规则，并修掉测试之间共享「权限被拒」标志导致偶发失败的问题（受影响的用例改为加载全新模块）。
+- 行为不变：仍是先试内置浏览面板，被拒后退回系统默认浏览器。
+
 ## 0.1.0 — 2026-10-21
 
 把上游技能 `answer-me-with-html`（v0.5.6，MIT，commit `e00b254`）移植成
@@ -38,7 +46,7 @@ Minih-Agent-Desktop 插件：技能与内置 `am` CLI 原样打包，新增宿�
   因此由插件进程自己的 Node fs 读写；插件自己守三条规则——只碰 CLI 的 pages 目录、
   只认其中单个 `.html` 文件名、删除前校验真实路径仍直接位于该目录。卡片带来的路径
   来自回复文本，读写或打开之前按同一套规则校验。无网络访问。
-- 离线验证：27 项 `node --test`（命名与列表规则、两个目录的合并与私有性判断、目录
+- 离线验证：28 项 `node --test`（命名与列表规则、两个目录的合并与私有性判断、目录
   占用、卡片通道的校验与打开路径、真实 CLI 端到端渲染与清理）通过；卡片在真实
   浏览器里以四种状态渲染并点过按钮；`pi-plugin check` 无错误。
 
@@ -57,4 +65,4 @@ temporary fallback); bulk cleaning runs the CLI's own `am clean`. There is no
 always-on mode: a page is made when a picture carries the answer. The plugin
 requests no file permission and touches only those `pages/` folders, one regular
 `.html` file at a time, and the card's path is checked the same way before use.
-Twenty-seven offline tests pass, and the card was rendered and clicked in a real
+Twenty-eight offline tests pass, and the card was rendered and clicked in a real

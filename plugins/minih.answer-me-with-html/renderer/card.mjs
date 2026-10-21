@@ -190,22 +190,26 @@ export function PageCard({ source }) {
 
   // A card with no usable page is a notice, not an action bar: the buttons only
   // appear once the plugin has confirmed a real file behind the path.
+  const OPEN_NOTE = {
+    app: "已在应用内置浏览器打开",
+    UNAVAILABLE: "内置浏览面板不是当前显示的标签页：先在右侧打开 Browser，再点",
+    OTHER_SESSION: "内置浏览面板属于其他会话：切回本会话的 Browser 标签再点",
+    PERMISSION_DENIED: "未授予 browser.cdp 权限，只能在系统浏览器打开",
+    NO_API: "宿主没有提供浏览器接口，只能在系统浏览器打开",
+    LOAD_FAILED: "内置浏览器未能加载该页，已改在系统浏览器打开",
+    UNKNOWN: "内置浏览器拒绝该页，已改在系统浏览器打开",
+  };
+
+  const openNote = (value) =>
+    value?.where === "app"
+      ? OPEN_NOTE.app
+      : `已用系统浏览器打开 · ${OPEN_NOTE[value?.code] ?? OPEN_NOTE.UNKNOWN}`;
+
   const actions = ready
     ? h(
         "div",
         { className: "am-page-card__actions" },
-        button(
-          "打开页面",
-          () =>
-            call("openPage", (value) =>
-              setNote(
-                value?.where === "app"
-                  ? "已在应用内置浏览器打开"
-                  : "已用系统浏览器打开：应用内浏览面板没打开，这是退路",
-              ),
-            ),
-          { primary: true },
-        ),
+        button("打开页面", () => call("openPage", (value) => setNote(openNote(value))), { primary: true }),
         button("复制路径", () => call("copyPath", () => setNote("路径已复制"))),
       )
     : null;

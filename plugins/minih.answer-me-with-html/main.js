@@ -168,13 +168,18 @@ let inAppBrowserRefused = false;
  * signal to hand the file to the operating system instead.
  */
 async function openInAppBrowser(full) {
-  if (inAppBrowserRefused) throw new Error("the browser API refused this plugin earlier");
-  if (typeof pi.browser?.navigate !== "function") throw new Error("browser API unavailable");
+  if (inAppBrowserRefused) throw Object.assign(new Error("the browser API refused this plugin earlier"), { code: "PERMISSION_DENIED" });
+  if (typeof pi.browser?.navigate !== "function") throw Object.assign(new Error("browser API unavailable"), { code: "NO_API" });
   try {
     const state = await pi.browser.navigate({ path: full });
-    if (!state) throw new Error("browser did not take the page");
+    // A null answer is the host's "another session owns this view": it records
+    // the target for later instead of loading it here.
+    if (!state) throw Object.assign(new Error("the browser panel belongs to another session"), { code: "OTHER_SESSION" });
     const error = state.loadError;
-    if (error) throw new Error(typeof error === "string" ? error : error.message || "browser load failed");
+    if (error) {
+      const message = typeof error === "string" ? error : error.message || "browser load failed";
+      throw Object.assign(new Error(message), { code: "LOAD_FAILED" });
+    }
     return state;
   } catch (error) {
     if (error?.code === "PERMISSION_DENIED") inAppBrowserRefused = true;
@@ -265,10 +270,14 @@ async function showPage(full) {
     return { ok: true, path: full, where: "app" };
   } catch (error) {
     await openWithOs(full);
+    // Say which surface took the page and, when the app refused, the reason the
+    // host gave. The card turns `code` into one short sentence; it never guesses
+    // a cause it did not observe.
     return {
       ok: true,
       path: full,
       where: "system",
+      code: error?.code ?? "UNKNOWN",
       reason: error instanceof Error ? error.message : String(error),
     };
   }

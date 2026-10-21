@@ -193,7 +193,41 @@ test("the panel's own open channel uses the same two surfaces", async () => {
   delete globalThis.pi.browser;
 });
 
+/**
+ * `main.js` remembers a refused browser permission for the life of its module.
+ * A test that provokes PERMISSION_DENIED therefore loads a fresh copy instead of
+ * leaving the latch closed for the tests after it.
+ */
+function freshMain() {
+  const entry = require.resolve("../main.js");
+  delete require.cache[entry];
+  return require("../main.js");
+}
+
+test("a refused in-app open reports the host's own reason code", async () => {
+  // The card turns `code` into one short sentence. Guessing the cause instead
+  // (for example always saying "the panel is closed") would mislead the reader,
+  // so each refusal keeps the code that produced it.
+  const cases = [
+    [async () => { throw Object.assign(new Error("Browser view must be visible"), { code: "UNAVAILABLE" }); }, "UNAVAILABLE"],
+    [async () => null, "OTHER_SESSION"],
+    [async () => ({ url: "file:///x", loadError: { message: "LOCAL_FILE_NOT_ALLOWED" } }), "LOAD_FAILED"],
+    // Last: this one closes the latch for the module it runs in.
+    [async () => { throw Object.assign(new Error("PERMISSION_DENIED"), { code: "PERMISSION_DENIED" }); }, "PERMISSION_DENIED"],
+  ];
+  for (const [navigate, expected] of cases) {
+    globalThis.pi.browser = { navigate };
+    const { onRendererCall: call } = freshMain();
+    const result = await call("openPage", { path: page() });
+    assert.equal(result.where, "system");
+    assert.equal(result.code, expected, `expected ${expected}, got ${result.code}`);
+    assert.ok(result.reason, "the host's message is passed through too");
+  }
+  delete globalThis.pi.browser;
+});
+
 test("a refused browser permission is remembered, so later clicks go straight to the system", async () => {
+  const { onRendererCall: call } = freshMain();
   // The host answers PERMISSION_DENIED when the plugin was never granted
   // browser.cdp; asking again on every click would write one audit line per
   // click for a call that cannot succeed.
@@ -205,8 +239,8 @@ test("a refused browser permission is remembered, so later clicks go straight to
     },
   };
   spawned.length = 0;
-  const first = await onRendererCall("openPage", { path: page() });
-  const second = await onRendererCall("openPage", { path: page() });
+  const first = await call("openPage", { path: page() });
+  const second = await call("openPage", { path: page() });
   assert.equal(first.where, "system");
   assert.equal(second.where, "system");
   assert.equal(calls, 1, "the refused API is not asked a second time");
