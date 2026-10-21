@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.2 — 2026-10-21
+
+改对「页面在哪、回复怎么收尾」：作者原先以为内置浏览器只能靠插件权限打开，实际宿主把**回复里的链接**当作另一条通道——指向项目或会话临时目录内 `.html` 的链接由工作面板自己打开，不需要任何权限。
+
+- 技能默认改为写入 `$PI_SCRATCH_DIR/answers/<topic>.html`，回复末尾给带标题的普通链接，点开即在应用内置浏览器；要长期留存才写库目录并用卡片收尾。
+- 面板新增第三个目录来源：会话临时目录（`<dataDir>/scratch/<session>/answers`），按真实存在页面的会话列出，行上标「会话临时目录」，可打开、复制路径、删除。
+- 数据目录由 `pi.plugin.getDataPath()` 反推，数据目录被搬迁的安装也能找到 scratch 存储。
+- 新增 2 项测试（scratch 目录发现、合并列举与标记）；合计 30 项通过。
+
+## 0.1.1 — 2026-10-21
 ## 0.1.1 — 2026-10-21
 
 修掉「打开页面」总是落到系统浏览器、却给出一句没核实过的原因：卡片原本文案写死「应用内浏览面板没打开」，而真实原因可能是面板不是当前标签页、属于其他会话、权限未授予或加载失败。
@@ -46,7 +56,7 @@ Minih-Agent-Desktop 插件：技能与内置 `am` CLI 原样打包，新增宿�
   因此由插件进程自己的 Node fs 读写；插件自己守三条规则——只碰 CLI 的 pages 目录、
   只认其中单个 `.html` 文件名、删除前校验真实路径仍直接位于该目录。卡片带来的路径
   来自回复文本，读写或打开之前按同一套规则校验。无网络访问。
-- 离线验证：28 项 `node --test`（命名与列表规则、两个目录的合并与私有性判断、目录
+- 离线验证：30 项 `node --test`（命名与列表规则、两个目录的合并与私有性判断、目录
   占用、卡片通道的校验与打开路径、真实 CLI 端到端渲染与清理）通过；卡片在真实
   浏览器里以四种状态渲染并点过按钮；`pi-plugin check` 无错误。
 
@@ -65,4 +75,4 @@ temporary fallback); bulk cleaning runs the CLI's own `am clean`. There is no
 always-on mode: a page is made when a picture carries the answer. The plugin
 requests no file permission and touches only those `pages/` folders, one regular
 `.html` file at a time, and the card's path is checked the same way before use.
-Twenty-eight offline tests pass, and the card was rendered and clicked in a real
+Thirty offline tests pass, and the card was rendered and clicked in a real

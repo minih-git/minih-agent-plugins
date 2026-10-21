@@ -29,6 +29,8 @@ const os = require("node:os");
 const path = require("node:path");
 
 const PAGES_DIR = "pages";
+/** Where the skill writes pages inside a session scratch directory. */
+const ANSWERS_DIR = "answers";
 const PAGE_EXT = ".html";
 /** The panel shows the newest pages; an unbounded list is not worth the IPC. */
 const MAX_PAGES = 200;
@@ -80,11 +82,51 @@ function privateTempHome(dir, uid = typeof process.getuid === "function" ? proce
  * is always present; `temp` only counts while the CLI's fallback folder exists
  * and is private, which is exactly when the CLI could have written there.
  */
-function dataRoots(home, { tmpdir = os.tmpdir(), uid } = {}) {
+function dataRoots(home, { tmpdir = os.tmpdir(), uid, dataDir } = {}) {
   const roots = [{ id: "home", label: "pages", dir: home, pagesDir: pagesDir(home) }];
   const spare = tempHome(tmpdir, uid);
   if (privateTempHome(spare, uid)) {
     roots.push({ id: "temp", label: "temporary folder", dir: spare, pagesDir: pagesDir(spare) });
+  }
+  roots.push(...scratchRoots(dataDir));
+  return roots;
+}
+
+/**
+ * The session scratch store: `<dataDir>/scratch/<sessionId>/answers`. This is the
+ * one place a page can sit and still open in the app's own browser when the reply
+ * links it — the host sends a link to an `.html` file under the project or the
+ * scratch store to its browser panel, and to anything else it only offers
+ * "reveal" and "copy path". `dataDir` comes from `pi.plugin.getDataPath()` with
+ * the plugin's own tail removed, so it follows an installation whose data
+ * directory was moved.
+ */
+function scratchRoots(dataDir) {
+  if (!dataDir) return [];
+  const store = path.join(dataDir, "scratch");
+  let entries;
+  try {
+    entries = fs.readdirSync(store, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const roots = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const answers = path.join(store, entry.name, ANSWERS_DIR);
+    let has = false;
+    try {
+      has = fs.readdirSync(answers).some((name) => isPageName(name));
+    } catch {
+      continue;
+    }
+    if (!has) continue;
+    roots.push({
+      id: `scratch:${entry.name}`,
+      label: "session scratch",
+      dir: path.join(store, entry.name),
+      pagesDir: answers,
+    });
   }
   return roots;
 }
@@ -277,8 +319,10 @@ module.exports = {
   listPages,
   pagePath,
   pagesDir,
+  ANSWERS_DIR,
   privateTempHome,
   readTitle,
+  scratchRoots,
   rootById,
   tempHome,
   titleOf,

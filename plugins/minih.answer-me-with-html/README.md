@@ -94,9 +94,26 @@ To go the other way — pages only when you ask for one — add instead:
 
 > Do not use the answer-me-with-html skill unless I ask for a page, a diagram or a visual explanation, or say I don't get it.
 
+## Where a page goes, and how a reply ends
+
+Two destinations, and the choice decides whether the click opens the page in the
+app or elsewhere.
+
+| Destination | How the reply ends | What a click does |
+| --- | --- | --- |
+| Session scratch: `-o "$PI_SCRATCH_DIR/answers/<topic>.html"` | a plain link `[打开页面 · 标题](file:///…)` | opens in the app's own browser panel, next to the conversation |
+| Library: `~/.answer-me-with-html/pages` | the card below | the card's button: in-app browser if its panel is showing, else the system browser |
+
+The app routes a linked `.html` file inside the project or the session scratch
+directory to its browser panel; a file anywhere else only gets "reveal in the
+file manager" and "copy path". That is why the scratch directory is the default
+and the library is the deliberate choice for keeping a page. The panel lists both
+(the scratch rows are labelled 会话临时目录).
+
 ## The card at the end of a reply
 
-A reply ends with one fenced block, and the plugin draws a card for it:
+For a page kept in the library, a reply ends with one fenced block, and the plugin
+draws a card for it:
 
 ````markdown
 ```minih.answer-me-with-html:page

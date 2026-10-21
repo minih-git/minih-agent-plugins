@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "minih.answer-me-with-html",
   "name": "Answer me with HTML",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Answer a hard question with a one-page HTML explainer, and keep the pages in one place: the Agent writes a short Markdown draft, the bundled am CLI draws the page, the reply ends with a card the plugin draws in the conversation, and the panel lists what was made so you can open, copy, delete or clean it.",
   "author": "minih-git",
   "categories": [

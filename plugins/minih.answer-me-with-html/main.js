@@ -147,6 +147,22 @@ function openWithOs(target) {
 }
 
 /**
+ * The installation's data directory, taken from the plugin's own data path by
+ * removing the plugin tail (`<dataDir>/plugins/data/<id>`). It is what lets the
+ * panel see the session scratch store, the one place a page can live and still
+ * open in the app's browser when a reply links it.
+ */
+async function appDataDir() {
+  try {
+    const own = await pi.plugin.getDataPath();
+    const tail = path.join("plugins", "data", pi.plugin.getId());
+    return own.endsWith(tail) ? own.slice(0, -(tail.length + 1)) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Set once the host refuses the browser API in this plugin process: a plugin
  * that was never granted `browser.cdp` must not ask again on every click, or
  * each "open" writes one PERMISSION_DENIED audit line for a call that could
@@ -205,7 +221,7 @@ function realDirOf(dir) {
  * reader sees whether the page is in the library, the CLI's temporary fallback,
  * or somewhere else the Agent was asked to write.
  */
-function resolveCardPage(raw) {
+async function resolveCardPage(raw) {
   const value = String(raw ?? "").trim();
   if (!value) throw new Error("the card needs a page path");
   if (!path.isAbsolute(value)) throw new Error("the card needs an absolute path");
@@ -219,7 +235,7 @@ function resolveCardPage(raw) {
   if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`not a regular page file: ${value}`);
   const full = fs.realpathSync(value);
   const folder = path.dirname(full);
-  const roots = pages.dataRoots(pages.amHome());
+  const roots = pages.dataRoots(pages.amHome(), { dataDir: await appDataDir() });
   const known = roots.find((root) => realDirOf(root.pagesDir) === folder);
   return { full, stat, folder: known ? known.id : "other" };
 }
@@ -232,7 +248,7 @@ function resolveCardPage(raw) {
 async function onRendererCall(method, args) {
   if (method === "pageInfo") {
     try {
-      const { full, stat, folder } = resolveCardPage(args?.path);
+      const { full, stat, folder } = await resolveCardPage(args?.path);
       return {
         ok: true,
         path: full,
@@ -247,11 +263,11 @@ async function onRendererCall(method, args) {
     }
   }
   if (method === "openPage") {
-    const { full } = resolveCardPage(args?.path);
+    const { full } = await resolveCardPage(args?.path);
     return showPage(full);
   }
   if (method === "copyPath") {
-    const { full } = resolveCardPage(args?.path);
+    const { full } = await resolveCardPage(args?.path);
     await pi.clipboard.writeText(full);
     return { ok: true, path: full };
   }
@@ -289,8 +305,8 @@ async function showPage(full) {
  * (`home` or the CLI's `temp` fallback); the file must still be a regular file
  * sitting directly in that folder's `pages/` after symlinks are resolved.
  */
-function resolveExistingPage(home, rootId, name) {
-  const root = pages.rootById(home, rootId);
+async function resolveExistingPage(home, rootId, name) {
+  const root = pages.rootById(home, rootId, { dataDir: await appDataDir() });
   if (!root) throw new Error(`unknown page folder: ${String(rootId ?? "")}`);
   const full = pages.pagePath(root.dir, name);
   if (!full) throw new Error(`"${String(name ?? "")}" is not a page file name`);
@@ -318,8 +334,8 @@ async function appLocale() {
 async function state() {
   const home = pages.amHome();
   const settings = await loadSettings();
-  const listed = pages.listPages(home);
-  const used = pages.usage(home);
+  const listed = pages.listPages(home, { dataDir: await appDataDir() });
+  const used = pages.usage(home, { dataDir: await appDataDir() });
   return {
     version: await amVersion(),
     locale: await appLocale(),
@@ -333,7 +349,7 @@ async function state() {
 
 async function listPages() {
   const home = pages.amHome();
-  const listed = pages.listPages(home);
+  const listed = pages.listPages(home, { dataDir: await appDataDir() });
   return {
     home,
     pagesDir: pages.pagesDir(home),
@@ -347,7 +363,7 @@ async function listPages() {
 
 async function openPage(payload) {
   const home = pages.amHome();
-  const { full } = resolveExistingPage(home, payload?.root, payload?.name);
+  const { full } = await resolveExistingPage(home, payload?.root, payload?.name);
   return showPage(full);
 }
 
@@ -361,14 +377,14 @@ async function revealPagesFolder() {
 
 async function copyPath(payload) {
   const home = pages.amHome();
-  const { full } = resolveExistingPage(home, payload?.root, payload?.name);
+  const { full } = await resolveExistingPage(home, payload?.root, payload?.name);
   await pi.clipboard.writeText(full);
   return { ok: true, path: full };
 }
 
 async function deletePage(payload) {
   const home = pages.amHome();
-  const { full } = resolveExistingPage(home, payload?.root, payload?.name);
+  const { full } = await resolveExistingPage(home, payload?.root, payload?.name);
   await fsp.rm(full, { force: false });
   await pi.ui.showToast(`Deleted ${payload?.name}`);
   return { ...(await listPages()), deleted: payload?.name };

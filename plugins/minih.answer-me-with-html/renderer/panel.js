@@ -38,6 +38,7 @@ const STRINGS = {
     countTruncated: "显示最近 {shown} 个，共 {n} 个",
     tempCount: "其中临时目录 {n} 个 · {size}",
     tempFolder: "临时目录",
+    scratchFolder: "会话临时目录",
     copied: "已复制页面路径",
     deleted: "已删除 {name}",
     justNow: "刚刚",
@@ -69,6 +70,7 @@ const STRINGS = {
     countTruncated: "newest {shown} of {n}",
     tempCount: "{n} of them in the temporary folder · {size}",
     tempFolder: "temporary folder",
+    scratchFolder: "session scratch",
     copied: "Page path copied",
     deleted: "Deleted {name}",
     justNow: "just now",
@@ -216,7 +218,12 @@ function pageRow(page) {
   title.textContent = page.title || page.name;
   const meta = document.createElement("div");
   meta.className = "page-meta";
-  const where = page.root === "temp" ? `${strings.tempFolder} · ` : "";
+  const where =
+    page.root === "temp"
+      ? `${strings.tempFolder} · `
+      : String(page.root ?? "").startsWith("scratch:")
+        ? `${strings.scratchFolder} · `
+        : "";
   meta.textContent = `${where}${formatWhen(page.modifiedAt)} · ${formatBytes(page.bytes)} · ${page.name}`;
   meta.title = page.name;
   main.append(title, meta);

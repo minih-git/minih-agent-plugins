@@ -32,25 +32,26 @@ Five host details differ from the upstream install; everything else is unchanged
 - **No slash commands.** There is no `/answer-me-with-html` command in this host.
   Settings, clean-up, themes and updates are the CLI: `am config`, `am clean`,
   `am theme`.
-- **The reply block.** End the reply with the card this plugin draws — not a bare
-  path, and not a plain link. The card is one fenced block whose body is the
-  absolute path alone:
+- **Where the page goes.** Write it into the session scratch directory with
+  `-o "$PI_SCRATCH_DIR/answers/<topic>.html"`, and end the reply with a plain
+  Markdown link to that file:
+
+  `[打开页面 · <title>](file:///Users/you/.minih-agent-desktop/scratch/<session>/answers/Topic.html)`
+
+  The app opens a linked `.html` file that sits in the project or the scratch
+  directory **in its own browser panel**, next to the conversation. A file
+  anywhere else (for example `~/.answer-me-with-html`) only gets "reveal in the
+  file manager" and "copy path", which is why the scratch directory is the
+  default. Name the link with the page title, never the raw path.
+- **When the user wants the page kept.** Only then render without `-o`, so it
+  lands in `<AM_HOME or ~/.answer-me-with-html>/pages`; the plugin panel lists
+  and cleans that library, and a reply can end with the card instead:
 
   ````text
   ```minih.answer-me-with-html:page
   /Users/you/.answer-me-with-html/pages/Topic-20261021-095532.html
   ```
   ````
-
-  The card shows the page title, where it lives, its size and time, and buttons
-  that open the page or copy its path. Without the plugin the same fence shows
-  as a code block, so the path stays readable either way. Do not print the path
-  a second time outside the fence.
-- **Where pages live.** `am render` writes to
-  `<AM_HOME or ~/.answer-me-with-html>/pages`, which is what the plugin panel
-  lists. Use `-o` only when the user wants the page somewhere else, and say so
-  in the reply, because the panel does not list those (the card still shows
-  them).
 - **When a page is worth it.** Only when a picture carries the answer: a flow,
   request path, architecture, state machine or lifecycle; a comparison across
   three or more dimensions; a diagnosis with several findings to rank; a
@@ -130,10 +131,11 @@ AM_EOF
    Otherwise, in DeepSeek Harness, write a Markdown link directly to the absolute path from the `✓` line, with the path as the label too: `[C:/Users/Name/My Pages/page.html](<C:/Users/Name/My Pages/page.html>)` on Windows or `[/abs/path.html](</abs/path.html>)` on macOS/Linux. Use forward slashes on Windows and angle brackets around the destination so spaces work. These path links open the Document Preview panel.
    In other hosts, write the page link as a Markdown link to a `file://` URL, with the URL as the label too: `[file:///abs/path.html](file:///abs/path.html)`. Take the absolute path from the `✓` line and add `file://` in front; do not percent-encode it. GUI hosts (Codex, Antigravity) render this as a clickable link, and a terminal still shows the full URL.
 
-In Minih-Agent-Desktop, use neither of the two above: end the reply with the page
-card this plugin draws, one fenced block `minih.answer-me-with-html:page` whose
-body is the absolute path alone (see "Host: Minih-Agent-Desktop" above). Do not
-offer to open the page yourself, and never start `am serve` on your own.
+In Minih-Agent-Desktop, use neither of the two above: end the reply with
+`[打开页面 · <title>](file:///abs/path.html)` for a page in the session scratch
+directory, or the `minih.answer-me-with-html:page` fenced block for a page kept in
+the library (see "Host: Minih-Agent-Desktop" above). Do not offer to open the page
+yourself, and never start `am serve` on your own.
    If you have a `present` tool (DeepSeek Harness), call it with the absolute path from the `✓` line before you reply, so the user can open the page from a card in the app. Still end the reply with the link.
    If you have an in-app browser tool (such as `open_in_codex` in OpenAI Codex), the render output has a `link:` line, and `am config get open` is not `off`, call that tool with the link (`open_in_codex`: `target: { type: "browser", url: "<link>" }`) so the user sees the page in the app's browser panel. Still end the reply with the link.
 

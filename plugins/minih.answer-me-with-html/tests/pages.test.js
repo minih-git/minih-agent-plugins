@@ -248,3 +248,48 @@ test("formatBytes stays short", () => {
   assert.equal(pages.formatBytes(24 * 1024 * 1024), "24 MB");
   assert.equal(pages.formatBytes(undefined), "0 B");
 });
+
+test("scratchRoots finds answers folders and ignores the rest", () => {
+  const dataDir = path.join(root, "data-dir");
+  const sessionA = path.join(dataDir, "scratch", "session-a", "answers");
+  const sessionB = path.join(dataDir, "scratch", "session-b", "answers");
+  const empty = path.join(dataDir, "scratch", "session-c", "answers");
+  fs.mkdirSync(sessionA, { recursive: true });
+  fs.mkdirSync(sessionB, { recursive: true });
+  fs.mkdirSync(empty, { recursive: true });
+  fs.writeFileSync(path.join(sessionA, "Topic.html"), "<title>Topic</title>");
+  fs.writeFileSync(path.join(sessionB, "notes.txt"), "not a page");
+
+  const roots = pages.scratchRoots(dataDir);
+  assert.deepEqual(
+    roots.map((entry) => entry.id),
+    ["scratch:session-a"],
+    "only a session that really holds a page is a root",
+  );
+  assert.equal(roots[0].pagesDir, sessionA);
+  assert.deepEqual(pages.scratchRoots(path.join(root, "no-data-dir")), []);
+  assert.deepEqual(pages.scratchRoots(null), []);
+});
+
+test("a page in the session scratch store is listed and labelled", () => {
+  const home = path.join(root, "scratch-merge-home");
+  const dataDir = path.join(root, "scratch-merge-data");
+  const answers = path.join(dataDir, "scratch", "session-x", "answers");
+  fs.mkdirSync(path.join(home, "pages"), { recursive: true });
+  fs.mkdirSync(answers, { recursive: true });
+  writePage(home, "Library-20261001-100000.html", "Library", { at: new Date("2026-10-01T10:00:00Z") });
+  fs.writeFileSync(path.join(answers, "Scratch-20261021-100000.html"), "<title>Scratch</title>");
+
+  const listed = pages.listPages(home, { tmpdir: path.join(root, "no-such-tmp"), dataDir });
+  assert.deepEqual(
+    listed.pages.map((page) => [page.root, page.title]),
+    [
+      ["scratch:session-x", "Scratch"],
+      ["home", "Library"],
+    ],
+  );
+  assert.deepEqual(
+    listed.roots.map((entry) => entry.id),
+    ["home", "scratch:session-x"],
+  );
+});
