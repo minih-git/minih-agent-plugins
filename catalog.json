@@ -4,8 +4,8 @@
   "catalog_id": null,
   "name": "Minih-Agent-Desktop Plugins",
   "homepage": "https://github.com/minih-git/minih-agent-plugins",
-  "updated_at": "2026-10-21T05:46:28Z",
-  "generated_at": "2026-10-21T05:46:28Z",
+  "updated_at": "2026-10-21T06:38:48Z",
+  "generated_at": "2026-10-21T06:38:48Z",
   "policy_version": null,
   "artifact_base_url": "https://raw.githubusercontent.com/minih-git/minih-agent-plugins/main",
   "plugins": [
@@ -126,11 +126,11 @@
       },
       "versions": [
         {
-          "version": "0.1.2",
-          "publishedAt": "2026-10-21T05:46:28Z",
-          "shasum": "ea27eec69209b2bc42342e6ce73a267392aa08272f1b7558177326c9167e4536",
-          "url": "packages/minih.answer-me-with-html-0.1.2.piplug",
-          "sizeBytes": 1106493,
+          "version": "0.1.3",
+          "publishedAt": "2026-10-21T06:38:48Z",
+          "shasum": "879421ce910d1b4d7f004de8cf7045f1429b6a635ca0727876bfc05fc2871397",
+          "url": "packages/minih.answer-me-with-html-0.1.3.piplug",
+          "sizeBytes": 1108437,
           "permissions": [
             "ui.panel",
             "agent.prompt.inject",

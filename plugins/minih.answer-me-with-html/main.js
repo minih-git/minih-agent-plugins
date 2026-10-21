@@ -185,6 +185,18 @@ let inAppBrowserRefused = false;
  */
 async function openInAppBrowser(full) {
   if (inAppBrowserRefused) throw Object.assign(new Error("the browser API refused this plugin earlier"), { code: "PERMISSION_DENIED" });
+  // `openInPanel` is the host call made for exactly this: a surface that is not a
+  // tool call has no session, and the renderer opens the tab in the session the
+  // user is looking at. `navigate` stays as the fallback for hosts that predate
+  // it (the call is absent, so it throws and the older path runs).
+  if (typeof pi.browser?.openInPanel === "function") {
+    try {
+      return await pi.browser.openInPanel({ path: full });
+    } catch (error) {
+      if (error?.code === "PERMISSION_DENIED") inAppBrowserRefused = true;
+      throw error;
+    }
+  }
   if (typeof pi.browser?.navigate !== "function") throw Object.assign(new Error("browser API unavailable"), { code: "NO_API" });
   try {
     const state = await pi.browser.navigate({ path: full });

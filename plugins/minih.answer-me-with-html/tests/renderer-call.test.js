@@ -139,6 +139,28 @@ test("an unknown method is refused", async () => {
   await assert.rejects(() => onRendererCall("deleteEverything", {}), (error) => error.code === "UNSUPPORTED");
 });
 
+test("openPage uses the host's openInPanel call when the app offers it", async () => {
+  // The call made for a surface without a session: no panel visibility check, no
+  // session id, and the renderer decides the tab (Desktop ADR 0335).
+  const calls = [];
+  globalThis.pi.browser = {
+    openInPanel: async ({ path: target }) => {
+      calls.push(target);
+      return { path: target };
+    },
+    navigate: async () => {
+      throw new Error("navigate must not be used when openInPanel exists");
+    },
+  };
+  spawned.length = 0;
+  const { onRendererCall: call } = freshMain();
+  const result = await call("openPage", { path: page() });
+  assert.equal(result.where, "app");
+  assert.deepEqual(calls, [fs.realpathSync(page())]);
+  assert.equal(spawned.length, 0);
+  delete globalThis.pi.browser;
+});
+
 test("openPage prefers the app's browser panel when the host accepts the page", async () => {
   const navigated = [];
   globalThis.pi.browser = {

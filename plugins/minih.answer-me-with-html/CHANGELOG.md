@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.3 — 2026-10-21
+
+接上宿主新增的 `pi.browser.openInPanel`（Desktop ADR 0335）：「打开页面」现在能真正把页面放进工作面板的浏览视图，不再依赖浏览面板是否正被显示。
+
+- 优先调用 `openInPanel({ path })`：由宿主校验路径、渲染器决定用哪个会话开标签；调用被拒时按原因码提示。
+- 旧宿主没有该方法时自动回退到 `navigate`，再退系统浏览器——三段落空都能工作。
+- 新增 1 项测试覆盖「有 openInPanel 时不走 navigate」；合计 31 项通过。
+
 ## 0.1.2 — 2026-10-21
 
 改对「页面在哪、回复怎么收尾」：作者原先以为内置浏览器只能靠插件权限打开，实际宿主把**回复里的链接**当作另一条通道——指向项目或会话临时目录内 `.html` 的链接由工作面板自己打开，不需要任何权限。
@@ -56,7 +64,7 @@ Minih-Agent-Desktop 插件：技能与内置 `am` CLI 原样打包，新增宿�
   因此由插件进程自己的 Node fs 读写；插件自己守三条规则——只碰 CLI 的 pages 目录、
   只认其中单个 `.html` 文件名、删除前校验真实路径仍直接位于该目录。卡片带来的路径
   来自回复文本，读写或打开之前按同一套规则校验。无网络访问。
-- 离线验证：30 项 `node --test`（命名与列表规则、两个目录的合并与私有性判断、目录
+- 离线验证：31 项 `node --test`（命名与列表规则、两个目录的合并与私有性判断、目录
   占用、卡片通道的校验与打开路径、真实 CLI 端到端渲染与清理）通过；卡片在真实
   浏览器里以四种状态渲染并点过按钮；`pi-plugin check` 无错误。
 
@@ -75,4 +83,4 @@ temporary fallback); bulk cleaning runs the CLI's own `am clean`. There is no
 always-on mode: a page is made when a picture carries the answer. The plugin
 requests no file permission and touches only those `pages/` folders, one regular
 `.html` file at a time, and the card's path is checked the same way before use.
-Thirty offline tests pass, and the card was rendered and clicked in a real
+Thirty-one offline tests pass, and the card was rendered and clicked in a real
