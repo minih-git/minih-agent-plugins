@@ -4,8 +4,8 @@
   "catalog_id": null,
   "name": "Minih-Agent-Desktop Plugins",
   "homepage": "https://github.com/minih-git/minih-agent-plugins",
-  "updated_at": "2026-10-21T06:38:48Z",
-  "generated_at": "2026-10-21T06:38:48Z",
+  "updated_at": "2026-10-23T14:49:05Z",
+  "generated_at": "2026-10-23T14:49:05Z",
   "policy_version": null,
   "artifact_base_url": "https://raw.githubusercontent.com/minih-git/minih-agent-plugins/main",
   "plugins": [
@@ -140,6 +140,50 @@
           ],
           "yanked": false,
           "minMinihAgent": ">=0.20.0"
+        }
+      ]
+    },
+    {
+      "id": "minih.terminal",
+      "name": "Terminal",
+      "description": "An embedded terminal: local shells in tabs, opened from the sidebar.",
+      "author": "minih-git",
+      "icon_url": null,
+      "categories": [
+        "productivity"
+      ],
+      "verified": true,
+      "trust": "verified",
+      "publisher_id": "minih-git",
+      "homepage": null,
+      "repository": "https://github.com/minih-git/minih-agent-plugins",
+      "safety_notes": "Runs real local shells (zsh/bash/sh, PowerShell, or cmd) with your own user privileges, so anything typed here can change this machine. Working directories are not sandboxes, and the terminal is not restricted to the open project. Terminal input and output stay in this plugin's memory: nothing is logged, uploaded, or attached to a chat.",
+      "i18n": {
+        "en": {
+          "name": "Terminal",
+          "description": "An embedded terminal: local shells in tabs, opened from the sidebar.",
+          "safetyNotes": "Runs real local shells (zsh/bash/sh, PowerShell, or cmd) with your own user privileges, so anything typed here can change this machine. Working directories are not sandboxes, and the terminal is not restricted to the open project. Terminal input and output stay in this plugin's memory: nothing is logged, uploaded, or attached to a chat."
+        },
+        "zh-CN": {
+          "name": "终端",
+          "description": "内嵌终端：以标签页运行本机 shell，从左侧边栏打开。",
+          "safetyNotes": "以你本人的用户权限运行真实的本机 shell（zsh/bash/sh、PowerShell 或 cmd），在此输入的任何命令都可能改动这台机器。工作目录不是沙箱，终端也不限于当前项目。终端的输入与输出只保存在本插件内存中：不记录日志、不上传、不写入会话。"
+        }
+      },
+      "versions": [
+        {
+          "version": "0.1.0",
+          "publishedAt": "2026-10-23T14:49:05Z",
+          "shasum": "6bdae90d7f0197a8c0c6a2b6cb83774a6409bc4936d82988563d3c7f0bc2e369",
+          "url": "packages/minih.terminal-0.1.0.piplug",
+          "sizeBytes": 4707199,
+          "permissions": [
+            "ui.view",
+            "fs.read",
+            "clipboard.write"
+          ],
+          "yanked": false,
+          "minMinihAgent": ">=0.25.0"
         }
       ]
     },

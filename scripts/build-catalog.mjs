@@ -75,6 +75,13 @@ function compareVersions(left, right) {
  * `preserved` means the directory carries the upstream artifacts unchanged, so
  * the provenance entry can point at the repository those bytes came from.
  */
+/**
+ * Plugins authored in this repository rather than redistributed from someone
+ * else's release. Everything else keeps the `community` default, because this
+ * catalog re-publishes their bytes unchanged.
+ */
+const FIRST_PARTY = new Set(["minih.terminal"]);
+
 const PROVENANCE = {
   "local.remote-tools": {
     sourceRepository: "https://github.com/jiege6-66/pi-desktop-remote-tools",
@@ -133,10 +140,11 @@ async function main() {
       author: manifest.author ?? "",
       icon_url: null,
       categories: manifest.categories ?? [],
-      verified: false,
-      // Community trust: this repository redistributes plugins other people
-      // published. Only the project's own plugin could claim `verified`.
-      trust: "community",
+      verified: FIRST_PARTY.has(manifest.id),
+      // A redistributed plugin is `community`: this repository re-publishes
+      // someone else's release. A plugin authored here is the project's own, and
+      // this repository is the official catalog the client trusts.
+      trust: FIRST_PARTY.has(manifest.id) ? "verified" : "community",
       publisher_id: PUBLISHER_ID,
       homepage: manifest.homepage ?? null,
       // A redistributed plugin gets the upstream URL from PROVENANCE; a plugin

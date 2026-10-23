@@ -33,18 +33,23 @@ https://raw.githubusercontent.com/minih-git/minih-agent-plugins/main/catalog.jso
 
 ## Plugins published here
 
-All three were built by other people and are redistributed here unmodified,
+Three of them were built by other people and are redistributed here unmodified,
 keeping their own `LICENSE` and notice files inside their directories.
+`minih.terminal` is authored in this repository.
 
 | Plugin | Version | Author | License | Upstream |
 | --- | --- | --- | --- | --- |
+| `minih.terminal` (`Terminal`) | 0.1.0 | minih-git | MIT | this repository |
 | `cn.star.computer-use` (`Computer Use`) | 0.4.0 | TheFlareStar | MPL-2.0 | not published by the author |
 | `local.remote-tools` (`Remote SSH Tools`) | 0.1.0 | jiege6-66 | MIT | `github.com/jiege6-66/pi-desktop-remote-tools` |
 | `pi.file-manager` (`File Manager`) | 0.9.0 | Tioit-Wang | not declared by the author | not published by the author |
 
-They are listed with `trust: "community"` and `verified: false`. The `verified`
-badge is a claim about a publisher this repository cannot make on someone
-else's behalf.
+The redistributed ones are listed with `trust: "community"` and
+`verified: false`: the `verified` badge is a claim about a publisher this
+repository cannot make on someone else's behalf. A plugin authored here is the
+project's own, so the generator marks it `verified` — `FIRST_PARTY` in
+`scripts/build-catalog.mjs` is the list, and adding an id to it is a deliberate
+act, not a side effect of publishing.
 
 ## Adding or updating a plugin
 
