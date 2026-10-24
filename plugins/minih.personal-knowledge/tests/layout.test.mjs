@@ -14,6 +14,7 @@ import {
   galaxyOf,
   kindOf,
 } from "../lib/layout.mjs";
+import { forceGraphNodes } from "../view/model.js";
 import { initialViewMode, MODE_3D, MODE_CHART } from "../view/view-mode.js";
 import { isolatedHome } from "./helpers/home.mjs";
 // Keep every fixture away from the real ~/.personal-knowledge (see helpers/home.mjs).
@@ -231,6 +232,45 @@ test("galaxyOf and kindOf handle minimal inputs", () => {
   assert.equal(kindOf({ cls: "record", family: "event" }), "moon");
   assert.equal(kindOf({ cls: "unknown", family: "entity", id: "X 总览.md" }, { navigationNamePatterns: [/(总览|索引)$/] }), "nav");
   assert.equal(kindOf({ cls: "memory", family: "memory" }), "satellite");
+});
+
+test("forceGraphNodes hands copies to the force layout; model nodes stay clean", () => {
+  const node = {
+    id: "A.md",
+    title: "A",
+    cls: "topic",
+    family: "entity",
+    kind: "planet",
+    galaxy: "shared",
+    degree: 5,
+    x: 10,
+    y: -20,
+    z: 3,
+    __w3d: { x: 10, y: -20, z: 3 },
+  };
+  const clones = forceGraphNodes([node]);
+  assert.equal(clones.length, 1);
+  assert.equal(clones[0].id, "A.md");
+  assert.equal(clones[0].ref, node, "the clone keeps a read-only reference for the render callbacks");
+  // d3-force writes the fixed positions (and bookkeeping) back onto whatever
+  // objects it was given, on every tick.
+  clones[0].x = clones[0].fx;
+  clones[0].y = clones[0].fy;
+  clones[0].z = clones[0].fz;
+  clones[0].vx = 0;
+  clones[0].vy = 0;
+  clones[0].vz = 0;
+  clones[0].index = 0;
+  clones[0].__threeObj = {};
+  assert.equal(clones[0].fx, 10);
+  assert.equal(clones[0].fy, -20);
+  assert.equal(clones[0].fz, 3);
+  // The shared model node must be untouched — the flat chart reads x/y.
+  assert.equal(node.x, 10);
+  assert.equal(node.y, -20);
+  assert.equal(node.z, 3);
+  assert.equal(node.index, undefined);
+  assert.equal(node.__threeObj, undefined);
 });
 
 test("WebGL-failure fallback logic (§12.6)", () => {

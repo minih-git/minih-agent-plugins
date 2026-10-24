@@ -21,7 +21,7 @@ import {
   LineGeometry,
 } from "./vendor/universe-3d.mjs";
 import { MACRO_STRETCH, DISK_TILT } from "./vendor/layout.mjs";
-import { nodeDisplayName, planetRadius, starRadius, tethersOf } from "./model.js";
+import { forceGraphNodes, nodeDisplayName, planetRadius, starRadius, tethersOf } from "./model.js";
 import { nodeSeverity } from "./strings.js";
 import { createSeededRandom, clamp } from "./bridge.js";
 
@@ -65,9 +65,9 @@ export class ThreeView {
       .cooldownTicks(0)
       .linkVisibility(false)
       .nodeThreeObjectExtend(false)
-      .nodeThreeObject((node) => this.buildNodeObject(node))
-      .onNodeHover((node) => this.handleHover(node))
-      .onNodeClick((node) => this.handleClick(node));
+      .nodeThreeObject((clone) => this.buildNodeObject(clone.ref))
+      .onNodeHover((clone) => this.handleHover(clone?.ref ?? null))
+      .onNodeClick((clone) => this.handleClick(clone?.ref ?? null));
 
     this.fg.renderer().setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     // The spec's camera rig replaces the trackball controls.
@@ -698,21 +698,19 @@ export class ThreeView {
       const t = model.nodesById.get(link.target);
       return s && t && (s.kind !== "moon" && t.kind !== "moon");
     });
-    // three-forcegraph rewrites link.source/target into node object
-    // references; pass copies so the shared model keeps its string ids.
+    // The engine rewrites whatever it receives on every tick (x=fx/fy/fz,
+    // velocities, index, __threeObj) and points link.source/target at its
+    // node objects. Pass copies of BOTH so the shared model keeps the flat
+    // chart's layout coordinates and string ids; each node copy carries the
+    // fixed world position and a read-only `ref` to the model node.
+    const graphNodes = forceGraphNodes(nodes);
     const graphLinks = links.map((link) => ({ ...link }));
-    // fx/fy/fz pin every node to its §4 world position.
-    for (const node of nodes) {
-      node.fx = node.__w3d.x;
-      node.fy = node.__w3d.y;
-      node.fz = node.__w3d.z;
-    }
-    this.fg.graphData({ nodes, links: graphLinks });
+    this.fg.graphData({ nodes: graphNodes, links: graphLinks });
     this.nodeObjects.clear();
-    // three-forcegraph stores custom objects under __threeObj.
-    for (const node of nodes) {
-      const object = node.__threeObj;
-      if (object) this.nodeObjects.set(node.id, object);
+    // three-forcegraph stores custom objects under __threeObj on the copies.
+    for (const clone of graphNodes) {
+      const object = clone.__threeObj;
+      if (object) this.nodeObjects.set(clone.id, object);
     }
     this.buildPlanetLabels(nodes);
   }
@@ -1136,6 +1134,74 @@ export class ThreeView {
     };
   }
 
+  /** Hidden measuring span: real text width for collision boxes (§5.5). */
+  measuredTextWidth(text, font) {
+    if (!this.measureEl) {
+      this.measureEl = document.createElement("span");
+      this.measureEl.className = "kg-label kg-measure";
+      this.measureEl.style.visibility = "hidden";
+      this.measureEl.style.whiteSpace = "nowrap";
+      this.container.appendChild(this.measureEl);
+      this.measureCache = new Map();
+    }
+    const key = `${font}|${text}`;
+    let width = this.measureCache.get(key);
+    if (width === undefined) {
+      this.measureEl.style.font = font;
+      this.measureEl.textContent = text;
+      width = this.measureEl.offsetWidth || text.length * 10.5;
+      this.measureCache.set(key, width);
+    }
+    return width;
+  }
+
+  /** Galaxy label fonts, matched to the CSS (narrow panels shrink both). */
+  galaxyLabelFonts() {
+    // The CSS media query keys on the viewport, not the stage width.
+    const narrow = window.innerWidth <= 660;
+    return {
+      nameFont: narrow
+        ? '600 13px "Songti SC", "Noto Serif SC", serif'
+        : '600 17px "Songti SC", "Noto Serif SC", serif',
+      nameSpacing: narrow ? "0.06em" : "0.14em",
+      captionFont: narrow ? "10px sans-serif" : "11px sans-serif",
+      captionSpacing: "0.02em",
+    };
+  }
+
+  measuredSpaced(font, spacing, text) {
+    if (!this.measureEl) {
+      this.measureEl = document.createElement("span");
+      this.measureEl.className = "kg-label kg-measure";
+      this.measureEl.style.visibility = "hidden";
+      this.measureEl.style.whiteSpace = "nowrap";
+      this.container.appendChild(this.measureEl);
+      this.measureCache = new Map();
+    }
+    const key = `${font}|${spacing}|${text}`;
+    let width = this.measureCache.get(key);
+    if (width === undefined) {
+      this.measureEl.style.font = font;
+      this.measureEl.style.letterSpacing = spacing;
+      this.measureEl.textContent = text;
+      width = this.measureEl.offsetWidth || text.length * 10.5;
+      this.measureCache.set(key, width);
+    }
+    return width;
+  }
+
+  projectToScreen(x, y, z) {
+    const v = new THREE.Vector3(x, y, z);
+    v.project(this.camera);
+    const width = this.container.clientWidth;
+    const height = this.container.clientHeight;
+    return {
+      x: (v.x * 0.5 + 0.5) * width,
+      y: (-v.y * 0.5 + 0.5) * height,
+      behind: v.z >= 1,
+    };
+  }
+
   /** §5.5 label budget in screen space: ≤12 overview, ≤18 galaxy. */
   updatePlanetLabels() {
     if (!this.state) return;
@@ -1143,40 +1209,136 @@ export class ThreeView {
     const budget = focusId ? 18 : 12;
     const width = this.container.clientWidth;
     const height = this.container.clientHeight;
+    const boxes = [];
+    const overlaps = (box) => boxes.some((b) => !(box.x1 < b.x0 || box.x0 > b.x1 || box.y1 < b.y0 || box.y0 > b.y1));
+
+    // Galaxy names and captions claim their boxes first (§5.5), so planet
+    // names cannot cover them. Names are always shown; when the default spot
+    // collides with an earlier box, try one slot above, then below, and keep
+    // the default as the last resort.
+    for (const [id, label] of this.galaxyLabels) {
+      const galaxy = this.model.galaxiesById.get(id);
+      if (!galaxy) continue;
+      const p = this.projectToScreen(label.position.x, label.position.y, label.position.z);
+      const onStage = focusId ? id === focusId : true;
+      const major = galaxy.role !== "belt";
+      const fonts = this.galaxyLabelFonts();
+      const textWidth = this.measuredSpaced(
+        major ? fonts.nameFont : "11px sans-serif",
+        major ? fonts.nameSpacing : "0.03em",
+        galaxy.id === "shared" ? this.t("sharedGalaxy") : galaxy.name,
+      );
+      void 0;
+      let totalHeight = major ? 22 : 15;
+      let captionWidth = 0;
+      if (major) {
+        captionWidth = this.measuredSpaced(
+          fonts.captionFont,
+          fonts.captionSpacing,
+          this.t("galaxyCaption", { planets: galaxy.planets, events: galaxy.events }),
+        );
+        totalHeight += major ? (window.innerWidth <= 660 ? 16 : 18) : 0;
+      }
+      const halfW = Math.max(textWidth, captionWidth) / 2 + 4;
+      const shown = onStage && !p.behind && p.x > -halfW && p.x < width + halfW && p.y > 0 && p.y < height;
+      label.visible = shown;
+      if (!shown) {
+        label.element.style.translate = "";
+        continue;
+      }
+      const step = totalHeight + 6;
+      const boxAt = (offsetX, offsetY) => ({
+        x0: p.x - halfW + offsetX,
+        x1: p.x + halfW + offsetX,
+        y0: p.y - totalHeight / 2 - 2 + offsetY,
+        y1: p.y + totalHeight / 2 + 2 + offsetY,
+      });
+      let chosen = boxAt(0, 0);
+      let chosenOffset = [0, 0];
+      if (overlaps(chosen)) {
+        // Two slots above/below, then two gentle sideways slots.
+        const candidates = [
+          [0, -step], [0, step], [0, -2 * step], [0, 2 * step],
+          [-halfW * 1.2, -step], [halfW * 1.2, -step],
+          [-halfW * 1.2, step], [halfW * 1.2, step],
+          [-halfW * 2.6, 0], [halfW * 2.6, 0],
+          [-halfW * 2.6, -step], [halfW * 2.6, -step],
+          [-halfW * 2.6, step], [halfW * 2.6, step],
+        ];
+        for (const [dx, dy] of candidates) {
+          const candidate = boxAt(dx, dy);
+          if (overlaps(candidate)) continue;
+          chosen = candidate;
+          chosenOffset = [dx, dy];
+          break;
+        }
+        label.element.style.translate = `${Math.round(chosenOffset[0])}px ${Math.round(chosenOffset[1])}px`;
+      } else {
+        label.element.style.translate = "";
+      }
+      boxes.push(chosen);
+    }
+
+    // §5.5: in the overview planet names appear only at 1.6× the fit zoom or
+    // more — in 3D that is a camera-distance test (fit distance / current).
+    const zoomedEnough =
+      focusId || this.overviewDistance() / Math.max(1, this.cam.dist) >= 1.6;
     const projected = [];
     for (const [id, label] of this.planetLabels) {
       const node = this.model.nodesById.get(id);
       if (!node) continue;
-      const v = new THREE.Vector3(node.__w3d.x, node.__w3d.y, node.__w3d.z);
-      v.project(this.camera);
-      const x = (v.x * 0.5 + 0.5) * width;
-      const y = (-v.y * 0.5 + 0.5) * height;
-      const visible = v.z < 1 && x > 0 && x < width && y > 0 && y < height;
-      projected.push({ id, label, x, y, visible, degree: node.degree ?? 0 });
-      if (!visible) label.visible = false;
+      const p = this.projectToScreen(node.__w3d.x, node.__w3d.y, node.__w3d.z);
+      const visible =
+        zoomedEnough && !p.behind && p.x > 0 && p.x < width && p.y > 0 && p.y < height;
+      projected.push({ id, label, x: p.x, y: p.y, visible, degree: node.degree ?? 0 });
+      if (!visible) {
+        label.visible = false;
+        label.element.style.translate = "";
+      }
     }
+
     // Greedy collision boxes, hovered first (§5.5).
-    const boxes = [];
-    const fits = (box) => !boxes.some((b) => !(box.x1 < b.x0 || box.x0 > b.x1 || box.y1 < b.y0 || box.y0 > b.y1));
     let shown = 0;
+    let overlapCount = 0;
     const ordered = projected
       .filter((p) => p.visible)
       .sort((a, b) => (a.id === this.hoveredId ? -1 : b.id === this.hoveredId ? 1 : b.degree - a.degree || (a.id < b.id ? -1 : 1)));
     for (const candidate of ordered) {
-      if (shown >= budget && candidate.id !== this.hoveredId) {
-        candidate.label.visible = false;
-        continue;
+      const modelNode = this.model.nodesById.get(candidate.id);
+      const name = nodeDisplayName(this.model, modelNode, this.t);
+      const textWidth = this.measuredTextWidth(name, "10.5px sans-serif");
+      // CSS2DRenderer centers the element on its anchor, so the box is
+      // symmetric around (x, y): DOM = [x − w/2, x + w/2] × [y − h/2, y + h/2].
+      const halfW = textWidth / 2 + 5;
+      const halfH = 9;
+      let x = candidate.x + halfW + 8;
+      const boxAt = (cx) => ({ x0: cx - halfW, x1: cx + halfW, y0: candidate.y - halfH, y1: candidate.y + halfH });
+      let box = boxAt(x);
+      // Keep the box on the canvas (§ defect-3: no edge clipping): prefer the
+      // left side of the node, then slide whole; the box never shrinks.
+      if (box.x1 > width - 4) {
+        x = candidate.x - halfW - 8;
+        box = boxAt(x);
       }
-      const halfW = (candidate.label.element.textContent.length * 5.6) / 2 + 6;
-      const box = { x0: candidate.x - halfW, x1: candidate.x + halfW, y0: candidate.y - 16, y1: candidate.y + 4 };
-      if (candidate.id === this.hoveredId || fits(box)) {
+      const slide = Math.max(0, box.x1 - (width - 4)) - Math.min(0, box.x0 - 4);
+      if (slide !== 0) {
+        box.x0 += slide;
+        box.x1 += slide;
+        x += slide;
+      }
+      const fits = candidate.id === this.hoveredId || !overlaps(box);
+      if (!fits) overlapCount += 1;
+      if (shown < budget && fits) {
         boxes.push(box);
-        candidate.label.element.textContent = nodeDisplayName(this.model, this.model.nodesById.get(candidate.id), this.t);
+        candidate.label.element.textContent = name;
+        // CSS `translate` composes with the transform CSS2DRenderer writes.
+        candidate.label.element.style.translate = `${Math.round(x - candidate.x)}px 0`;
         candidate.label.visible = true;
         shown++;
       } else {
         candidate.label.visible = false;
       }
     }
+    this.labelOverlapCount = overlapCount;
   }
 }

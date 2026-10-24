@@ -697,6 +697,19 @@ export class ChartView {
       }
     }
 
+    // Keep every label on the canvas: shift boxes that would clip at the
+    // left/right edge, then draw at the shifted position.
+    const W = this.width;
+    for (const label of this.pendingLabels) {
+      const overflow = label.box.x1 > W - 4 ? label.box.x1 - (W - 4) : 0;
+      const underflow = label.box.x0 < 4 ? 4 - label.box.x0 : 0;
+      const shift = overflow > 0 ? -overflow : underflow > 0 ? underflow : 0;
+      if (shift !== 0) {
+        label.x += shift;
+        label.box.x0 += shift;
+        label.box.x1 += shift;
+      }
+    }
     for (const label of this.pendingLabels) {
       ctx.save();
       ctx.font = label.serif

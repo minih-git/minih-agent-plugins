@@ -88,6 +88,7 @@ body {
   display: flex;
   align-items: baseline;
   gap: 8px;
+  white-space: nowrap;
 }
 
 .crumb-root {
@@ -132,6 +133,8 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
+  flex: none;
   padding: 7px 12px;
   border-radius: 10px;
   border: 1px solid var(--glass-border);
@@ -912,7 +915,16 @@ body {
   z-index: 5;
 }
 
+/* Off-screen measuring span for real label widths (§5.5 collision boxes). */
+.kg-measure {
+  position: absolute;
+  top: -9999px;
+  left: -9999px;
+  pointer-events: none;
+}
+
 .kg-label {
+  white-space: nowrap;
   color: #d5def5;
   font-family: var(--sans);
   font-size: 10.5px;
@@ -953,6 +965,52 @@ body {
 .kg-planet-label {
   color: #d5def5;
   opacity: 0.92;
+}
+
+/* ---- narrow panels: keep the corners on one row (§ defect-3) ---- */
+
+@media (max-width: 660px) {
+  .hud-top {
+    padding: 10px 10px;
+    gap: 6px;
+  }
+
+  .hud-title {
+    font-size: 16px;
+    letter-spacing: 0.06em;
+  }
+
+  .hud-counts,
+  .vault-badge {
+    display: none;
+  }
+
+  .search-box {
+    width: auto;
+    flex: 1 1 24vw;
+    min-width: 96px;
+    max-width: none;
+  }
+
+  .corner-btn-text {
+    display: none;
+  }
+
+  .corner-btn {
+    padding: 7px 9px;
+  }
+
+  /* Narrow panels shrink galaxy names so labels stay readable without
+   * overlapping (§5.5); three-view.js measures with the same fonts. Belt
+   * names keep their own smaller size. */
+  .kg-galaxy-label:not(.role-belt) {
+    font-size: 13px;
+    letter-spacing: 0.06em;
+  }
+
+  .kg-galaxy-caption {
+    font-size: 10px;
+  }
 }
 
 /* ---- reduced motion (§7) ---- */

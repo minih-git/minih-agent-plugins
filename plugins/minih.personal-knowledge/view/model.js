@@ -169,4 +169,22 @@ export function tethersOf(model, nodeId) {
   return events.length <= TETHER_CAP ? events : null;
 }
 
+/**
+ * Copies for `3d-force-graph`'s `graphData`. The engine rewrites whatever
+ * node objects it receives on every tick (x=fx, y=fy, z=fz, velocities,
+ * index, `__threeObj`); handing it the shared model nodes would overwrite
+ * the flat chart's layout coordinates (world Y = −y). Each copy carries the
+ * fixed world position plus a read-only `ref` back to the model node for
+ * the render callbacks.
+ */
+export function forceGraphNodes(nodes) {
+  return nodes.map((node) => ({
+    id: node.id,
+    fx: node.__w3d.x,
+    fy: node.__w3d.y,
+    fz: node.__w3d.z,
+    ref: node,
+  }));
+}
+
 export { MACRO_STRETCH, nodeSeverity };
