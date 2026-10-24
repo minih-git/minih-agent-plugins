@@ -1,6 +1,6 @@
 {
   "name": "personal-knowledge",
-  "version": "0.1.0+codex.20260908063616",
+  "version": "0.1.1",
   "description": "Use a local Obsidian vault as verified, time-aware long-term context for Codex.",
   "author": {
     "name": "MiniH"

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "minih.personal-knowledge",
   "name": "Personal Knowledge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Use a local Obsidian vault as verified, time-aware long-term context: scoped retrieval, guarded write-back, and project routing.",
   "author": "minih-git",
   "license": "MIT",
@@ -41,11 +41,19 @@
         "id": "personal-knowledge",
         "transport": "stdio",
         "command": "node",
-        "args": ["mcp/server.mjs"],
+        "args": [
+          "mcp/server.mjs"
+        ],
         "env": {
-          "PERSONAL_KNOWLEDGE_VAULT": { "setting": "vaultPath" },
-          "PERSONAL_KNOWLEDGE_CONFIG": { "setting": "configPath" },
-          "PERSONAL_KNOWLEDGE_READ_ONLY": { "setting": "readOnly" }
+          "PERSONAL_KNOWLEDGE_VAULT": {
+            "setting": "vaultPath"
+          },
+          "PERSONAL_KNOWLEDGE_CONFIG": {
+            "setting": "configPath"
+          },
+          "PERSONAL_KNOWLEDGE_READ_ONLY": {
+            "setting": "readOnly"
+          }
         }
       }
     ],

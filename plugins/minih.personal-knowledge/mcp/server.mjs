@@ -127,6 +127,14 @@ const TOOL_DEFINITIONS = [
   },
 ];
 
+// Boolean settings arrive as strings from MCP env injection; accept every
+// truthy spelling so a plugin-settings toggle is honored (0.1.1).
+function isReadOnlyMode() {
+  return ["1", "true", "yes", "on"].includes(
+    String(process.env.PERSONAL_KNOWLEDGE_READ_ONLY ?? "").trim().toLowerCase(),
+  );
+}
+
 const handlers = {
   knowledge_context: (args) => service.context(args),
   knowledge_search: (args) => service.search(args),
@@ -134,7 +142,7 @@ const handlers = {
   knowledge_stale: (args) => service.stale(args),
   knowledge_links: (args) => service.links(args),
   knowledge_write: (args) => {
-    if (process.env.PERSONAL_KNOWLEDGE_READ_ONLY === "1" && args?.dryRun === false) {
+    if (isReadOnlyMode() && args?.dryRun === false) {
       throw new Error("knowledge_write is read-only because PERSONAL_KNOWLEDGE_READ_ONLY=1.");
     }
     return service.write(args);
