@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'none'"
+  />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Knowledge Universe · 知识宇宙</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div id="universe-app" class="universe-app">
+    <!-- Deep-space parallax starfield + per-galaxy radial nebula canvas -->
+    <canvas id="cosmos-bg" class="cosmos-bg" aria-hidden="true"></canvas>
+
+    <!-- 3D and 2D ForceGraph containers sharing the same graphData -->
+    <main id="stage-wrap" class="stage-wrap">
+      <div
+        id="graph-3d"
+        class="graph-stage"
+        role="application"
+        aria-label="Knowledge Universe 3D Graph"
+      ></div>
+      <div
+        id="graph-2d"
+        class="graph-stage is-hidden"
+        role="application"
+        aria-label="Knowledge Universe 2D Graph"
+      ></div>
+    </main>
+
+    <!-- Top Instrument Header -->
+    <header class="hud-header glass-panel" role="banner">
+      <div class="header-left">
+        <div class="brand-cluster">
+          <span class="brand-star" aria-hidden="true"></span>
+          <h1 id="hud-title" class="hud-title">知识宇宙</h1>
+        </div>
+        <span id="vault-badge" class="hud-pill vault-pill" title="Vault">—</span>
+        <span id="counts-badge" class="hud-pill counts-pill">—</span>
+        <span id="fixture-badge" class="hud-pill fixture-pill is-hidden">FIXTURE</span>
+      </div>
+
+      <div class="header-center">
+        <div class="search-box" role="search">
+          <svg class="search-icon" viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="6.8" cy="6.8" r="5" fill="none" stroke="currentColor" stroke-width="1.5" />
+            <line x1="10.5" y1="10.5" x2="14.2" y2="14.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+          </svg>
+          <input
+            id="search-input"
+            type="search"
+            class="search-input"
+            autocomplete="off"
+            spellcheck="false"
+            aria-autocomplete="list"
+            aria-controls="search-results"
+            aria-expanded="false"
+          />
+          <kbd class="search-kbd" aria-hidden="true">/</kbd>
+          <ul id="search-results" class="search-results glass-panel is-hidden" role="listbox"></ul>
+        </div>
+      </div>
+
+      <div class="header-right">
+        <div id="focus-pill" class="focus-pill is-hidden" role="status">
+          <span id="focus-pill-label" class="focus-pill-text"></span>
+          <button id="btn-exit-focus" type="button" class="focus-exit-btn">Esc</button>
+        </div>
+
+        <div class="segmented-control" role="group" aria-label="Dimension switch">
+          <button id="btn-mode-3d" type="button" class="seg-btn is-active" aria-pressed="true">3D</button>
+          <button id="btn-mode-2d" type="button" class="seg-btn" aria-pressed="false">2D</button>
+        </div>
+
+        <button id="btn-health-mode" type="button" class="hud-btn" aria-pressed="false">
+          <span class="status-dot health-dot" aria-hidden="true"></span>
+          <span id="label-health-btn">健康度</span>
+          <span id="health-count-badge" class="mini-badge">0</span>
+        </button>
+
+        <button id="btn-toggle-filters" type="button" class="hud-btn is-active" aria-expanded="true" aria-controls="filters-panel">
+          <span id="label-filters-btn">筛选</span>
+        </button>
+
+        <button id="btn-toggle-legend" type="button" class="hud-btn is-active" aria-expanded="true" aria-controls="legend-panel">
+          <span id="label-legend-btn">图例</span>
+        </button>
+
+        <button id="btn-zoom-fit" type="button" class="hud-btn icon-btn" title="Fit to view">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <path d="M2 5.5V2h3.5M10.5 2H14v3.5M14 10.5V14h-3.5M5.5 14H2v-3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+
+        <button id="btn-lang" type="button" class="hud-btn lang-btn" aria-label="Switch language">EN</button>
+      </div>
+    </header>
+
+    <!-- Inline Bridge Error / Timeout Banner -->
+    <div id="bridge-error-banner" class="bridge-error-banner glass-panel is-hidden" role="alert">
+      <span id="bridge-error-text" class="bridge-error-text"></span>
+      <div class="bridge-error-actions">
+        <button id="btn-retry-bridge" type="button" class="hud-btn small-btn"></button>
+        <button id="btn-dismiss-error" type="button" class="hud-btn small-btn"></button>
+      </div>
+    </div>
+
+    <!-- Left Filters & Toggles Panel -->
+    <aside id="filters-panel" class="hud-filters glass-panel" aria-label="Filters">
+      <div class="panel-header">
+        <h2 id="filters-heading" class="panel-title">星图筛选</h2>
+        <button id="btn-reset-filters" type="button" class="link-btn">重置</button>
+      </div>
+
+      <div class="filter-group">
+        <label id="label-filter-class" for="filter-class" class="filter-label">本体类别</label>
+        <select id="filter-class" class="hud-select"></select>
+      </div>
+
+      <div class="filter-group">
+        <label id="label-filter-project" for="filter-project" class="filter-label">所属星系 (项目)</label>
+        <select id="filter-project" class="hud-select"></select>
+      </div>
+
+      <div class="filter-group">
+        <label id="label-filter-stability" for="filter-stability" class="filter-label">稳定性</label>
+        <select id="filter-stability" class="hud-select"></select>
+      </div>
+
+      <div class="filter-divider" role="separator"></div>
+
+      <div class="toggle-list">
+        <label class="toggle-row">
+          <input id="filter-stale-only" type="checkbox" class="hud-checkbox" />
+          <span id="label-toggle-stale" class="toggle-text">仅显示待复核 (Stale)</span>
+        </label>
+        <label class="toggle-row">
+          <input id="toggle-events" type="checkbox" class="hud-checkbox" checked />
+          <span id="label-toggle-events" class="toggle-text">事件卫星 (Moons)</span>
+        </label>
+        <label class="toggle-row">
+          <input id="toggle-navigation" type="checkbox" class="hud-checkbox" />
+          <span id="label-toggle-navigation" class="toggle-text">导航节点 (MOC/Index)</span>
+        </label>
+        <label class="toggle-row">
+          <input id="toggle-weak-links" type="checkbox" class="hud-checkbox" checked />
+          <span id="label-toggle-weak" class="toggle-text">正文弱引用 (Wikilinks)</span>
+        </label>
+        <label class="toggle-row">
+          <input id="toggle-ghosts" type="checkbox" class="hud-checkbox" />
+          <span id="label-toggle-ghosts" class="toggle-text">未解析幽灵节点 (Ghosts)</span>
+        </label>
+        <label class="toggle-row">
+          <input id="toggle-archived" type="checkbox" class="hud-checkbox" />
+          <span id="label-toggle-archived" class="toggle-text">归档星尘 (Archived)</span>
+        </label>
+        <label id="memory-toggle-row" class="toggle-row">
+          <input id="toggle-memory" type="checkbox" class="hud-checkbox" />
+          <span id="label-toggle-memory" class="toggle-text">记忆卫星 (Memory)</span>
+        </label>
+      </div>
+    </aside>
+
+    <!-- Bottom-Left Legend Overlay -->
+    <aside id="legend-panel" class="hud-legend glass-panel" aria-label="Legend">
+      <div class="panel-header">
+        <h2 id="legend-heading" class="panel-title">天体与关系图例</h2>
+      </div>
+      <div id="legend-classes" class="legend-grid"></div>
+      <div class="filter-divider" role="separator"></div>
+      <div id="legend-predicates-title" class="legend-subtitle">类型化关系谓词</div>
+      <div id="legend-predicates" class="legend-predicates"></div>
+      <div id="legend-health-wrap" class="is-hidden">
+        <div class="filter-divider" role="separator"></div>
+        <div id="legend-health-title" class="legend-subtitle">健康度着色 (半径 = log2 字符数)</div>
+        <div id="legend-health" class="legend-predicates"></div>
+      </div>
+    </aside>
+
+    <!-- Health Mode Accessible DOM Table Region -->
+    <section
+      id="health-region"
+      class="hud-health glass-panel is-hidden"
+      role="region"
+      aria-label="知识库本体健康问题列表"
+      tabindex="-1"
+    >
+      <div class="health-header">
+        <div class="health-title-group">
+          <h2 id="health-heading" class="panel-title">本体健康诊断表</h2>
+          <div id="health-summary-pills" class="health-summary-pills"></div>
+        </div>
+        <div class="health-controls">
+          <label for="health-severity-filter" class="sr-only" id="label-health-filter">Filter issues</label>
+          <select id="health-severity-filter" class="hud-select compact-select"></select>
+          <button id="btn-close-health" type="button" class="icon-close-btn" aria-label="Close health table">×</button>
+        </div>
+      </div>
+      <div class="health-table-scroll" tabindex="0">
+        <table class="health-table">
+          <thead>
+            <tr>
+              <th id="th-health-path" scope="col">笔记路径 / 标题</th>
+              <th id="th-health-class" scope="col">类别</th>
+              <th id="th-health-chars" scope="col">字符数</th>
+              <th id="th-health-issues" scope="col">问题代码</th>
+            </tr>
+          </thead>
+          <tbody id="health-tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Bottom Time-Lapse Control Bar -->
+    <section id="timelapse-bar" class="hud-timelapse glass-panel" aria-label="Time-lapse">
+      <button id="timelapse-play" type="button" class="hud-btn play-btn" aria-label="Play time-lapse">
+        <span id="timelapse-play-icon" aria-hidden="true">▶</span>
+        <span id="timelapse-play-label">演化</span>
+      </button>
+      <div class="timelapse-track-wrap">
+        <label id="label-timelapse" for="timelapse-slider" class="timelapse-label">时间演化 (按创建日期)</label>
+        <input
+          id="timelapse-slider"
+          type="range"
+          min="0"
+          max="1000"
+          step="1"
+          value="1000"
+          class="timelapse-slider"
+        />
+      </div>
+      <div id="timelapse-readout" class="timelapse-readout">全部时间</div>
+      <button id="timelapse-reset" type="button" class="link-btn">重置</button>
+    </section>
+
+    <!-- Right Note Inspector Drawer -->
+    <aside id="note-drawer" class="hud-drawer glass-panel is-hidden" aria-label="Note inspector" tabindex="-1">
+      <div class="drawer-top">
+        <div class="drawer-badges">
+          <span id="drawer-cls-badge" class="cls-badge"></span>
+          <span id="drawer-status-badge" class="status-badge"></span>
+          <span id="drawer-stale-badge" class="stale-badge is-hidden">STALE</span>
+          <span id="drawer-redacted-badge" class="redacted-badge is-hidden">REDACTED</span>
+        </div>
+        <button id="drawer-close" type="button" class="icon-close-btn" aria-label="Close drawer">×</button>
+      </div>
+
+      <h2 id="drawer-title" class="drawer-title">—</h2>
+      <div id="drawer-path" class="drawer-path">—</div>
+
+      <div class="drawer-actions">
+        <button id="btn-copy-link" type="button" class="hud-btn primary-btn">
+          <span id="label-copy-link">复制 Obsidian 链接</span>
+        </button>
+        <button id="btn-focus-subgraph" type="button" class="hud-btn">
+          <span id="label-focus-subgraph">聚焦二跳星系</span>
+        </button>
+        <button id="btn-promote-memory" type="button" class="hud-btn is-hidden">
+          <span id="label-promote-memory">固化为笔记</span>
+        </button>
+      </div>
+
+      <div id="drawer-error" class="drawer-error is-hidden" role="alert"></div>
+
+      <div class="drawer-scroll">
+        <section class="drawer-section">
+          <h3 id="sec-props-title" class="drawer-sec-title">元数据属性</h3>
+          <dl id="drawer-props" class="props-grid"></dl>
+        </section>
+
+        <section id="sec-issues-wrap" class="drawer-section">
+          <h3 id="sec-issues-title" class="drawer-sec-title">本体校验问题</h3>
+          <div id="drawer-issues" class="drawer-issues"></div>
+        </section>
+
+        <section class="drawer-section">
+          <h3 id="sec-relations-title" class="drawer-sec-title">类型化关系 (按谓词分组)</h3>
+          <div id="drawer-relations" class="drawer-relations"></div>
+        </section>
+
+        <section class="drawer-section">
+          <h3 id="sec-backlinks-title" class="drawer-sec-title">反向链接 (Backlinks)</h3>
+          <div id="drawer-backlinks" class="drawer-chip-list"></div>
+        </section>
+
+        <section class="drawer-section">
+          <h3 id="sec-outline-title" class="drawer-sec-title">笔记大纲 (Outline)</h3>
+          <ul id="drawer-outline" class="drawer-outline"></ul>
+        </section>
+
+        <section class="drawer-section">
+          <div class="drawer-sec-head">
+            <h3 id="sec-preview-title" class="drawer-sec-title">正文预览</h3>
+            <span id="drawer-truncated-badge" class="truncated-badge is-hidden">已截断 (≤8000)</span>
+          </div>
+          <pre id="drawer-content" class="drawer-body-preview" tabindex="0"></pre>
+        </section>
+      </div>
+    </aside>
+
+    <!-- Floating 1-Hop Hover Card -->
+    <div id="hover-card" class="hover-card glass-panel is-hidden" role="status" aria-live="polite">
+      <div class="hover-card-head">
+        <span id="hover-cls" class="cls-badge"></span>
+        <span id="hover-status" class="status-badge"></span>
+        <span id="hover-stale" class="stale-badge is-hidden">STALE</span>
+      </div>
+      <div id="hover-title" class="hover-title"></div>
+      <div id="hover-path" class="hover-path"></div>
+      <div class="hover-meta">
+        <span id="hover-updated"></span>
+        <span id="hover-verified"></span>
+      </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="hud-toast glass-panel is-hidden" role="status" aria-live="polite"></div>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
