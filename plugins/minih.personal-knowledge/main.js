@@ -1,5 +1,5 @@
 /**
- * Personal Knowledge plugin backend (ADR 0001 §10).
+ * Personal Knowledge plugin backend (ADR 0001 §10 and §9).
  *
  * Since 0.2.0 this module backs the Knowledge Universe view. It loads the same
  * shared index the MCP server uses (raw Node reads, like the MCP server: no
@@ -7,8 +7,10 @@
  * channels. The page reaches it only through the sender-bound panel bridge
  * (`window.pluginBridge.invoke`), forwarded by the host as `onPanelInvoke`.
  *
- * 0.2.0 does not declare `memory.read`, so memory satellites report
- * `unsupported`; 0.3.0 adds `kg.memory` data and the promotion channels.
+ * Since 0.3.0 the manifest declares `memory.read` (Desktop D682): the view can
+ * show learned-memory satellites next to their project and promote a mature
+ * `fact` or `reference` into a vault note. Memory is read-only here; archiving
+ * the original entry stays the user's action in the Desktop memory manager.
  */
 "use strict";
 
@@ -23,12 +25,15 @@ const CHANNELS = new Set([
   "kg.graph",
   "kg.note",
   "kg.copyLink",
+  "kg.promote.preview",
+  "kg.promote.apply",
   "kg.settings.get",
   "kg.settings.set",
   "kg.settings.test",
 ]);
 
 const MAX_PREVIEW_CHARS = 8000;
+const USER_CENTER_ID = "memory:user-center";
 
 let state = null;
 
@@ -48,7 +53,7 @@ async function ensureState() {
   const index = new VaultIndex({ root: await realpath(vaultPath), config });
   await index.refresh({ force: true });
   const ontology = await loadOntology({ pluginRoot, index });
-  state = { index, ontology, redactSensitiveContent, vaultPath };
+  state = { index, ontology, redactSensitiveContent, vaultPath, config };
   return state;
 }
 
@@ -79,16 +84,152 @@ function refusal(message) {
   return error;
 }
 
+function isReadOnlyMode() {
+  return ["1", "true", "yes", "on"].includes(
+    String(process.env.PERSONAL_KNOWLEDGE_READ_ONLY ?? "").trim().toLowerCase(),
+  );
+}
+
+/** Page through `pi.memory.list` until `nextOffset` is null (ADR 0001 §9). */
+async function listAllMemoryEntries(input) {
+  const entries = [];
+  let offset = 0;
+  for (let page = 0; page < 100; page += 1) {
+    const result = await globalThis.pi.memory.list({ ...input, limit: 200, offset });
+    if (result.readEnabled === false) return { readEnabled: false, entries: [] };
+    entries.push(...result.entries);
+    if (result.nextOffset === null || result.nextOffset === undefined) break;
+    offset = result.nextOffset;
+  }
+  return { readEnabled: true, entries };
+}
+
+/**
+ * Collect learned-memory satellites: the user scope once, plus one project
+ * scope per project note `repo` path. Read-only; no Desktop write path exists.
+ */
+async function collectMemory(projectNodes) {
+  const empty = { status: "unsupported", count: 0, byProject: new Map(), userEntries: [] };
+  if (typeof globalThis.pi?.memory?.list !== "function") return empty;
+  try {
+    const byProject = new Map();
+    let readEnabledSeen = true;
+    const userEntries = [];
+    for (const node of projectNodes) {
+      const repo = typeof node.metadata?.repo === "string" ? node.metadata.repo.trim() : "";
+      if (!repo) continue;
+      const listed = await listAllMemoryEntries({ scope: "project", path: repo });
+      if (!listed.readEnabled) {
+        readEnabledSeen = false;
+        break;
+      }
+      if (listed.entries.length > 0) byProject.set(node.path, listed.entries);
+    }
+    if (!readEnabledSeen) return { status: "disabled", count: 0, byProject: new Map(), userEntries: [] };
+    const userListed = await listAllMemoryEntries({ scope: "user" });
+    if (!userListed.readEnabled) return { status: "disabled", count: 0, byProject: new Map(), userEntries: [] };
+    userEntries.push(...userListed.entries);
+    const count =
+      [...byProject.values()].reduce((sum, list) => sum + list.length, 0) + userEntries.length;
+    return { status: "ok", count, byProject, userEntries };
+  } catch (error) {
+    const code = String(error?.code ?? error?.message ?? "");
+    if (/PERMISSION|FORBIDDEN|NOT_AUTHORIZED/i.test(code)) {
+      return { status: "permission-missing", count: 0, byProject: new Map(), userEntries: [] };
+    }
+    return empty;
+  }
+}
+
+function memoryDate(epochMs) {
+  const value = new Date(epochMs);
+  return Number.isNaN(value.getTime()) ? undefined : value.toISOString().slice(0, 10);
+}
+
+function memoryTitle(entry) {
+  const firstLine = String(entry.content ?? "").split("\n")[0].trim();
+  return firstLine.length > 48 ? `${firstLine.slice(0, 48)}…` : firstLine || `Memory ${entry.id}`;
+}
+
+/** Append memory satellites (nodes + links) to a built graph payload. */
+function attachMemory(payload, memory) {
+  if (memory.status !== "ok") return;
+  payload.nodes.push({
+    id: USER_CENTER_ID,
+    title: "Me",
+    cls: "memory",
+    family: "memory",
+    stale: false,
+    archived: false,
+    degree: memory.userEntries.length,
+    chars: 0,
+    issues: [],
+  });
+  for (const entry of memory.userEntries) {
+    payload.nodes.push({
+      id: `memory:${entry.id}`,
+      title: memoryTitle(entry),
+      cls: "memory",
+      family: "memory",
+      project: USER_CENTER_ID,
+      status: undefined,
+      stability: undefined,
+      created: memoryDate(entry.createdAt),
+      updated: memoryDate(entry.updatedAt),
+      stale: false,
+      archived: false,
+      degree: 1,
+      chars: String(entry.content ?? "").length,
+      issues: [],
+      memoryKind: entry.kind,
+    });
+    payload.links.push({ source: `memory:${entry.id}`, target: USER_CENTER_ID, predicate: "memory" });
+  }
+  for (const [projectPath, entries] of memory.byProject) {
+    for (const entry of entries) {
+      payload.nodes.push({
+        id: `memory:${entry.id}`,
+        title: memoryTitle(entry),
+        cls: "memory",
+        family: "memory",
+        project: projectPath,
+        created: memoryDate(entry.createdAt),
+        updated: memoryDate(entry.updatedAt),
+        stale: false,
+        archived: false,
+        degree: 1,
+        chars: String(entry.content ?? "").length,
+        issues: [],
+        memoryKind: entry.kind,
+      });
+      payload.links.push({ source: `memory:${entry.id}`, target: projectPath, predicate: "memory" });
+    }
+  }
+  payload.memory = { status: "ok", count: memory.count };
+}
+
 async function graph(payload) {
   const { buildGraphPayload } = await import("./lib/graph.mjs");
   const { index, ontology } = await ensureState();
   await index.refresh();
-  return buildGraphPayload({
+  const projectNodes = index
+    .paths()
+    .filter((relative) => relative.endsWith(".md"))
+    .map((relative) => index.note(relative))
+    .filter((record) => ontology.resolveClass(record.metadata.type) === "project");
+  const includeMemory = payload?.includeMemory === true;
+  const memory = includeMemory
+    ? await collectMemory(projectNodes)
+    : { status: "unsupported", count: 0, byProject: new Map(), userEntries: [] };
+  const result = buildGraphPayload({
     index,
     ontology,
     vaultName: path.basename(state.vaultPath),
-    memory: { status: "unsupported", count: 0 },
+    memory: { status: memory.status, count: memory.count },
   });
+  attachMemory(result, memory);
+  state.memory = memory;
+  return result;
 }
 
 async function note(payload) {
@@ -138,6 +279,83 @@ async function copyLink(payload) {
   return { copied: true, link };
 }
 
+function findMemoryEntry(memoryId) {
+  const memory = state?.memory;
+  if (!memory || memory.status !== "ok") return null;
+  for (const entries of memory.byProject.values()) {
+    const found = entries.find((entry) => entry.id === memoryId);
+    if (found) return found;
+  }
+  return memory.userEntries.find((entry) => entry.id === memoryId) ?? null;
+}
+
+function promotionClass(kind) {
+  return kind === "fact" || kind === "reference" ? "reference" : "record";
+}
+
+function promotionDraft(entry) {
+  const title = memoryTitle(entry).replace(/[\\/:*?"<>|#^\[\]]/g, "-").replace(/\s+/g, " ").trim() || `Memory ${entry.id}`;
+  const cls = promotionClass(entry.kind);
+  const frontmatter = [
+    "---",
+    `title: ${JSON.stringify(title)}`,
+    `type: ${cls}`,
+    "status: active",
+    `created: ${memoryDate(entry.createdAt) ?? new Date().toISOString().slice(0, 10)}`,
+    `updated: ${memoryDate(entry.updatedAt) ?? new Date().toISOString().slice(0, 10)}`,
+    'source: "memory:' + entry.id + '"',
+    "stability: volatile",
+    "review_interval: on-change",
+    "---",
+  ].join("\n");
+  const rationale = entry.rationale ? `\n> ${String(entry.rationale).replace(/\n/g, "\n> ")}\n` : "";
+  const content = `${frontmatter}\n# ${title}\n\n${entry.content}\n${rationale}\n- Promoted from Desktop learned memory (${entry.kind}, ${entry.origin}, ${entry.evidence}) on ${new Date().toISOString().slice(0, 10)}. Archiving the original entry is a separate, manual action in the memory manager.\n`;
+  return { title, cls, content };
+}
+
+async function uniqueMemoryPath(baseTitle) {
+  const { index } = await ensureState();
+  const clean = baseTitle.replace(/[\\/:*?"<>|#^\[\]]/g, "-").trim();
+  let candidate = `00 Inbox/Memory - ${clean}.md`;
+  for (let suffix = 2; index.note(candidate); suffix += 1) {
+    candidate = `00 Inbox/Memory - ${clean} ${suffix}.md`;
+  }
+  return candidate;
+}
+
+/**
+ * Draft a note under `00 Inbox/` from a memory entry and show the dry-run
+ * result. Nothing is written until kg.promote.apply (ADR 0001 §9).
+ */
+async function promotePreview(payload) {
+  const memoryId = String(payload?.memoryId ?? "");
+  const entry = findMemoryEntry(memoryId);
+  if (!entry) throw refusal(`unknown memory entry: ${memoryId}`);
+  const { createKnowledgeService } = await import("./mcp/knowledge-core.mjs");
+  const service = await createKnowledgeService({ pluginRoot, vaultPath: state.vaultPath, config: state.config });
+  const draft = promotionDraft(entry);
+  const notePath = await uniqueMemoryPath(draft.title);
+  const summary = await service.write({ path: notePath, content: draft.content, create: true });
+  return { memoryId, draft: { path: notePath, content: draft.content }, summary };
+}
+
+/** Apply a confirmed promotion. Refused in read-only mode; every guard of
+ * knowledge_write (dry-run off, CAS n/a for create, credential detector,
+ * atomic write) still applies. */
+async function promoteApply(payload) {
+  if (isReadOnlyMode()) {
+    throw new Error("promotion is refused because PERSONAL_KNOWLEDGE_READ_ONLY=1");
+  }
+  const notePath = String(payload?.path ?? "");
+  const content = String(payload?.content ?? "");
+  if (!notePath.startsWith("00 Inbox/") || !notePath.endsWith(".md")) {
+    throw refusal("promotion writes only under 00 Inbox/ as .md");
+  }
+  const { createKnowledgeService } = await import("./mcp/knowledge-core.mjs");
+  const service = await createKnowledgeService({ pluginRoot, vaultPath: state.vaultPath, config: state.config });
+  const summary = await service.write({ path: notePath, content, create: true, dryRun: false });
+  return { promoted: summary.action === "create", summary };
+}
 
 function embeddingSettingsPath() {
   return process.env.PERSONAL_KNOWLEDGE_EMBEDDING_CONFIG
@@ -254,6 +472,8 @@ async function onPanelInvoke(channel, payload) {
   if (channel === "kg.graph") return graph(payload);
   if (channel === "kg.note") return note(payload);
   if (channel === "kg.copyLink") return copyLink(payload);
+  if (channel === "kg.promote.preview") return promotePreview(payload);
+  if (channel === "kg.promote.apply") return promoteApply(payload);
   if (channel === "kg.settings.get") return settingsGet();
   if (channel === "kg.settings.set") return settingsSet(payload);
   if (channel === "kg.settings.test") return settingsTest(payload);

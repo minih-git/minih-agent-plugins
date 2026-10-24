@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "minih.personal-knowledge",
   "name": "Personal Knowledge",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Use a local Obsidian vault as verified, time-aware long-term context: scoped retrieval, guarded write-back, project routing, and the Knowledge Universe view.",
   "author": "minih-git",
   "license": "MIT",
@@ -53,9 +53,7 @@
         "id": "personal-knowledge",
         "transport": "stdio",
         "command": "node",
-        "args": [
-          "mcp/server.mjs"
-        ]
+        "args": ["mcp/server.mjs"]
       }
     ]
   },
@@ -63,11 +61,12 @@
     "agent.prompt.inject",
     "mcp.server.local",
     "ui.view",
-    "clipboard.write"
+    "clipboard.write",
+    "memory.read"
   ],
   "engines": {
-    "minihAgent": ">=0.25.0",
-    "piDesktop": ">=0.25.0"
+    "minihAgent": ">=0.28.0",
+    "piDesktop": ">=0.28.0"
   },
   "activationEvents": [
     "onStartup"
