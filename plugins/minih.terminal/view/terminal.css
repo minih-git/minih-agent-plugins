@@ -42,6 +42,16 @@
   box-sizing: border-box;
 }
 
+/*
+  `hidden` is the page's only way of removing an element, and the page also
+  sets `display` on those elements. An author `display` rule outranks the UA
+  sheet's `[hidden] { display: none }`, so this one rule has to win over all of
+  them: without it a form marked hidden keeps its box and its space.
+*/
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   height: 100%;
@@ -256,10 +266,6 @@ select {
   background: var(--term-bg);
 }
 
-.pane[hidden] {
-  display: none;
-}
-
 /* Search: a small floating bar over the active pane. */
 #search {
   position: absolute;
@@ -274,10 +280,6 @@ select {
   border-radius: 8px;
   background: var(--surface);
   box-shadow: 0 8px 24px rgb(0 0 0 / 24%);
-}
-
-#search[hidden] {
-  display: none;
 }
 
 #search input {
@@ -297,10 +299,6 @@ select {
   color: #ff8a80;
   font-size: 12px;
   white-space: pre-wrap;
-}
-
-#status[hidden] {
-  display: none;
 }
 
 .sr-only {

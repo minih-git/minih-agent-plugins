@@ -9,8 +9,17 @@
  * user's commands mean.
  *
  * These are interactive shells. They are deliberately unrelated to the Agent's
- * non-interactive command shell: nothing here adds `-NonInteractive`, `-c`, or
- * any other flag that would change the Agent's defaults.
+ * non-interactive command shell: nothing here adds `-NonInteractive` or `-c`.
+ *
+ * On macOS and Linux each one is started as a *login* shell, because that is
+ * what a terminal app starts and the only mode in which the toolchain reaches
+ * PATH: `/etc/zprofile`, `~/.zprofile`, and `~/.profile` are read by login
+ * shells only, while a GUI-launched app inherits launchd's `/usr/bin:/bin:...`
+ * instead of the PATH the user's own terminal has. A non-login shell still
+ * reads `~/.zshrc`, so the first `fnm`/`brew`/`nvm` line in it failed with
+ * "command not found" before this flag was added. Windows GUI apps already
+ * inherit the full user PATH from the registry, and its shells take no such
+ * flag.
  */
 const { statSync } = require("node:fs");
 
@@ -43,6 +52,16 @@ function profileId(file, taken) {
 }
 
 /**
+ * Flags one shell is started with on a platform.
+ *
+ * A fresh array per profile keeps one profile's flags from being mutated
+ * through another's.
+ */
+function loginArgs(platform) {
+  return platform === "win32" ? [] : ["-l"];
+}
+
+/**
  * Build the profile list for one platform.
  *
  * `isFile` is injected so tests can describe a machine without creating it, and
@@ -66,7 +85,7 @@ function detectShellProfiles({
     // dropped rather than offered under a made-up name.
     if (!id) continue;
     taken.add(id);
-    profiles.push({ id, label: programName(file), file, args: [] });
+    profiles.push({ id, label: programName(file), file, args: loginArgs(platform) });
   }
   return profiles;
 }

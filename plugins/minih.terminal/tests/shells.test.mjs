@@ -22,7 +22,7 @@ test("detects installed shells and never invents one", () => {
   );
   for (const profile of profiles) {
     assert.ok(profile.file.startsWith("/"), profile.file);
-    assert.deepEqual(profile.args, [], "interactive shells are started without flags");
+    assert.deepEqual(profile.args, ["-l"], "a POSIX shell is started as a login shell");
   }
 });
 
@@ -58,6 +58,36 @@ test("windows offers PowerShell, cmd, and Git Bash only when installed", () => {
     profiles.map((profile) => profile.id),
     ["pwsh", "cmd"],
   );
+});
+
+test("a POSIX shell starts as a login shell; a Windows one takes no flag", () => {
+  const posix = detectShellProfiles({
+    platform: "linux",
+    env: { SHELL: "/bin/zsh" },
+    isFile: (file) => file === "/bin/zsh",
+  });
+  // Login shells are the only ones that read `/etc/zprofile`, `~/.zprofile`,
+  // and `~/.profile`, which is where the user's PATH setup lives; without the
+  // flag an app inherits launchd's minimal PATH and the first `fnm` line in
+  // `~/.zshrc` fails with "command not found".
+  assert.deepEqual(posix[0].args, ["-l"]);
+  const windows = detectShellProfiles({
+    platform: "win32",
+    env: { ProgramFiles: "C:\\Program Files", SystemRoot: "C:\\Windows" },
+    isFile: (file) => file === "C:\\Windows\\System32\\cmd.exe",
+  });
+  assert.deepEqual(windows[0].args, []);
+});
+
+test("each profile owns its flag list, so one spawn cannot rewrite another", () => {
+  const profiles = detectShellProfiles({
+    platform: "darwin",
+    env: {},
+    isFile: (file) => file === "/bin/zsh" || file === "/bin/bash",
+  });
+  assert.equal(profiles.length, 2);
+  assert.notEqual(profiles[0].args, profiles[1].args);
+  assert.deepEqual(profiles[1].args, ["-l"]);
 });
 
 test("no installed shell yields an empty catalog rather than a fake default", () => {
