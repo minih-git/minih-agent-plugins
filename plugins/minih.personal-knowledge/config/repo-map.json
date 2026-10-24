@@ -1,0 +1,37 @@
+{
+  "$comment": "Personal mapping for the Personal Knowledge plugin. This file ships as a template: copy it to a private location, fill in your own vault paths, and point PERSONAL_KNOWLEDGE_CONFIG at it. Paths are vault-relative except repoPrefixes, which are absolute filesystem prefixes.",
+  "defaultNotes": [],
+  "projects": [
+    {
+      "name": "Example Project",
+      "repoPrefixes": [
+        "/absolute/path/to/your/repo"
+      ],
+      "aliases": [
+        "example"
+      ],
+      "notes": [
+        "01 Projects/Example Project.md"
+      ]
+    }
+  ],
+  "topicRoutes": [
+    {
+      "name": "Infrastructure",
+      "aliases": [
+        "server",
+        "deploy"
+      ],
+      "notes": [
+        "03 Resources/Infrastructure.md"
+      ]
+    }
+  ],
+  "ignoreFolders": [
+    ".obsidian",
+    ".personal-knowledge",
+    ".git",
+    "Templates"
+  ],
+  "backupRetentionDays": 30
+}

@@ -1,0 +1,34 @@
+{
+  "name": "personal-knowledge",
+  "version": "0.1.0+codex.20260908063616",
+  "description": "Use a local Obsidian vault as verified, time-aware long-term context for Codex.",
+  "author": {
+    "name": "MiniH"
+  },
+  "keywords": [
+    "obsidian",
+    "knowledge",
+    "memory",
+    "context"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Personal Knowledge",
+    "shortDescription": "Verified Obsidian context for every relevant task.",
+    "longDescription": "Loads project, preference, infrastructure, and operational knowledge from a local Obsidian vault; supports scoped search, freshness checks, links, and guarded write-back.",
+    "developerName": "MiniH",
+    "category": "Productivity",
+    "capabilities": [
+      "Search",
+      "Context",
+      "Safe Write",
+      "Review"
+    ],
+    "defaultPrompt": [
+      "Load the relevant personal knowledge before working on this task.",
+      "Show which knowledge is stale or still unverified.",
+      "Update the canonical note with the durable facts we just confirmed."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

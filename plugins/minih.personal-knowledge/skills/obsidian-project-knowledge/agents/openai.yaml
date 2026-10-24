@@ -1,0 +1,4 @@
+interface:
+  display_name: "Obsidian Project Knowledge"
+  short_description: "Extract repo knowledge into Obsidian notes"
+  default_prompt: "Use $obsidian-project-knowledge to turn this repository into structured Obsidian project knowledge."

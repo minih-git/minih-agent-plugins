@@ -1,0 +1,7 @@
+interface:
+  display_name: "Obsidian Knowledge"
+  short_description: "检索并维护个人偏好、技术栈、项目档案与工程长期知识"
+  default_prompt: "Use $obsidian-knowledge to retrieve and maintain the relevant long-term knowledge for this task."
+
+policy:
+  allow_implicit_invocation: true
