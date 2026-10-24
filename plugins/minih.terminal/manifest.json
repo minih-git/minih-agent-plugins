@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "minih.terminal",
   "name": "Terminal",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "An embedded terminal: local shells in tabs, opened from the sidebar.",
   "author": "minih-git",
   "categories": [
@@ -53,14 +53,38 @@
         "type": "select",
         "default": "auto",
         "enum": [
-          { "label": "Auto — first installed shell", "value": "auto" },
-          { "label": "zsh", "value": "zsh" },
-          { "label": "bash", "value": "bash" },
-          { "label": "fish", "value": "fish" },
-          { "label": "sh", "value": "sh" },
-          { "label": "PowerShell 7 (pwsh)", "value": "pwsh" },
-          { "label": "Windows PowerShell", "value": "powershell" },
-          { "label": "Command Prompt (cmd)", "value": "cmd" }
+          {
+            "label": "Auto — first installed shell",
+            "value": "auto"
+          },
+          {
+            "label": "zsh",
+            "value": "zsh"
+          },
+          {
+            "label": "bash",
+            "value": "bash"
+          },
+          {
+            "label": "fish",
+            "value": "fish"
+          },
+          {
+            "label": "sh",
+            "value": "sh"
+          },
+          {
+            "label": "PowerShell 7 (pwsh)",
+            "value": "pwsh"
+          },
+          {
+            "label": "Windows PowerShell",
+            "value": "powershell"
+          },
+          {
+            "label": "Command Prompt (cmd)",
+            "value": "cmd"
+          }
         ]
       },
       {
@@ -69,10 +93,18 @@
         "description": "Absolute path. Leave empty to start in the open project, or in your home directory when no project is open.",
         "type": "string",
         "default": ""
+      },
+      {
+        "key": "copyOnSelect",
+        "title": "Copy the selection as soon as it is made",
+        "description": "Selecting text in the terminal puts it on the clipboard without a keystroke.",
+        "type": "boolean",
+        "default": false
       }
     ]
   },
   "permissions": [
+    "clipboard.read",
     "ui.view",
     "fs.read",
     "clipboard.write"

@@ -38,8 +38,16 @@ test("it is a sidebar-placed view, not a work-panel tab", () => {
   assert.deepEqual(Object.keys(view.title).sort(), ["en", "zh-CN"]);
 });
 
-test("it asks for the view, the directory picker and the clipboard, and nothing else", () => {
-  assert.deepEqual([...manifest.permissions].sort(), ["clipboard.write", "fs.read", "ui.view"]);
+test("it asks for the view, the directory picker, and both clipboard directions", () => {
+  // Copy needs write, paste needs read: macOS sends Cmd+C / Cmd+V to the app's
+  // Edit menu, which copies a DOM selection this page does not have, so the
+  // terminal's own menu and chords are the only working paths.
+  assert.deepEqual([...manifest.permissions].sort(), [
+    "clipboard.read",
+    "clipboard.write",
+    "fs.read",
+    "ui.view",
+  ]);
   // A terminal is a manual surface: no agent tools, extensions, MCP servers,
   // prompt injection, or background services.
   for (const forbidden of [
@@ -76,7 +84,15 @@ test("the app versions it supports are declared the way both readers expect", ()
 test("the default terminal is configured in settings, not in the start dialog", () => {
   const settings = manifest.contributes.settings ?? [];
   const byKey = Object.fromEntries(settings.map((setting) => [setting.key, setting]));
-  assert.deepEqual(Object.keys(byKey).sort(), ["defaultDirectory", "defaultShell", "openOnView"]);
+  assert.deepEqual(Object.keys(byKey).sort(), [
+    "copyOnSelect",
+    "defaultDirectory",
+    "defaultShell",
+    "openOnView",
+  ]);
+  // Copy-on-select overwrites the clipboard on every drag, so it is opt-in.
+  assert.equal(byKey.copyOnSelect.type, "boolean");
+  assert.equal(byKey.copyOnSelect.default, false);
   // Opening the view means asking for a terminal: the shipped answer starts one.
   assert.equal(byKey.openOnView.type, "boolean");
   assert.equal(byKey.openOnView.default, true);

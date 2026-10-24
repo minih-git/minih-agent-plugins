@@ -5,24 +5,19 @@ import { test } from "node:test";
 const require = createRequire(import.meta.url);
 const { openRequest, terminalDefaults } = require("../lib/settings.js");
 
+const BASE = { profileId: null, directory: null, openOnView: true, copyOnSelect: false };
+
 test("a fresh install opens a terminal on the machine's first shell", () => {
-  assert.deepEqual(terminalDefaults(), {
-    profileId: null,
-    directory: null,
-    openOnView: true,
-  });
-  assert.deepEqual(terminalDefaults({}), {
-    profileId: null,
-    directory: null,
-    openOnView: true,
-  });
+  assert.deepEqual(terminalDefaults(), BASE);
+  assert.deepEqual(terminalDefaults({}), BASE);
 });
 
 test("a chosen shell and directory reach the engine", () => {
-  assert.deepEqual(
-    terminalDefaults({ defaultShell: "bash", defaultDirectory: "/work/app" }),
-    { profileId: "bash", directory: "/work/app", openOnView: true },
-  );
+  assert.deepEqual(terminalDefaults({ defaultShell: "bash", defaultDirectory: "/work/app" }), {
+    ...BASE,
+    profileId: "bash",
+    directory: "/work/app",
+  });
 });
 
 test("auto means the machine decides, whatever case or padding it arrives in", () => {
@@ -39,19 +34,18 @@ test("only an explicit false turns auto-open off", () => {
   assert.equal(terminalDefaults({ openOnView: "false" }).openOnView, true);
 });
 
+test("copy-on-select stays off unless it was switched on", () => {
+  // Selecting output to read it should not overwrite the clipboard by default.
+  assert.equal(terminalDefaults({}).copyOnSelect, false);
+  assert.equal(terminalDefaults({ copyOnSelect: true }).copyOnSelect, true);
+  assert.equal(terminalDefaults({ copyOnSelect: "true" }).copyOnSelect, false);
+});
+
 test("a hand-edited settings file cannot crash the plugin", () => {
-  assert.deepEqual(terminalDefaults(null), { profileId: null, directory: null, openOnView: true });
-  assert.deepEqual(terminalDefaults("nonsense"), {
-    profileId: null,
-    directory: null,
-    openOnView: true,
-  });
+  assert.deepEqual(terminalDefaults(null), BASE);
+  assert.deepEqual(terminalDefaults("nonsense"), BASE);
   // Non-string values are ignored rather than stringified into a bad path.
-  assert.deepEqual(terminalDefaults({ defaultShell: 7, defaultDirectory: ["/tmp"] }), {
-    profileId: null,
-    directory: null,
-    openOnView: true,
-  });
+  assert.deepEqual(terminalDefaults({ defaultShell: 7, defaultDirectory: ["/tmp"] }), BASE);
 });
 
 test("the dialog's choice wins over the configured default", () => {

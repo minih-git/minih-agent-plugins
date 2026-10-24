@@ -30,8 +30,13 @@ logged, or uploaded.
   many shells are still running, and cancelling leaves every shell, the plugin,
   and the page exactly as they were. The same disclosure rides on the existing
   quit prompt.
-- Handles search, copy/paste, resize, Chinese IME and wide characters, and the
-  app's light/dark theme.
+- Copies and pastes without depending on Cmd+C / Cmd+V: macOS routes those to the
+  app's Edit menu, whose copy reads a DOM selection a terminal does not have. The
+  pane has its own right-click menu (Copy / Paste / Select all), Ctrl+Shift+C and
+  Ctrl+Shift+V work everywhere, and an optional setting copies as soon as text is
+  selected.
+- Handles search, resize, Chinese IME and wide characters, and the app's
+  light/dark theme.
 
 ## What ships in this directory
 
@@ -92,9 +97,9 @@ node ../../scripts/build-catalog.mjs      # regenerate catalog.json + releases.j
 ```
 
 (The devkit CLI path depends on where the desktop checkout lives.) `pack` also
-reports `permission.unused` for `clipboard.write`: the permission is used from the
-page (`pluginBridge.invoke("clipboard.writeText")`), and the checker only scans
-`main.js`.
+reports `permission.unused` for both clipboard permissions: they are used from
+the page (`pluginBridge.invoke("clipboard.writeText")` and `clipboard.readText`),
+and the checker only scans `main.js`.
 
 ## Platform delivery status
 

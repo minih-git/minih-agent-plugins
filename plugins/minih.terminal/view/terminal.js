@@ -35,6 +35,10 @@
       noBridge: "This page only runs inside Minih-Agent-Desktop.",
       tabs: "Terminals",
       emptyHint: "No terminal is running.",
+      copy: "Copy",
+      paste: "Paste",
+      selectAll: "Select all",
+      pasteFailed: "Could not paste.",
     },
     "zh-CN": {
       newTerminal: "新建终端",
@@ -55,6 +59,10 @@
       noBridge: "此页面只能在 Minih-Agent-Desktop 内运行。",
       tabs: "终端",
       emptyHint: "当前没有运行中的终端。",
+      copy: "复制",
+      paste: "粘贴",
+      selectAll: "全选",
+      pasteFailed: "无法粘贴。",
     },
   };
 
@@ -69,8 +77,12 @@
     tabs: [],
     activeId: null,
     sequence: 0,
+    /** Terminal the open context menu acts on. */
+    menuTab: null,
+    /** Text the open context menu would copy. */
+    menuText: "",
     /** Shell, directory, and auto-open, from the plugin's own settings. */
-    defaults: { profileId: null, directory: null, openOnView: true },
+    defaults: { profileId: null, directory: null, openOnView: true, copyOnSelect: false },
   };
 
   const elements = {
@@ -92,6 +104,10 @@
     search: document.getElementById("search"),
     searchInput: document.getElementById("search-input"),
     status: document.getElementById("status"),
+    contextMenu: document.getElementById("context-menu"),
+    menuCopy: document.getElementById("menu-copy"),
+    menuPaste: document.getElementById("menu-paste"),
+    menuSelectAll: document.getElementById("menu-select-all"),
   };
 
   function t(key, values) {
@@ -133,6 +149,9 @@
     elements.startCancel.textContent = t("cancel");
     elements.emptyHint.textContent = t("emptyHint");
     elements.emptyStart.textContent = t("newTerminal");
+    elements.menuCopy.textContent = t("copy");
+    elements.menuPaste.textContent = t("paste");
+    elements.menuSelectAll.textContent = t("selectAll");
     elements.searchInput.placeholder = t("search");
     document.getElementById("search-next").setAttribute("aria-label", t("next"));
     document.getElementById("search-prev").setAttribute("aria-label", t("previous"));
@@ -348,6 +367,8 @@
       label,
       close,
       handleInput: null,
+      /** Last non-empty selection, kept because a right-click clears the live one. */
+      selection: "",
     };
 
     term.onData((data) => {
@@ -355,8 +376,36 @@
       void invoke("terminal.write", { id, data }).catch((error) => {
         showStatus(message(error));
       });
+    // xterm clears the selection on mousedown, which would leave the menu with
+    // nothing to copy; swallow the right-button press before it reaches xterm.
+    pane.addEventListener(
+      "mousedown",
+      (event) => {
+        if (event.button !== 2) return;
+        event.preventDefault();
+        event.stopPropagation();
+      },
+      true,
+    );
     });
+    // Keep the last non-empty selection: the right-click that opens the pane menu
+    // clears the live one, and the menu must still copy what was just selected.
+    term.onSelectionChange(() => {
+      const text = term.getSelection();
+      if (text) tab.selection = text;
+    });
+
     term.attachCustomKeyEventHandler((event) => handleKey(tab, event));
+    // macOS sends Cmd+C / Cmd+V to the app's Edit menu, and that copy reads a DOM
+    // selection this page does not have. The pane therefore carries its own menu,
+    // plus select-to-copy for people who expect that from a terminal.
+    pane.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      openContextMenu(event, tab);
+    });
+    pane.addEventListener("mouseup", () => {
+      if (state.defaults.copyOnSelect && tab.term.hasSelection()) void copySelection(tab);
+    });
 
     state.tabs.push(tab);
     renderTab(tab);
@@ -373,24 +422,74 @@
       openSearch();
       return false;
     }
-    // Ctrl+C stays the shell's interrupt; copy is the platform's own chord with
-    // a selection, so a terminal that has none still sends the control key.
-    const copyChord = isMac ? event.metaKey : event.ctrlKey && event.shiftKey;
-    if (key === "c" && copyChord && tab.term.hasSelection()) {
+    // Ctrl+C stays the shell's interrupt. Copy and paste are the page's own
+    // chords because macOS routes Cmd+C / Cmd+V to the app's Edit menu, whose
+    // copy reads a DOM selection this page never has; Ctrl+Shift+C and
+    // Ctrl+Shift+V are unclaimed and reach the page on every platform.
+    const shifted = event.ctrlKey && event.shiftKey;
+    const unclaimed = shifted || (isMac && event.metaKey);
+    if (key === "c" && unclaimed && tab.term.hasSelection()) {
       void copySelection(tab);
+      return false;
+    }
+    if (key === "v" && unclaimed) {
+      void pasteInto(tab);
       return false;
     }
     return true;
   }
 
-  async function copySelection(tab) {
-    const text = tab.term.getSelection();
+  /** Put `text` on the clipboard, reporting a host refusal on the status line. */
+  async function copyText(text) {
     if (!text) return;
     try {
       await invoke("clipboard.writeText", { text });
     } catch (error) {
       showStatus(`${t("copyFailed")} ${message(error)}`);
     }
+  }
+
+  function copySelection(tab) {
+    return copyText(tab.term.getSelection() || tab.selection || "");
+  }
+
+  /**
+   * Paste the clipboard into the shell.
+   *
+   * The host's clipboard API is used rather than a DOM paste event: the page has
+   * no editable field, and the Edit menu's paste only reaches one that is focused.
+   * `term.paste` applies bracketed-paste mode, so a multi-line paste behaves the
+   * way the shell expects instead of running each line on arrival.
+   */
+  async function pasteInto(tab) {
+    if (tab.disposed) return;
+    try {
+      const text = await invoke("clipboard.readText");
+      if (typeof text === "string" && text) tab.term.paste(text);
+    } catch (error) {
+      showStatus(`${t("pasteFailed")} ${message(error)}`);
+    }
+  }
+
+  /** Show the pane's own menu next to the pointer. */
+  function openContextMenu(event, tab) {
+    state.menuTab = tab;
+    const text = tab.term.getSelection() || tab.selection || "";
+    state.menuText = text;
+    elements.menuCopy.disabled = !text;
+    elements.contextMenu.hidden = false;
+    // Kept inside the window: a menu opened at the bottom-right edge would
+    // otherwise render half outside the page.
+    const box = elements.contextMenu.getBoundingClientRect();
+    elements.contextMenu.style.left = `${Math.max(4, Math.min(event.clientX, window.innerWidth - box.width - 8))}px`;
+    elements.contextMenu.style.top = `${Math.max(4, Math.min(event.clientY, window.innerHeight - box.height - 8))}px`;
+    elements.menuCopy.focus();
+  }
+
+  function closeContextMenu() {
+    elements.contextMenu.hidden = true;
+    state.menuTab = null;
+    state.menuText = "";
   }
 
   async function closeTerminal(id) {
@@ -511,8 +610,39 @@
     elements.backdrop.addEventListener("click", () => {
       hideStart();
     });
+    // The pane's own copy, paste and select-all: the only paths that do not
+    // depend on a keystroke the application menu has already claimed.
+    elements.menuCopy.addEventListener("click", () => {
+      // `menuText` was captured when the menu opened: xterm clears its live
+      // selection on the right-click that opened it.
+      const text = state.menuText || state.menuTab?.term.getSelection() || "";
+      closeContextMenu();
+      void copyText(text);
+    });
+    elements.menuPaste.addEventListener("click", () => {
+      const tab = state.menuTab ?? activeTab();
+      closeContextMenu();
+      if (tab) void pasteInto(tab);
+    });
+    elements.menuSelectAll.addEventListener("click", () => {
+      const tab = state.menuTab ?? activeTab();
+      closeContextMenu();
+      if (tab) tab.term.selectAll();
+    });
+    // A click anywhere outside the menu dismisses it, as does Escape.
+    document.addEventListener("mousedown", (event) => {
+      if (!elements.contextMenu.hidden && !elements.contextMenu.contains(event.target)) {
+        closeContextMenu();
+      }
+    });
     document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && !elements.modal.hidden) {
+      if (event.key !== "Escape") return;
+      if (!elements.contextMenu.hidden) {
+        event.preventDefault();
+        closeContextMenu();
+        return;
+      }
+      if (!elements.modal.hidden) {
         event.preventDefault();
         hideStart();
       }
@@ -651,6 +781,7 @@
       profileId: catalog?.defaults?.profileId ?? null,
       directory: catalog?.defaults?.directory ?? null,
       openOnView: catalog?.defaults?.openOnView !== false,
+      copyOnSelect: catalog?.defaults?.copyOnSelect === true,
     };
     // The dialog opens on the user's configured answer — their directory, or the
     // project they have open, and their shell — so starting is one keystroke.

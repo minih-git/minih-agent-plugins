@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.3
+
+- Copy and paste work on macOS again. The app's Edit menu owns Cmd+C / Cmd+V and
+  its copy reads a DOM selection the terminal does not have, so macOS users could
+  select text but never copy it. The pane now has its own right-click menu
+  (Copy / Paste / Select all), copies with Ctrl+Shift+C and pastes with
+  Ctrl+Shift+V, and a right-click no longer throws the selection away.
+- `copyOnSelect` setting: copying as soon as text is selected, off by default.
+- The plugin now also asks for `clipboard.read`, because pasting is a clipboard
+  read and the previous permission set only allowed writing.
+
 ## 0.1.2
 
 - The New terminal form is a dialog over the terminal instead of a block above

@@ -345,6 +345,34 @@ select {
   white-space: pre-wrap;
 }
 
+/* Right-click menu: the terminal's own copy and paste, because the app's Edit
+   menu copy reads a DOM selection this page never has. */
+#context-menu {
+  position: fixed;
+  z-index: 30;
+  min-width: 160px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 32%);
+  display: flex;
+  flex-direction: column;
+}
+
+#context-menu button {
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 10px;
+  text-align: left;
+}
+
+#context-menu button:disabled {
+  color: var(--muted);
+  cursor: default;
+  background: transparent;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;

@@ -54,6 +54,15 @@
       </form>
     </div>
 
+    <!-- Right-click menu. macOS routes Cmd+C and Cmd+V to the app's Edit menu,
+         whose copy reads a DOM selection this page does not have, so the terminal
+         needs its own way to copy and paste. -->
+    <div id="context-menu" role="menu" hidden>
+      <button id="menu-copy" type="button" role="menuitem"></button>
+      <button id="menu-paste" type="button" role="menuitem"></button>
+      <button id="menu-select-all" type="button" role="menuitem"></button>
+    </div>
+
     <div id="search" hidden>
       <input id="search-input" type="text" spellcheck="false" />
       <button id="search-next" type="button">&#8595;</button>

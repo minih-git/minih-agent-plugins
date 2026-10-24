@@ -14,11 +14,11 @@ const SETTING_KEYS = {
   defaultShell: "defaultShell",
   defaultDirectory: "defaultDirectory",
   openOnView: "openOnView",
+  copyOnSelect: "copyOnSelect",
 };
-
 /**
  * @param {Record<string, unknown>} settings values from `pi.plugin.getSettings()`
- * @returns {{ profileId: string | null, directory: string | null, openOnView: boolean }}
+ * @returns {{ profileId: string | null, directory: string | null, openOnView: boolean, copyOnSelect: boolean }}
  *   `profileId: null` means "the first shell this machine offers"; `directory:
  *   null` means "the open project, then home".
  */
@@ -36,6 +36,9 @@ function terminalDefaults(settings = {}) {
     // Only an explicit `false` turns auto-open off: a missing key (fresh install,
     // settings file written by an older version) keeps the shipped behaviour.
     openOnView: values[SETTING_KEYS.openOnView] !== false,
+    // Copy-on-select is opt-in: it overwrites the clipboard whenever the user
+    // drags across output, which is not what everyone expects.
+    copyOnSelect: values[SETTING_KEYS.copyOnSelect] === true,
   };
 }
 
