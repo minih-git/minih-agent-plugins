@@ -1,0 +1,73 @@
+# Default ontology for minih.personal-knowledge (ADR 0001 §3).
+#
+# A vault may override this with a YAML code block in the note named by
+# `ontologyNote` (resolved against the mapping file, default
+# "08 Standards/知识本体.md" when that note exists). The vault note wins so the
+# user can read and edit the vocabulary in Obsidian.
+
+enforcement: warn
+
+classes:
+  # entity family — what is true now
+  project: { family: entity, status: [active, paused, done, archived], defaultStability: mixed }
+  topic: { family: entity, status: [active, archived], defaultStability: stable }
+  environment: { family: entity, status: [active, archived], defaultStability: mixed }
+  organization: { family: entity, status: [active, archived], defaultStability: stable }
+  technology: { family: entity, status: [active, archived], defaultStability: stable }
+  reference: { family: entity, status: [active, archived], defaultStability: stable }
+  convention: { family: entity, status: [active, archived], defaultStability: stable }
+  procedure: { family: entity, status: [active, archived], defaultStability: stable }
+  # event family — one dated event
+  decision: { family: event, status: [proposed, accepted, superseded, rejected], defaultStability: historical }
+  release: { family: event, status: [planned, succeeded, failed, rolled-back], defaultStability: historical }
+  incident: { family: event, status: [open, mitigated, resolved], defaultStability: historical }
+  record: { family: event, status: [open, done], defaultStability: historical }
+  # navigation family — maps and journals, exempt from relation rules
+  moc: { family: navigation }
+  index: { family: navigation }
+  daily: { family: navigation }
+  weekly: { family: navigation }
+  inbox: { family: navigation }
+
+# Legacy `type` values read as classes; the migration rewrites them.
+typeAliases:
+  architecture: topic
+  note: topic
+  feature: topic
+  project-note: topic
+  source-audit: topic
+  deployment: topic
+  operations: topic
+  runbook: procedure
+  incident-runbook: procedure
+  troubleshooting: procedure
+  release-record: release
+  agent-release-record: release
+  architecture-decision: decision
+  feature-record: record
+  inbox-index: index
+  weekly-review: weekly
+  weekly-index: weekly
+  domain: convention
+  area: convention
+
+# Predicates are frontmatter keys whose value is a wikilink or a list of them.
+predicates:
+  project: { domain: [topic, procedure, decision, release, incident, record], range: [project], cardinality: one }
+  depends_on: { domain: [project, topic], range: [project, topic, technology, environment], cardinality: many }
+  deployed_to: { domain: [project, topic, release], range: [environment], cardinality: many }
+  uses: { domain: [project, topic], range: [technology], cardinality: many }
+  for: { domain: [project, environment], range: [organization], cardinality: many }
+  affects: { domain: [decision, release, incident, record], range: [project, topic, environment, organization, technology, reference, convention, procedure], cardinality: many }
+  resolved_by: { domain: [incident], range: [release, decision], cardinality: many }
+  supersedes: { domain: [decision, convention], range: [decision, convention], cardinality: many }
+  related: { domain: [any], range: [any], cardinality: many }
+
+# Plain attributes, never predicates: `repo` (string or list of absolute
+# paths) and `source` (path, URL, or session id) carry no class semantics.
+attributes: [repo, source]
+
+stabilities: [stable, mixed, volatile, historical]
+
+# A note above this many characters is an OVERSIZE defect (§4 rule 3).
+oversizeChars: 24000

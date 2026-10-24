@@ -15,6 +15,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { composeNote, parseFrontmatter, patchFrontmatterSource } from "../lib/frontmatter.mjs";
+import { loadOntology } from "../lib/ontology.mjs";
 import { findSensitiveContent, redactSensitiveContent, redactionViolation } from "../lib/redact.mjs";
 import { appendToSectionSpan, locateSection, replaceSectionSpan } from "../lib/sections.mjs";
 import { VaultIndex } from "../lib/vault-index.mjs";
@@ -120,12 +121,14 @@ function lineChangeSummary(before, after) {
 }
 
 export class KnowledgeService {
-  constructor({ vaultPath, config = {}, now = () => new Date() }) {
+  constructor({ vaultPath, config = {}, now = () => new Date(), pluginRoot = null, ontology = null }) {
     this.vaultPath = path.resolve(vaultPath);
     this.config = config;
     this.now = now;
+    this.pluginRoot = pluginRoot;
     this.rootRealpath = null;
     this.index = null;
+    this.ontology = ontology;
   }
 
   async initialize() {
@@ -134,6 +137,9 @@ export class KnowledgeService {
     this.rootRealpath = await realpath(this.vaultPath);
     this.index = new VaultIndex({ root: this.rootRealpath, config: this.config, now: this.now });
     await this.index.refresh({ force: true });
+    if (!this.ontology && this.pluginRoot) {
+      this.ontology = await loadOntology({ pluginRoot: this.pluginRoot, index: this.index });
+    }
     return this;
   }
 
@@ -455,6 +461,35 @@ export class KnowledgeService {
     };
   }
 
+  /** Ontology issues for one indexed note (or pseudo-record). */
+  issuesFor(record) {
+    if (!this.ontology) return [];
+    return this.ontology.validate(record, {
+      resolveTarget: (target) => this.index.resolveTarget(target),
+      classOf: (notePath) => {
+        const target = this.index.note(notePath);
+        return target ? this.ontology.classOf(target) : null;
+      },
+      backlinkCount: record.path ? this.index.backlinksOf(record.path).length : 0,
+      now: this.now(),
+    });
+  }
+
+  /** Lint every note; returns `{ issues: [{ path, code, detail }], summary }`. */
+  async lintVault() {
+    await this.index.refresh();
+    const issues = [];
+    for (const relative of this.index.paths()) {
+      const record = this.index.note(relative);
+      for (const issue of this.issuesFor(record)) {
+        issues.push({ path: relative, ...issue });
+      }
+    }
+    const summary = {};
+    for (const issue of issues) summary[issue.code] = (summary[issue.code] ?? 0) + 1;
+    return { issues, summary, total: issues.length };
+  }
+
   async write({
     path: notePath,
     content,
@@ -514,6 +549,29 @@ export class KnowledgeService {
       throw new Error("REDACTED_PLACEHOLDER: the result introduces [REDACTED markers the stored note does not contain.");
     }
 
+    // Ontology validation (ADR 0001 §3): `warn` attaches warnings to the
+    // result; `enforce` fails only on issues the write introduces new.
+    let warnings = [];
+    if (this.ontology) {
+      const beforeRecord = present
+        ? this.index.note(relative) ?? { path: relative, raw: before, metadata: parseFrontmatter(before).data, frontmatter: parseFrontmatter(before), chars: before.length }
+        : null;
+      const beforeIssues = beforeRecord ? this.issuesFor(beforeRecord) : [];
+      const afterRecord = {
+        path: relative,
+        raw: normalizedContent,
+        metadata: metadata.data,
+        frontmatter: metadata,
+        chars: normalizedContent.length,
+      };
+      const afterIssues = this.issuesFor(afterRecord);
+      warnings = this.ontology.newIssues(beforeIssues, afterIssues);
+      if (this.ontology.enforcement === "enforce" && warnings.length > 0) {
+        const codes = warnings.map((issue) => issue.code).join(", ");
+        throw new Error(`ONTOLOGY_VIOLATION: the write introduces new issues: ${codes}`);
+      }
+    }
+
     const afterHash = sha256(normalizedContent);
     const action = present ? (beforeHash === afterHash ? "unchanged" : "update") : "create";
     const summary = {
@@ -524,7 +582,7 @@ export class KnowledgeService {
       beforeSha256: beforeHash,
       afterSha256: afterHash,
       ...lineChangeSummary(before, normalizedContent),
-      warnings: [],
+      warnings,
       backupPath: null,
     };
     if (action === "unchanged" || dryRun) return summary;
@@ -675,5 +733,10 @@ export async function createKnowledgeService({
     process.env.PERSONAL_KNOWLEDGE_VAULT ??
     resolvedConfig.vaultPath ??
     path.join(os.homedir(), "Documents", "Knowledge");
-  return new KnowledgeService({ vaultPath: resolvedVault, config: resolvedConfig, now }).initialize();
+  return new KnowledgeService({
+    vaultPath: resolvedVault,
+    config: resolvedConfig,
+    now,
+    pluginRoot: pluginRoot ?? null,
+  }).initialize();
 }
