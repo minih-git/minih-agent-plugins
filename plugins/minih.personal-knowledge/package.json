@@ -1,7 +1,7 @@
 {
   "name": "@minih-plugin/minih.personal-knowledge",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Use a local Obsidian vault as verified, time-aware long-term context: scoped retrieval, guarded write-back, and project routing.",
   "scripts": {
     "build": "node scripts/build.mjs",

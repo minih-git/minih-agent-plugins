@@ -5,6 +5,9 @@ import path from "node:path";
 import test from "node:test";
 
 import { KnowledgeService } from "../mcp/knowledge-core.mjs";
+import { isolatedHome } from "./helpers/home.mjs";
+// Keep every fixture away from the real ~/.personal-knowledge (see helpers/home.mjs).
+await isolatedHome();
 
 const fixedNow = () => new Date("2026-07-17T00:00:00Z");
 

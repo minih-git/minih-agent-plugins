@@ -99,6 +99,43 @@ const STRINGS = {
     countsFormat: "{visNodes}/{totalNodes} 节点 · {visLinks} 关系",
     hoverUpdated: "更新: {date}",
     hoverVerified: "复核: {date}",
+    settingsBtn: "检索设置",
+    settingsBtnTitle: "检索设置",
+    settingsHeading: "检索设置",
+    settingsCloseAria: "关闭检索设置",
+    settingsUnsaved: "未保存更改",
+    settingsFixtureNotice: "当前为演示模式（未连接宿主桥接）。检索设置需要宿主桥接支持，表单控件已禁用。",
+    settingsEnabledLabel: "启用向量检索 (Vector On/Off)",
+    settingsProviderLabel: "服务提供方 (Provider)",
+    settingsProviderOllama: "本地 Ollama (ollama)",
+    settingsProviderOpenai: "OpenAI 兼容接口 (openai-compatible)",
+    settingsBaseUrlLabel: "接口地址 (Base URL)",
+    settingsBaseUrlPlaceholder: "http://127.0.0.1:11434",
+    settingsBaseUrlHint: "非本地回环地址需开启远程发送并使用 https:",
+    settingsModelLabel: "向量模型 (Model)",
+    settingsModelPlaceholder: "nomic-embed-text",
+    settingsApiKeyEnvLabel: "密钥环境变量名 (API Key Env)",
+    settingsApiKeyEnvPlaceholder: "如 OPENAI_API_KEY（密钥留在环境/shell rc 中，绝不存储密钥本身）",
+    settingsApiKeyEnvHint: "匹配 ^[A-Z_][A-Z0-9_]{0,63}$ 或留空；仅填变量名",
+    settingsExcludeLabel: "排除目录 (Exclude Folders)",
+    settingsExcludePlaceholder: "逗号分隔，如 private, archive/drafts",
+    settingsExcludeHint: "知识库相对目录前缀，逗号分隔，不含 ..",
+    settingsAllowRemoteLabel: "允许远程端点 (allowRemote)",
+    settingsRemoteWarning: "开启后，脱敏后的笔记分段会发送到该地址。凭据会被移除；主机名、IP 地址和名称不会。",
+    settingsKeyStatusLabel: "密钥状态",
+    settingsKeyFound: "已就绪 (found)",
+    settingsKeyMissing: "未找到 (missing)",
+    settingsKeyNotRequired: "无需密钥 (not-required)",
+    settingsIndexLabel: "索引统计",
+    settingsIndexNotBuilt: "未构建 (not built)",
+    settingsIndexFormat: "{identity} · {dims} 维 · {chunks} 段 · {builtAt}",
+    settingsEstimateLabel: "发送估算",
+    settingsEstimateFormat: "{chunks} 段 / {characters} 字符",
+    settingsTestBtn: "测试连接 (1 次请求)",
+    settingsSaveBtn: "保存",
+    settingsConfirmSendBtn: "确认发送（约 {chunks} 段 / {characters} 字符）",
+    settingsTestOk: "连接正常 · {dims} 维 · {latencyMs} ms",
+    toastSettingsSaved: "已保存检索设置",
     classes: {
       project: "项目恒星 (project)",
       topic: "主题行星 (topic)",
@@ -234,6 +271,43 @@ const STRINGS = {
     countsFormat: "{visNodes}/{totalNodes} nodes · {visLinks} links",
     hoverUpdated: "Updated: {date}",
     hoverVerified: "Verified: {date}",
+    settingsBtn: "Retrieval",
+    settingsBtnTitle: "Retrieval settings",
+    settingsHeading: "Retrieval Settings",
+    settingsCloseAria: "Close retrieval settings",
+    settingsUnsaved: "Unsaved changes",
+    settingsFixtureNotice: "Standalone fixture mode (host bridge missing). Retrieval settings require the host bridge; controls are disabled.",
+    settingsEnabledLabel: "Enable vector retrieval (on/off)",
+    settingsProviderLabel: "Provider",
+    settingsProviderOllama: "Local Ollama (ollama)",
+    settingsProviderOpenai: "OpenAI-compatible endpoint (openai-compatible)",
+    settingsBaseUrlLabel: "Base URL",
+    settingsBaseUrlPlaceholder: "http://127.0.0.1:11434",
+    settingsBaseUrlHint: "Non-loopback URLs require allowRemote: true and https:",
+    settingsModelLabel: "Model",
+    settingsModelPlaceholder: "nomic-embed-text",
+    settingsApiKeyEnvLabel: "API key env-var name",
+    settingsApiKeyEnvPlaceholder: "e.g. OPENAI_API_KEY (key stays in env/shell rc and is never stored)",
+    settingsApiKeyEnvHint: "Matches ^[A-Z_][A-Z0-9_]{0,63}$ or empty; never enter the secret key",
+    settingsExcludeLabel: "Exclude folders",
+    settingsExcludePlaceholder: "Comma-separated, e.g. private, archive/drafts",
+    settingsExcludeHint: "Vault-relative folder prefixes, comma-separated, without ..",
+    settingsAllowRemoteLabel: "Allow remote endpoint (allowRemote)",
+    settingsRemoteWarning: "Redacted note sections will be sent to this address. Credentials are removed; hosts, IP addresses, and names are not.",
+    settingsKeyStatusLabel: "Key status",
+    settingsKeyFound: "found",
+    settingsKeyMissing: "missing",
+    settingsKeyNotRequired: "not-required",
+    settingsIndexLabel: "Index statistics",
+    settingsIndexNotBuilt: "not built",
+    settingsIndexFormat: "{identity} · {dims} dims · {chunks} chunks · {builtAt}",
+    settingsEstimateLabel: "Send estimate",
+    settingsEstimateFormat: "{chunks} segments / {characters} characters",
+    settingsTestBtn: "Test connection (1 request)",
+    settingsSaveBtn: "Save",
+    settingsConfirmSendBtn: "Confirm sending (about {chunks} segments / {characters} characters)",
+    settingsTestOk: "OK · {dims} dims · {latencyMs} ms",
+    toastSettingsSaved: "Retrieval settings saved",
     classes: {
       project: "Project Star (project)",
       topic: "Topic Planet (topic)",
@@ -416,6 +490,20 @@ const appState = {
   visibleNodeSet: new Set(),
   visibleLinkSet: new Set(),
   toastTimer: null,
+  settingsPanel: {
+    open: false,
+    bridgeAvailable: false,
+    busy: false,
+    savedSettings: null,
+    baselineSnapshot: null,
+    apiKeyStatus: "not-required",
+    index: null,
+    estimate: null,
+    confirmingRemote: false,
+    feedbackText: "",
+    feedbackIsError: false,
+    feedbackTestResult: null,
+  },
 };
 
 function t(key, vars = {}) {
@@ -2572,6 +2660,12 @@ function applyTranslations() {
   document.getElementById("btn-retry-bridge").textContent = t("retryBtn");
   document.getElementById("btn-dismiss-error").textContent = t("dismissBtn");
 
+
+  const settingsBtn = document.getElementById("btn-settings");
+  settingsBtn.title = t("settingsBtnTitle");
+  settingsBtn.setAttribute("aria-label", t("settingsBtnTitle"));
+  document.getElementById("label-settings-btn").textContent = t("settingsBtn");
+  applySettingsTranslations();
   populateFilterSelects();
   updateMemoryToggleState();
   renderLegend();
@@ -2748,6 +2842,415 @@ async function loadUniverseGraph() {
   refreshGraphVisuals();
 }
 
+const DEFAULT_EMBEDDING_SETTINGS = {
+  enabled: false,
+  provider: "ollama",
+  baseUrl: "http://127.0.0.1:11434",
+  model: "nomic-embed-text",
+  allowRemote: false,
+  apiKeyEnv: "",
+  exclude: [],
+};
+
+function parseExcludeFolders(rawText) {
+  return String(rawText || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function normalizeEmbeddingConfig(raw) {
+  const src = raw || DEFAULT_EMBEDDING_SETTINGS;
+  return {
+    enabled: Boolean(src.enabled),
+    provider: src.provider === "openai-compatible" ? "openai-compatible" : "ollama",
+    baseUrl: String(src.baseUrl ?? DEFAULT_EMBEDDING_SETTINGS.baseUrl).trim(),
+    model: String(src.model ?? DEFAULT_EMBEDDING_SETTINGS.model).trim(),
+    allowRemote: Boolean(src.allowRemote),
+    apiKeyEnv: String(src.apiKeyEnv ?? "").trim(),
+    exclude: Array.isArray(src.exclude)
+      ? src.exclude.map((item) => String(item).trim()).filter((item) => item.length > 0)
+      : [],
+  };
+}
+
+function areEmbeddingConfigsEqual(a, b) {
+  if (!a || !b) return false;
+  if (
+    a.enabled !== b.enabled ||
+    a.provider !== b.provider ||
+    a.baseUrl !== b.baseUrl ||
+    a.model !== b.model ||
+    a.allowRemote !== b.allowRemote ||
+    a.apiKeyEnv !== b.apiKeyEnv ||
+    a.exclude.length !== b.exclude.length
+  ) {
+    return false;
+  }
+  for (let i = 0; i < a.exclude.length; i++) {
+    if (a.exclude[i] !== b.exclude[i]) return false;
+  }
+  return true;
+}
+
+function readSettingsFormValues() {
+  return {
+    enabled: Boolean(document.getElementById("settings-enabled").checked),
+    provider:
+      document.getElementById("settings-provider").value === "openai-compatible"
+        ? "openai-compatible"
+        : "ollama",
+    baseUrl: document.getElementById("settings-baseurl").value.trim(),
+    model: document.getElementById("settings-model").value.trim(),
+    allowRemote: Boolean(document.getElementById("settings-allow-remote").checked),
+    apiKeyEnv: document.getElementById("settings-apikey-env").value.trim(),
+    exclude: parseExcludeFolders(document.getElementById("settings-exclude").value),
+  };
+}
+
+function writeSettingsFormValues(config) {
+  const norm = normalizeEmbeddingConfig(config);
+  document.getElementById("settings-enabled").checked = norm.enabled;
+  document.getElementById("settings-provider").value = norm.provider;
+  document.getElementById("settings-baseurl").value = norm.baseUrl;
+  document.getElementById("settings-model").value = norm.model;
+  document.getElementById("settings-allow-remote").checked = norm.allowRemote;
+  document.getElementById("settings-apikey-env").value = norm.apiKeyEnv;
+  document.getElementById("settings-exclude").value = norm.exclude.join(", ");
+}
+
+function setSettingsControlsDisabled(disabled) {
+  const ids = [
+    "settings-enabled",
+    "settings-provider",
+    "settings-baseurl",
+    "settings-model",
+    "settings-apikey-env",
+    "settings-exclude",
+    "settings-allow-remote",
+    "btn-settings-test",
+    "btn-settings-save",
+    "btn-settings-confirm",
+  ];
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    if (el) el.disabled = disabled;
+  }
+  document.getElementById("settings-enabled-row")?.classList.toggle("is-disabled", disabled);
+  document.getElementById("settings-remote-row")?.classList.toggle("is-disabled", disabled);
+}
+
+function clearSettingsFeedback() {
+  const sp = appState.settingsPanel;
+  sp.feedbackText = "";
+  sp.feedbackIsError = false;
+  sp.feedbackTestResult = null;
+  const box = document.getElementById("settings-feedback");
+  if (box) {
+    box.textContent = "";
+    box.classList.add("is-hidden");
+    box.classList.remove("is-error", "is-ok");
+  }
+}
+
+function showSettingsErrorVerbatim(rawMessage) {
+  const sp = appState.settingsPanel;
+  sp.feedbackText = String(rawMessage || "");
+  sp.feedbackIsError = true;
+  sp.feedbackTestResult = null;
+  const box = document.getElementById("settings-feedback");
+  if (!box) return;
+  box.textContent = sp.feedbackText;
+  box.classList.remove("is-hidden", "is-ok");
+  box.classList.add("is-error");
+}
+
+function showSettingsTestSuccess(dims, latencyMs) {
+  const sp = appState.settingsPanel;
+  sp.feedbackTestResult = { dims, latencyMs };
+  sp.feedbackIsError = false;
+  sp.feedbackText = t("settingsTestOk", {
+    dims: dims ?? "—",
+    latencyMs: latencyMs ?? "—",
+  });
+  const box = document.getElementById("settings-feedback");
+  if (!box) return;
+  box.textContent = sp.feedbackText;
+  box.classList.remove("is-hidden", "is-error");
+  box.classList.add("is-ok");
+}
+
+function renderSettingsDynamicState() {
+  const sp = appState.settingsPanel;
+  const formValues = readSettingsFormValues();
+
+  // Remote warning visibility
+  const remoteWarn = document.getElementById("settings-remote-warning");
+  remoteWarn.textContent = t("settingsRemoteWarning");
+  remoteWarn.classList.toggle("is-hidden", !formValues.allowRemote);
+
+  // Unsaved changes indicator
+  const isDirty =
+    sp.bridgeAvailable &&
+    sp.baselineSnapshot !== null &&
+    !areEmbeddingConfigsEqual(formValues, sp.baselineSnapshot);
+  document.getElementById("settings-unsaved-pill").classList.toggle("is-hidden", !isDirty);
+  const dirtyDot = document.getElementById("settings-estimate-dirty-dot");
+  dirtyDot.classList.toggle("is-hidden", !isDirty);
+  dirtyDot.title = t("settingsUnsaved");
+
+  // Read-only key status
+  const keyBadge = document.getElementById("settings-key-status");
+  keyBadge.classList.remove("status-found", "status-missing", "status-not-required");
+  if (sp.apiKeyStatus === "found") {
+    keyBadge.classList.add("status-found");
+    keyBadge.textContent = t("settingsKeyFound");
+  } else if (sp.apiKeyStatus === "missing") {
+    keyBadge.classList.add("status-missing");
+    keyBadge.textContent = t("settingsKeyMissing");
+  } else {
+    keyBadge.classList.add("status-not-required");
+    keyBadge.textContent = t("settingsKeyNotRequired");
+  }
+
+  // Read-only index statistics
+  const indexEl = document.getElementById("settings-index-stats");
+  if (sp.index && typeof sp.index === "object") {
+    indexEl.textContent = t("settingsIndexFormat", {
+      identity: sp.index.identity || "—",
+      dims: sp.index.dims ?? "—",
+      chunks: sp.index.chunks ?? 0,
+      builtAt: sp.index.builtAt || "—",
+    });
+  } else {
+    indexEl.textContent = t("settingsIndexNotBuilt");
+  }
+
+  // Read-only send estimate (saved state)
+  const estEl = document.getElementById("settings-estimate-value");
+  if (sp.estimate && typeof sp.estimate === "object") {
+    estEl.textContent = t("settingsEstimateFormat", {
+      chunks: sp.estimate.chunks ?? 0,
+      characters: sp.estimate.characters ?? 0,
+    });
+  } else {
+    estEl.textContent = "—";
+  }
+
+  // Second-click confirm button when turning allowRemote ON (saved false -> form true)
+  const confirmBtn = document.getElementById("btn-settings-confirm");
+  const confirmLabel = document.getElementById("label-settings-confirm");
+  const savedRemote = Boolean(sp.savedSettings?.allowRemote);
+  if (!formValues.allowRemote || savedRemote) {
+    sp.confirmingRemote = false;
+  }
+  confirmLabel.textContent = t("settingsConfirmSendBtn", {
+    chunks: sp.estimate?.chunks ?? 0,
+    characters: sp.estimate?.characters ?? 0,
+  });
+  confirmBtn.classList.toggle("is-hidden", !sp.confirmingRemote);
+}
+
+function applySettingsTranslations() {
+  const panel = document.getElementById("settings-panel");
+  if (!panel) return;
+  panel.setAttribute("aria-label", t("settingsHeading"));
+  document.getElementById("settings-heading").textContent = t("settingsHeading");
+  document.getElementById("settings-close").setAttribute("aria-label", t("settingsCloseAria"));
+  document.getElementById("settings-unsaved-label").textContent = t("settingsUnsaved");
+  document.getElementById("settings-fixture-notice").textContent = t("settingsFixtureNotice");
+
+  document.getElementById("label-settings-enabled").textContent = t("settingsEnabledLabel");
+  document.getElementById("label-settings-provider").textContent = t("settingsProviderLabel");
+  document.getElementById("opt-provider-ollama").textContent = t("settingsProviderOllama");
+  document.getElementById("opt-provider-openai").textContent = t("settingsProviderOpenai");
+
+  document.getElementById("label-settings-baseurl").textContent = t("settingsBaseUrlLabel");
+  document.getElementById("settings-baseurl").placeholder = t("settingsBaseUrlPlaceholder");
+  document.getElementById("hint-settings-baseurl").textContent = t("settingsBaseUrlHint");
+
+  document.getElementById("label-settings-model").textContent = t("settingsModelLabel");
+  document.getElementById("settings-model").placeholder = t("settingsModelPlaceholder");
+
+  document.getElementById("label-settings-apikey-env").textContent = t("settingsApiKeyEnvLabel");
+  document.getElementById("settings-apikey-env").placeholder = t("settingsApiKeyEnvPlaceholder");
+  document.getElementById("hint-settings-apikey-env").textContent = t("settingsApiKeyEnvHint");
+
+  document.getElementById("label-settings-exclude").textContent = t("settingsExcludeLabel");
+  document.getElementById("settings-exclude").placeholder = t("settingsExcludePlaceholder");
+  document.getElementById("hint-settings-exclude").textContent = t("settingsExcludeHint");
+
+  document.getElementById("label-settings-allow-remote").textContent = t("settingsAllowRemoteLabel");
+  document.getElementById("label-settings-key-status").textContent = t("settingsKeyStatusLabel");
+  document.getElementById("label-settings-index").textContent = t("settingsIndexLabel");
+  document.getElementById("label-settings-estimate").textContent = t("settingsEstimateLabel");
+
+  document.getElementById("label-settings-test").textContent = t("settingsTestBtn");
+  document.getElementById("label-settings-save").textContent = t("settingsSaveBtn");
+
+  if (appState.settingsPanel.feedbackTestResult) {
+    showSettingsTestSuccess(
+      appState.settingsPanel.feedbackTestResult.dims,
+      appState.settingsPanel.feedbackTestResult.latencyMs
+    );
+  }
+  renderSettingsDynamicState();
+}
+
+async function loadSettingsFromBridge(populateForm = true) {
+  const sp = appState.settingsPanel;
+  const hasBridge = Boolean(window.pluginBridge && typeof window.pluginBridge.invoke === "function");
+  sp.bridgeAvailable = hasBridge;
+
+  const fixtureNotice = document.getElementById("settings-fixture-notice");
+  fixtureNotice.classList.toggle("is-hidden", hasBridge);
+
+  if (!hasBridge) {
+    sp.savedSettings = null;
+    sp.baselineSnapshot = normalizeEmbeddingConfig(DEFAULT_EMBEDDING_SETTINGS);
+    sp.apiKeyStatus = "not-required";
+    sp.index = null;
+    sp.estimate = null;
+    sp.confirmingRemote = false;
+    if (populateForm) {
+      writeSettingsFormValues(DEFAULT_EMBEDDING_SETTINGS);
+    }
+    clearSettingsFeedback();
+    setSettingsControlsDisabled(true);
+    renderSettingsDynamicState();
+    return;
+  }
+
+  setSettingsControlsDisabled(true);
+  try {
+    const res = await invokeBridge("kg.settings.get", {}, BRIDGE_TIMEOUT_MS);
+    sp.savedSettings = res?.settings ? normalizeEmbeddingConfig(res.settings) : null;
+    sp.baselineSnapshot = normalizeEmbeddingConfig(res?.settings || DEFAULT_EMBEDDING_SETTINGS);
+    sp.apiKeyStatus = res?.apiKeyStatus || "not-required";
+    sp.index = res?.index || null;
+    sp.estimate = res?.estimate || null;
+    sp.confirmingRemote = false;
+
+    if (populateForm) {
+      writeSettingsFormValues(sp.baselineSnapshot);
+    }
+
+    if (res?.settingsError) {
+      const code = res.settingsError.code || "";
+      const msg = res.settingsError.message || "";
+      const errStr = msg
+        ? code && !msg.startsWith(code)
+          ? `${code} ${msg}`
+          : msg
+        : code;
+      showSettingsErrorVerbatim(errStr);
+    } else {
+      clearSettingsFeedback();
+    }
+  } catch (error) {
+    showSettingsErrorVerbatim(error?.message || String(error));
+  } finally {
+    sp.busy = false;
+    setSettingsControlsDisabled(!sp.bridgeAvailable);
+    renderSettingsDynamicState();
+  }
+}
+
+function openSettingsPanel() {
+  const panel = document.getElementById("settings-panel");
+  const btn = document.getElementById("btn-settings");
+  appState.settingsPanel.open = true;
+  panel.classList.remove("is-hidden");
+  btn.classList.add("is-active");
+  btn.setAttribute("aria-expanded", "true");
+  loadSettingsFromBridge(true);
+}
+
+function closeSettingsPanel() {
+  const panel = document.getElementById("settings-panel");
+  const btn = document.getElementById("btn-settings");
+  if (!appState.settingsPanel.open && panel.classList.contains("is-hidden")) return;
+  appState.settingsPanel.open = false;
+  appState.settingsPanel.confirmingRemote = false;
+  panel.classList.add("is-hidden");
+  btn.classList.remove("is-active");
+  btn.setAttribute("aria-expanded", "false");
+  btn.focus();
+}
+
+function toggleSettingsPanel() {
+  if (appState.settingsPanel.open) {
+    closeSettingsPanel();
+  } else {
+    openSettingsPanel();
+  }
+}
+
+async function executeSettingsSave() {
+  const sp = appState.settingsPanel;
+  if (!sp.bridgeAvailable || sp.busy) return;
+  const formValues = readSettingsFormValues();
+  sp.busy = true;
+  setSettingsControlsDisabled(true);
+  try {
+    await invokeBridge("kg.settings.set", { embedding: formValues }, BRIDGE_TIMEOUT_MS);
+    sp.confirmingRemote = false;
+    showToast(t("toastSettingsSaved"));
+    await loadSettingsFromBridge(true);
+  } catch (error) {
+    sp.confirmingRemote = false;
+    showSettingsErrorVerbatim(error?.message || String(error));
+  } finally {
+    sp.busy = false;
+    setSettingsControlsDisabled(!sp.bridgeAvailable);
+    renderSettingsDynamicState();
+  }
+}
+
+function handleSettingsSaveClick() {
+  const sp = appState.settingsPanel;
+  if (!sp.bridgeAvailable || sp.busy) return;
+  const formValues = readSettingsFormValues();
+  const savedRemote = Boolean(sp.savedSettings?.allowRemote);
+
+  if (formValues.allowRemote && !savedRemote) {
+    sp.confirmingRemote = true;
+    renderSettingsDynamicState();
+    document.getElementById("btn-settings-confirm")?.focus();
+    return;
+  }
+  executeSettingsSave();
+}
+
+async function handleSettingsTestClick() {
+  const sp = appState.settingsPanel;
+  if (!sp.bridgeAvailable || sp.busy) return;
+  const formValues = readSettingsFormValues();
+  sp.busy = true;
+  setSettingsControlsDisabled(true);
+  try {
+    const res = await invokeBridge("kg.settings.test", { embedding: formValues }, BRIDGE_TIMEOUT_MS);
+    if (res?.ok) {
+      showSettingsTestSuccess(res.dims, res.latencyMs);
+    } else {
+      const reason = res?.reason ? String(res.reason) : "";
+      const msg = res?.message ? String(res.message) : "";
+      const verbatim = msg
+        ? reason && !msg.startsWith(reason)
+          ? `${reason} ${msg}`
+          : msg
+        : reason || "Test failed";
+      showSettingsErrorVerbatim(verbatim);
+    }
+  } catch (error) {
+    showSettingsErrorVerbatim(error?.message || String(error));
+  } finally {
+    sp.busy = false;
+    setSettingsControlsDisabled(!sp.bridgeAvailable);
+    renderSettingsDynamicState();
+  }
+}
+
 /**
  * Wire UI event listeners and ambient loop.
  */
@@ -2816,6 +3319,31 @@ function bindUiEvents(backdrop) {
     appState.lang = appState.lang === "zh-CN" ? "en" : "zh-CN";
     applyTranslations();
   });
+
+  // Retrieval settings panel controls
+  document.getElementById("btn-settings").addEventListener("click", toggleSettingsPanel);
+  document.getElementById("settings-close").addEventListener("click", closeSettingsPanel);
+  document.getElementById("btn-settings-test").addEventListener("click", handleSettingsTestClick);
+  document.getElementById("btn-settings-save").addEventListener("click", handleSettingsSaveClick);
+  document.getElementById("btn-settings-confirm").addEventListener("click", executeSettingsSave);
+
+  const onSettingsFieldInput = () => {
+    appState.settingsPanel.confirmingRemote = false;
+    renderSettingsDynamicState();
+  };
+  for (const fieldId of [
+    "settings-enabled",
+    "settings-provider",
+    "settings-baseurl",
+    "settings-model",
+    "settings-apikey-env",
+    "settings-exclude",
+    "settings-allow-remote",
+  ]) {
+    const el = document.getElementById(fieldId);
+    el.addEventListener("input", onSettingsFieldInput);
+    el.addEventListener("change", onSettingsFieldInput);
+  }
 
   document.getElementById("btn-exit-focus").addEventListener("click", () => exitFocusMode());
   document.getElementById("btn-retry-bridge").addEventListener("click", () => loadUniverseGraph());
@@ -2983,7 +3511,9 @@ function bindUiEvents(backdrop) {
       searchInput.focus();
       searchInput.select();
     } else if (ev.key === "Escape") {
-      if (appState.focusSet) {
+      if (appState.settingsPanel.open) {
+        closeSettingsPanel();
+      } else if (appState.focusSet) {
         exitFocusMode();
       } else if (appState.selectedNode) {
         closeNoteDrawer();

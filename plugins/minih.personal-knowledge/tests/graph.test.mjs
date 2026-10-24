@@ -8,6 +8,9 @@ import { fileURLToPath } from "node:url";
 import { VaultIndex } from "../lib/vault-index.mjs";
 import { loadOntology } from "../lib/ontology.mjs";
 import { buildGraphPayload } from "../lib/graph.mjs";
+import { isolatedHome } from "./helpers/home.mjs";
+// Keep every fixture away from the real ~/.personal-knowledge (see helpers/home.mjs).
+await isolatedHome();
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const now = () => new Date("2026-07-17T00:00:00Z");

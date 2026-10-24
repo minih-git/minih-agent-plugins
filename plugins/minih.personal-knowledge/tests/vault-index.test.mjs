@@ -8,6 +8,9 @@ import { KnowledgeService } from "../mcp/knowledge-core.mjs";
 import { VaultIndex } from "../lib/vault-index.mjs";
 import { tokenize } from "../lib/tokens.mjs";
 import { locateSection, chunkNote } from "../lib/sections.mjs";
+import { isolatedHome } from "./helpers/home.mjs";
+// Keep every fixture away from the real ~/.personal-knowledge (see helpers/home.mjs).
+await isolatedHome();
 
 const fixedNow = () => new Date("2026-07-17T00:00:00Z");
 
@@ -83,8 +86,10 @@ type: note
   const config = {
     ignoreFolders: [],
     backupRetentionDays: 0,
-    embedding: { enabled: false },
   };
+  // The vector channel is configured only through embedding.json (ADR §6.1).
+  process.env.PERSONAL_KNOWLEDGE_EMBEDDING_CONFIG = path.join(root, "embedding.json");
+  await writeFile(process.env.PERSONAL_KNOWLEDGE_EMBEDDING_CONFIG, '{"enabled": false}\n');
   const service = await new KnowledgeService({ vaultPath: vault, config, now: fixedNow }).initialize();
   return { root, vault, service };
 }

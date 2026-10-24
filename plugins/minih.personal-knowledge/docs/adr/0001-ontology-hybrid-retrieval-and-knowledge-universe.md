@@ -4,8 +4,9 @@
 - Plugin: `minih.personal-knowledge`, baseline 0.1.2 (`a10dd1d`)
 - Related (Minih-Agent-Desktop): ADR `agent-long-term-memory` (D668),
   ADR `learned-memory-consolidation` (Proposed), ADR 0168 (external URL
-  allowlist), ADR `plugin-learned-memory-read` (Proposed, written with this
-  ADR)
+  allowlist), ADR `plugin-learned-memory-read` (Accepted, D682)
+- Amended 2026-10-24: remote embedding providers behind an explicit switch
+  (§6.1), at the user's request
 
 ## Context
 
@@ -99,8 +100,9 @@ All figures come from a read-only probe of the user's vault on 2026-10-24:
 3. Reads are tolerant and writes are strict. Legacy vocabulary is always
    readable through alias tables. Validation applies to what a write
    introduces.
-4. Nothing leaves the machine. The only network peer is a loopback embedding
-   server (§6).
+4. Nothing leaves the machine by default. The only default network peer is a
+   loopback embedding server. Note text goes to any other endpoint only after
+   the user turns on the remote switch of §6.1.
 5. Every degradation is reported in the tool result with its reason. No
    silent fallback.
 
@@ -274,7 +276,9 @@ The user chose a reviewed, batched migration.
 
 ### 6. Hybrid retrieval
 
-The user chose to add local embeddings now, with Ollama and `bge-m3`.
+The user chose to add embeddings now. The default is a local Ollama with
+`bge-m3`. Behind an explicit switch, any OpenAI-compatible endpoint can be
+used instead, for example Minih-Router (§6.1).
 
 **Lexical channel.** BM25F over chunks with `k1 = 1.2` and `b = 0.75`. Field
 weights: title 3, aliases 3, path 2, heading path 1.5, body 1. Tokens are
@@ -285,20 +289,21 @@ partial phrases.
 
 **Vector channel.**
 
-- Ollama `POST {baseUrl}/api/embed` with `{ model, input: string[] }`.
-  Defaults: `baseUrl = http://127.0.0.1:11434`, `model = bge-m3` (1,024
-  dimensions), 32 chunks per request, 30-second request timeout, 500 ms
-  connect timeout.
-- Mapping-file keys: `embedding.enabled` (default `true`),
-  `embedding.baseUrl`, `embedding.model`. A `baseUrl` whose host is not
-  `127.0.0.1`, `localhost`, or `::1` is rejected at load time with
-  `EMBEDDING_NOT_LOOPBACK`, which keeps the "nothing leaves the machine"
-  promise.
-- Chunks are embedded from redacted text. Vectors are L2-normalized and
-  stored as `vectors.f32` (concatenated Float32), with `chunks.jsonl` (path,
-  heading path, offsets, chunk SHA) and `meta.json` (model, dimensions,
-  format version). A different model or format version invalidates the index.
-  About 3,000 chunks need about 12 MB. Search is a brute-force cosine scan
+- Default provider `ollama`: `POST {baseUrl}/api/embed` with
+  `{ model, input: string[] }`. Defaults: `baseUrl = http://127.0.0.1:11434`,
+  `model = bge-m3` (1,024 dimensions), 32 chunks per request, 30-second
+  request timeout, 500 ms connect timeout. Provider `openai-compatible` is
+  defined in §6.1.
+- Settings live in `~/.personal-knowledge/embedding.json` (§6.1). Without the
+  remote switch, a `baseUrl` whose host is not `127.0.0.1`, `localhost`, or
+  `::1` is rejected with `EMBEDDING_NOT_LOOPBACK`.
+- Chunks are embedded from redacted text. Chunks under an excluded folder
+  (§6.1) are never embedded. The vector dimension is taken from the first
+  response. Vectors are L2-normalized and stored as `vectors.f32`
+  (concatenated Float32), with `chunks.jsonl` (path, heading path, offsets,
+  chunk SHA) and `meta.json` (format version and the provider identity of
+  §6.1). A change to either invalidates the index. About 3,000 chunks of
+  1,024 dimensions need about 12 MB. Search is a brute-force cosine scan
   (estimate, to be measured).
 - Only the MCP server writes the vector index. The Desktop server and a
   Codex server may run at the same time, so a writer takes `.lock` in the
@@ -308,9 +313,10 @@ partial phrases.
   that finds `vectors.f32` of the wrong size discards the index and rebuilds.
 - When the server starts, it refreshes changed chunks in the background in
   sequence. A tool call spends at most 3 seconds refreshing before it
-  answers. The query itself is embedded with a 3-second timeout; on timeout
-  the call answers with `EMBED_FAILED`. `scripts/build-index.mjs` rebuilds the
-  whole index from the command line.
+  answers. The query itself is embedded with a timeout of 3 seconds for a
+  loopback endpoint and 8 seconds otherwise; on timeout the call answers with
+  `EMBED_FAILED`. `scripts/build-index.mjs` rebuilds the whole index from the
+  command line.
 
 **Fusion and ranking.**
 
@@ -331,12 +337,118 @@ partial phrases.
 |---|---|---|
 | `ready` | Index current, server reachable | Lexical and vector fused |
 | `partial` | Some changed chunks not yet embedded | Fused; unembedded chunks are lexical only; `pendingChunks` set |
-| `unavailable` | `OLLAMA_UNREACHABLE`, `MODEL_MISSING`, or `EMBED_FAILED` | Lexical and graph only; the reason is printed in the text output |
-| `disabled` | `embedding.enabled: false` | Lexical and graph only |
+| `unavailable` | A reason code from the list below | Lexical and graph only; the reason is printed in the text output |
+| `disabled` | `enabled: false` in `embedding.json` | Lexical and graph only |
 
-An unreachable server is cached for 60 seconds, so a missing Ollama costs one
-500 ms probe per minute at most. Ollama is not installed on this machine
-today; installing it is a user step (§12).
+Reason codes for `unavailable`:
+
+| Code | Trigger |
+|---|---|
+| `OLLAMA_UNREACHABLE`, `EMBEDDING_UNREACHABLE` | No answer from the `ollama` or the `openai-compatible` endpoint |
+| `MODEL_MISSING` | The endpoint does not serve the model (HTTP 404 or a model error) |
+| `EMBEDDING_AUTH_FAILED` | HTTP 401 or 403 |
+| `EMBEDDING_RATE_LIMITED` | HTTP 429 |
+| `EMBEDDING_KEY_MISSING` | `apiKeyEnv` is set but no value was found (§6.1) |
+| `EMBEDDING_NOT_LOOPBACK`, `EMBEDDING_INSECURE_URL`, `EMBEDDING_CONFIG_INVALID` | The settings file breaks a rule of §6.1; the message names the field |
+| `EMBED_FAILED` | Any other failure, including a timeout or an unexpected response shape |
+
+An unreachable or rate-limited endpoint is cached for 60 seconds, so a
+missing Ollama costs one 500 ms probe per minute at most. Error messages carry
+the status code and the provider's short error text. They never carry the API
+key or note text. Ollama is not installed on this machine today. Installing
+it, or configuring a remote endpoint, is a user step (§12).
+
+#### 6.1 Embedding providers and the remote switch
+
+The user asked for a switch and for other providers besides Ollama.
+
+**Settings file.** `~/.personal-knowledge/embedding.json` is the only home
+for embedding settings. It applies to Desktop and Codex alike, because both
+start the same MCP server. The repo-map `embedding` block of the unreleased
+0.2.0 code is removed. When the file is missing, every field takes its
+default, so the behavior is exactly the default `ollama` setup.
+
+```json
+{
+  "enabled": true,
+  "provider": "ollama",
+  "baseUrl": "http://127.0.0.1:11434",
+  "model": "bge-m3",
+  "allowRemote": false,
+  "apiKeyEnv": "",
+  "exclude": []
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `enabled` | Turns the vector channel on or off |
+| `provider` | `ollama` (native API) or `openai-compatible` (any `/v1/embeddings` server: Minih-Router, OpenAI, SiliconFlow, LM Studio, or Ollama's own compatible API) |
+| `baseUrl` | For `openai-compatible`, the API root including `/v1`, for example `https://<router-host>/v1` |
+| `model` | The embedding model the endpoint serves |
+| `allowRemote` | The remote switch. `false` keeps every request on the loopback interface |
+| `apiKeyEnv` | The name of the environment variable that holds the API key; empty means no key |
+| `exclude` | Vault folder prefixes whose notes are never sent to the embedder; they stay searchable through the lexical channel |
+
+**Rules.** The MCP server checks them when it loads the file, and the view
+checks them before it saves the file.
+
+- A non-loopback `baseUrl` needs `allowRemote: true`, otherwise
+  `EMBEDDING_NOT_LOOPBACK`.
+- A non-loopback `baseUrl` must use `https:`, otherwise
+  `EMBEDDING_INSECURE_URL`. The key never travels over plain HTTP.
+- `apiKeyEnv` is empty or matches `^[A-Z_][A-Z0-9_]{0,63}$`.
+- `exclude` entries are vault-relative folders without `..`.
+- Any other problem fails with `EMBEDDING_CONFIG_INVALID`, and the message
+  names the field.
+
+**`openai-compatible` protocol.**
+
+- The plugin sends `POST {baseUrl}/embeddings` with
+  `{ model, input: string[] }`, 32 inputs per request. When there is a key, it
+  adds the header `Authorization: Bearer <key>`.
+- Vectors come from `data[].embedding`, ordered by `data[].index`.
+- This provider has no separate probe request. The first real request also
+  serves as the probe, so no quota is spent on probing.
+
+**API key.** The key is never stored in `embedding.json`. Desktop plugin
+settings refuse secrets until secure storage exists, and Desktop starts plugin
+MCP servers with a minimal environment. The key is resolved in this order:
+
+1. `process.env[apiKeyEnv]`.
+2. On macOS and Linux, if step 1 finds nothing: one child process runs the
+   user's shell (`$SHELL` if it is zsh or bash, otherwise `/bin/zsh`) with
+   `-c 'source <rc> >/dev/null 2>&1; printf %s "$NAME"'`. Here `<rc>` is
+   `~/.zshrc` or `~/.bashrc`, and `NAME` is the validated `apiKeyEnv`. The
+   child gets no stdin, its stderr is discarded, and it has a 5-second
+   timeout. This follows the user's convention of keeping local credentials
+   in `~/.zshrc`.
+3. Otherwise the result is `EMBEDDING_KEY_MISSING`.
+
+The resolved key stays in process memory. It is resolved again after a
+settings change or an `EMBEDDING_AUTH_FAILED` result. It is never written to a
+file, a log, a tool result, the view payload, or an error message.
+
+**Reload.** The MCP server and `main.js` check the modification time of
+`embedding.json` at most once per second. After a change they rebuild the
+client, so no restart is needed. The provider identity is
+`provider + baseUrl + model + dimensions`. When it changes, the vector index
+is invalid and is rebuilt.
+
+**Cost and consent.** With a remote endpoint, the first build sends every
+non-excluded chunk once. After that, only changed chunks are sent, plus one
+short request per query. The provider bills these requests, and Minih-Router
+bills them to the user's account. Before the user saves `allowRemote: true`,
+the view shows the number of chunks and characters that will be sent. Redaction
+removes credentials only. Hosts, IP addresses, server inventories, and
+customer names are still sent unless their folders are excluded.
+
+**Minih-Router** needs no special code. It is an `openai-compatible`
+endpoint: `baseUrl` is `https://<router-host>/v1`, `model` is an embedding
+model that the router serves, and `apiKeyEnv` names the AccessKey variable in
+`~/.zshrc`. The router code has a `/v1/embeddings` route
+(`internal/gateway/router.go`). This ADR has not verified whether the user's
+deployment serves an embedding model.
 
 ### 7. Tool contract changes
 
@@ -442,6 +554,9 @@ timeout.
 | `kg.copyLink` | `{ path }` | Writes `obsidian://open?vault=<name>&file=<path>` to the clipboard |
 | `kg.promote.preview` | `{ memoryId }` | Draft path and content plus the dry-run summary |
 | `kg.promote.apply` | `{ memoryId, path, content }` | The write summary; refused in read-only mode |
+| `kg.settings.get` | `{}` | The embedding settings of §6.1, `apiKeyStatus` (`found`, `missing`, or `not-required`, never the key), index statistics read from disk (identity, chunk count, built at), and the send estimate (chunks and characters after `exclude`) |
+| `kg.settings.set` | `{ embedding }` | Validates against §6.1 and writes `embedding.json` atomically with mode 0600; returns the saved settings, or the failing rule and field |
+| `kg.settings.test` | `{ embedding }` | Embeds one fixed short string with the given settings and returns `{ ok, dims, latencyMs }` or a reason code of §6 |
 
 ```ts
 type GraphPayload = {
@@ -501,9 +616,14 @@ chose.
 | Weak links | Opacity 0.06, width 0.3 |
 | Ghosts and archived notes | Hollow ghosts and distant dust; hidden by default |
 
-The background is a deep-space gradient with three parallax star layers,
-faint per-galaxy nebulae, and an UnrealBloom pass. The universe is always
-dark; overlays use dark glass with the host's font.
+The background is a deep-space gradient with three parallax star sprite
+layers (seeded, stable across sessions) and faint per-galaxy nebulae. The
+bloom look comes from multi-layer additive-blended glow shells around each
+body rather than an UnrealBloom post-processing pass: the vendored
+`3d-force-graph` bundle ships no composer, and shell glow keeps the canvas
+transparent so the star field shows through. The glow layers switch off
+above 2,000 nodes and under `prefers-reduced-motion`. The universe is
+always dark; overlays use dark glass with the host's font.
 
 **Interaction.**
 
@@ -528,6 +648,21 @@ dark; overlays use dark glass with the host's font.
 "Open in Obsidian" is not offered: ADR 0168 refuses `obsidian://`, and
 changing that boundary is outside this ADR.
 
+**Retrieval settings panel.** A gear button opens the panel. It shows:
+
+- the vector switch and the provider (local Ollama, or OpenAI-compatible
+  endpoint);
+- the base URL, the model, the key variable name, and the excluded folders;
+- the remote switch, with this warning in both locales: "Redacted note
+  sections will be sent to this address. Credentials are removed; hosts, IP
+  addresses, and names are not.";
+- the send estimate, the key status, and the index statistics.
+
+"Test connection" calls `kg.settings.test`. "Save" calls `kg.settings.set`.
+Saving `allowRemote: true` needs a second click on a confirm button that
+repeats the estimate. The panel is the only UI for these settings. Editing
+`embedding.json` by hand has the same effect.
+
 ### 11. Versions and release split
 
 | Version | Content | Engine |
@@ -546,7 +681,7 @@ publication are a separate release step.
 |---|---|---|
 | P0 Foundation | §2, §7 read and write parts, §8, metadata routing | `node --test`: block-list properties, link resolver cases, section replace and append under CAS, frontmatter patch preserves body bytes, redaction guard, routing from `repo` and worktree paths; `npm run probe` |
 | P1 Ontology | §3, §4 standard text, §5 tooling, lint script | Ontology unit tests with a fixture vault; `--plan` on a fixture and, read-only, on the real vault |
-| P2 Retrieval | §6 | Unit tests with a fake loopback embed server: `ready`, `partial`, `unavailable`, model change invalidation, lock; `EMBEDDING_NOT_LOOPBACK`; `资产服务器` regression; real-Ollama smoke only when installed |
+| P2 Retrieval | §6, §6.1 | Unit tests with fake loopback embed servers for both providers: `ready`, `partial`, `unavailable`, identity change invalidation, lock; every rule of §6.1; status mapping 401/403, 404, 429; key from `process.env` and from a temporary `HOME` whose `.zshrc` exports a test variable; the key never appears in errors, tool output, logs, or view payloads; `exclude`; reload after an `embedding.json` change; `kg.settings.*` validation and file mode 0600; `资产服务器` regression. No call to a real paid endpoint without the user's authorization |
 | P3 View | §10 without memory | `scripts/build.mjs`; graph builder unit tests; BrowserPreview of the view with a stub bridge and a fixture payload: hover, drawer, filters, health mode, 2D switch; frame rate with the real 273-node payload |
 | P4 Memory | §9; Desktop ADR `plugin-learned-memory-read` | Desktop side as that ADR lists; plugin side: payload mapping of memory scopes to project nodes, `permission-missing`, `disabled`, `unsupported`, promotion dry-run and read-only refusal |
 
@@ -555,28 +690,42 @@ phases.
 
 User steps:
 
-- Install Ollama (`brew install ollama`), start it, and run
-  `ollama pull bge-m3` (about 1.2 GB).
+- Pick one vector backend, or leave vectors off:
+  - local: install Ollama (`brew install ollama`), start it, and run
+    `ollama pull bge-m3` (about 1.2 GB);
+  - remote: in the view's retrieval settings choose `openai-compatible`, enter
+    the base URL and model, name the key variable kept in `~/.zshrc`, and turn
+    on the remote switch. For Minih-Router, first confirm that the deployment
+    serves an embedding model.
 - Review and approve the migration plan, then each split and preference batch.
 - Archive the memory entries the plan lists.
 - Verify the view inside the running Desktop app.
 
 ## Consequences
 
-- Agents get ranked, reorder-tolerant CJK retrieval, semantic matches when
-  Ollama runs, and section-level reads that fit the budget.
+- Agents get ranked, reorder-tolerant CJK retrieval, semantic matches when an
+  embedding backend is configured, and section-level reads that fit the
+  budget.
 - Large notes become editable without full-note replacement, and the
   redaction guard closes a data-loss path.
 - The vault gains an explicit vocabulary. Unmigrated notes keep working,
   because reads accept aliases and enforcement blocks only new issues.
 - One parse feeds the MCP tools, the lint, and the view.
 - New costs: vendored `yaml` and `3d-force-graph` with three.js (about 1.5 MB
-  in the package, estimated), about 12 MB of vectors outside the vault, and an
-  optional Ollama daemon with a 1.2 GB model.
+  in the package, estimated), about 12 MB of vectors outside the vault, and
+  either an optional Ollama daemon with a 1.2 GB model or provider charges for
+  remote embedding requests.
 - `knowledge_search` without `mode` changes from literal to ranked results;
   this is called out in the changelog.
 - The plugin keeps raw-Node access to the vault in two processes: the MCP
   server, and now `main.js` for the view. The safety notes state this.
+- With the remote switch on, redacted note text leaves the machine. Desktop's
+  `net.domains` allowlist governs host-owned egress only, and it does not see
+  requests from the MCP server or `main.js`. The settings file and the
+  confirmation in the panel are the only controls. The manifest safety notes
+  change from "nothing leaves the machine" to "nothing leaves the machine
+  unless you turn on remote embeddings", and they describe what is sent and
+  how the key is read.
 
 ## Alternatives
 
@@ -591,7 +740,16 @@ User steps:
 - **In-process ONNX (transformers.js with bge-small-zh).** Kept as a fallback
   design only: it adds onnxruntime and model files to the package and weaker
   CJK quality than bge-m3.
-- **Cloud embeddings.** Rejected: they break "nothing leaves the machine".
+- **Cloud embeddings as the default.** Rejected: the default stays local.
+  Since the amendment of 2026-10-24, remote endpoints are allowed behind the
+  explicit switch of §6.1.
+- **The API key in `embedding.json` or in Desktop plugin settings.**
+  Rejected: the file is plain text, and Desktop plugin settings refuse secrets
+  until secure storage exists.
+- **The switch in Desktop plugin settings.** Rejected: Desktop passes
+  settings to the MCP server only at spawn, so a change would need a reload.
+  Codex shares the MCP server but not Desktop settings. String settings with
+  empty defaults also made the MCP server skip loading before 0.1.2.
 - **A vector database (Chroma, LanceDB, Qdrant).** Rejected: a service for
   about 3,000 vectors.
 - **A 2D-only renderer (Sigma.js, Cosmograph).** Rejected: the user wants the

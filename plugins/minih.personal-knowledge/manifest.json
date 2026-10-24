@@ -11,15 +11,15 @@
     "en": {
       "name": "Personal Knowledge",
       "description": "Use a local Obsidian vault as verified, time-aware long-term context: scoped retrieval, guarded write-back, project routing, and the Knowledge Universe view.",
-      "safetyNotes": "Spawns a local Node MCP process and a view backend that read and write inside your Obsidian vault (default ~/Documents/Knowledge; override with the vaultPath key in your repo-map or the PERSONAL_KNOWLEDGE_VAULT variable). Writes are guarded: dry-run by default, updates require the note's current SHA-256, likely credentials are rejected, changes are written atomically and backed up. Search may embed text locally through a loopback Ollama server you configure; nothing leaves the machine. The view backend reads the vault with direct Node access, the same way the MCP server does."
+      "safetyNotes": "Spawns a local Node MCP process and a view backend that read and write inside your Obsidian vault (default ~/Documents/Knowledge; override with the vaultPath key in your repo-map or the PERSONAL_KNOWLEDGE_VAULT variable). Writes are guarded: dry-run by default, updates require the note's current SHA-256, likely credentials are rejected, changes are written atomically and backed up. Nothing leaves the machine by default; embeddings run on a local Ollama until you enable a remote provider in the view's retrieval settings, after which redacted note sections are sent to that endpoint. The API key is never stored: embedding.json records only the name of an environment variable, whose value is read from the process environment or, failing that, from your shell rc, and it is never logged. The view backend reads the vault with direct Node access, the same way the MCP server does."
     },
     "zh-CN": {
       "name": "Personal Knowledge",
       "description": "把本地 Obsidian 知识库当作经过校验、带时效的长期上下文：按仓库与主题加载、检索、读取带哈希保护的笔记并安全回写，另有知识宇宙视图。",
-      "safetyNotes": "会启动一个本地 Node MCP 进程和视图后端，只在你的 Obsidian 知识库（默认 ~/Documents/Knowledge，可用 repo-map 的 vaultPath 键或 PERSONAL_KNOWLEDGE_VAULT 覆盖）内读写。写入有防护：默认 dry-run，更新需要笔记当前 SHA-256，拒绝疑似凭据，原子写入并自动备份。检索可经你配置的回环 Ollama 服务在本机做向量化，数据不出本机。视图后端与 MCP 服务器一样使用直接 Node 访问读取知识库。"
+      "safetyNotes": "会启动一个本地 Node MCP 进程和视图后端，只在你的 Obsidian 知识库（默认 ~/Documents/Knowledge，可用 repo-map 的 vaultPath 键或 PERSONAL_KNOWLEDGE_VAULT 覆盖）内读写。写入有防护：默认 dry-run，更新需要笔记当前 SHA-256，拒绝疑似凭据，原子写入并自动备份。默认不出本机：向量嵌入走本地 Ollama；在视图的检索设置中开启远程向量后，脱敏后的笔记分段会发送到该端点。API key 不落盘：embedding.json 只登记环境变量名，取值先读进程环境变量、再读 shell rc，且绝不写入日志。视图后端与 MCP 服务器一样使用直接 Node 访问读取知识库。"
     }
   },
-  "safetyNotes": "Spawns a local Node MCP process and a view backend that read and write inside your Obsidian vault (default ~/Documents/Knowledge; override with the vaultPath key in your repo-map or the PERSONAL_KNOWLEDGE_VAULT variable). Writes are guarded: dry-run by default, updates require the note's current SHA-256, likely credentials are rejected, changes are written atomically and backed up. Search may embed text locally through a loopback Ollama server you configure; nothing leaves the machine. The view backend reads the vault with direct Node access, the same way the MCP server does.",
+  "safetyNotes": "Spawns a local Node MCP process and a view backend that read and write inside your Obsidian vault (default ~/Documents/Knowledge; override with the vaultPath key in your repo-map or the PERSONAL_KNOWLEDGE_VAULT variable). Writes are guarded: dry-run by default, updates require the note's current SHA-256, likely credentials are rejected, changes are written atomically and backed up. Nothing leaves the machine by default; embeddings run on a local Ollama until you enable a remote provider in the view's retrieval settings, after which redacted note sections are sent to that endpoint. The API key is never stored: embedding.json records only the name of an environment variable, whose value is read from the process environment or, failing that, from your shell rc, and it is never logged. The view backend reads the vault with direct Node access, the same way the MCP server does.",
   "main": "main.js",
   "contributes": {
     "views": [
@@ -53,7 +53,9 @@
         "id": "personal-knowledge",
         "transport": "stdio",
         "command": "node",
-        "args": ["mcp/server.mjs"]
+        "args": [
+          "mcp/server.mjs"
+        ]
       }
     ]
   },

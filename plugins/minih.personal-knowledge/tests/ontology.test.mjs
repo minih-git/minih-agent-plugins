@@ -8,6 +8,9 @@ import { fileURLToPath } from "node:url";
 
 import { KnowledgeService } from "../mcp/knowledge-core.mjs";
 import { Ontology } from "../lib/ontology.mjs";
+import { isolatedHome } from "./helpers/home.mjs";
+// Keep every fixture away from the real ~/.personal-knowledge (see helpers/home.mjs).
+await isolatedHome();
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const fixedNow = () => new Date("2026-07-17T00:00:00Z");
@@ -72,7 +75,9 @@ Something broke.
     await write("08 Standards/知识本体.md", `---\ntitle: 知识本体\ntype: convention\n---\n\n\`\`\`yaml\n${ontologyNote}\n\`\`\`\n`);
   }
 
-  const config = { ignoreFolders: [], backupRetentionDays: 0, embedding: { enabled: false } };
+  const config = { ignoreFolders: [], backupRetentionDays: 0 };
+  process.env.PERSONAL_KNOWLEDGE_EMBEDDING_CONFIG = path.join(root, "embedding.json");
+  await writeFile(process.env.PERSONAL_KNOWLEDGE_EMBEDDING_CONFIG, '{"enabled": false}\n');
   const service = await new KnowledgeService({
     vaultPath: vault,
     config,
@@ -159,11 +164,14 @@ test("migration plan lists alias rewrites, base filters, and review items; appli
   const pluginRoot = PLUGIN_ROOT;
   const outDir = await mkdtemp(path.join(os.tmpdir(), "personal-knowledge-plan-"));
   const emptyConfig = path.join(outDir, "repo-map.json");
-  await writeFile(emptyConfig, '{"embedding": {"enabled": false}}\n');
+  await writeFile(emptyConfig, "{}\n");
+  const embeddingConfig = path.join(outDir, "embedding.json");
+  await writeFile(embeddingConfig, '{"enabled": false}\n');
   const env = {
     ...process.env,
     PERSONAL_KNOWLEDGE_VAULT: vault,
     PERSONAL_KNOWLEDGE_CONFIG: emptyConfig,
+    PERSONAL_KNOWLEDGE_EMBEDDING_CONFIG: embeddingConfig,
   };
   const planned = spawnSync(process.execPath, ["scripts/ontology-migrate.mjs", "--plan", "--out", outDir], {
     cwd: pluginRoot,

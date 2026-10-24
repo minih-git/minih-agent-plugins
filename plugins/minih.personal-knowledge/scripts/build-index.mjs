@@ -17,15 +17,20 @@ import { createKnowledgeService } from "../mcp/knowledge-core.mjs";
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const service = await createKnowledgeService({ pluginRoot });
-if (!service.embedding?.enabled) {
-  process.stderr.write("embedding.enabled is false in the repo-map; nothing to build.\n");
+if (!service.embedding) {
+  process.stderr.write(
+    service.embeddingSettingsError
+      ? `embedding settings are invalid: ${service.embeddingSettingsError.message}\n`
+      : "the vector channel is disabled in embedding.json; nothing to build.\n",
+  );
   process.exit(1);
 }
 await service.index.refresh({ force: true });
 const started = Date.now();
 await service.ensureVectors({ budgetMs: Number.POSITIVE_INFINITY, force: true });
 const state = {
-  model: service.embedding.model,
+  provider: service.embedding.settings.provider,
+  model: service.embedding.settings.model,
   indexDirectory: service.indexDirectory,
   chunks: service.vectors.chunks.length,
   pending: service.pendingChunkCount,

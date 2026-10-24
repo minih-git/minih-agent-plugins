@@ -15,7 +15,13 @@ import os from "node:os";
 import path from "node:path";
 
 import { BM25, chunkTermFrequencies } from "../lib/bm25.mjs";
-import { EmbeddingClient, embeddingOptions } from "../lib/embeddings.mjs";
+import {
+  EmbeddingClient,
+  embeddingSettingsMtime,
+  isExcluded,
+  loadEmbeddingSettings,
+  resolveApiKey,
+} from "../lib/embeddings.mjs";
 import { composeNote, parseFrontmatter, patchFrontmatterSource } from "../lib/frontmatter.mjs";
 import { loadOntology } from "../lib/ontology.mjs";
 import { redactSensitiveContent, findSensitiveContent, redactionViolation } from "../lib/redact.mjs";
@@ -144,28 +150,32 @@ export class KnowledgeService {
     if (!this.ontology && this.pluginRoot) {
       this.ontology = await loadOntology({ pluginRoot: this.pluginRoot, index: this.index });
     }
-    // Hybrid retrieval (ADR 0001 §6): a loopback-only embedding client and the
-    // vector index under ~/.personal-knowledge/index/<sha1(vault)>/.
-    const embedding = embeddingOptions(this.config);
-    this.embedding = new EmbeddingClient({ ...embedding, now: this.now });
+    // Hybrid retrieval (ADR 0001 §6/§6.1): one embedding client built from
+    // ~/.personal-knowledge/embedding.json (hot-reloaded), and the vector
+    // index under ~/.personal-knowledge/index/<sha1(vault)>/.
+    this.embeddingSettingsPath =
+      process.env.PERSONAL_KNOWLEDGE_EMBEDDING_CONFIG ??
+      path.join(os.homedir(), ".personal-knowledge", "embedding.json");
+    this.embeddingSettingsMtimeMs = -1;
+    this.embeddingSettings = null;
+    await this.#refreshEmbeddingClient();
     const dirName = createHash("sha1").update(this.rootRealpath).digest("hex");
     this.indexDirectory =
       process.env.PERSONAL_KNOWLEDGE_INDEX_DIR ??
       path.join(os.homedir(), ".personal-knowledge", "index", dirName);
     this.vectors = new VectorIndex(this.indexDirectory);
     await mkdir(this.indexDirectory, { recursive: true });
-    this.vectorMeta = null;
     this.pendingChunkCount = 0;
     this.vectorReason = null;
     this.backgroundRefreshed = false;
-    if (embedding.enabled) {
-      const loaded = await this.vectors.load({ model: this.embedding.model, dims: this.#vectorDims() });
-      this.vectorMeta = this.vectors.meta;
-      if (!loaded && this.vectors.meta && this.vectors.meta.model !== this.embedding.model) {
-        // A different model invalidates the index; rebuild below.
-        this.vectors.chunks = [];
-        this.vectors.vectors = null;
-      }
+    if (this.embedding?.settings.enabled) {
+      // The stored identity (provider + baseUrl + model + dims) decides whether
+      // the vectors on disk can still be used (§6.1 reload rules).
+      const dims = this.vectors.meta?.dims ?? null;
+      await this.vectors.load({
+        identity: this.#vectorIdentity(dims),
+        dims: dims ?? 0,
+      });
       // Refresh changed chunks in the background; a tool call spends at most
       // 3 seconds waiting for it before answering (§6).
       this.ensureVectors({ budgetMs: 3000 }).catch(() => {});
@@ -173,8 +183,53 @@ export class KnowledgeService {
     return this;
   }
 
-  #vectorDims() {
-    return this.vectors.meta?.dims ?? 1024;
+  /** Identity string stored in meta.json; a change invalidates the index. */
+  #vectorIdentity(dims) {
+    const client = this.embedding;
+    if (!client) return "disabled";
+    return `${client.identityPrefix()}${dims ?? this.embedding.dims ?? "?"}`;
+  }
+
+  /**
+   * Rebuild the embedding client when `embedding.json` changed (checked at
+   * most once per second, §6.1). A provider-identity change drops the in-memory
+   * vectors so the next ensureVectors rebuilds them; the resolved API key is
+   * fetched again and never surfaces anywhere.
+   */
+  async #refreshEmbeddingClient({ force = false } = {}) {
+    // Check the file's mtime at most once per second (§6.1 reload rule).
+    const nowMs = this.now().getTime();
+    if (!force && nowMs - (this.embeddingCheckAt ?? 0) < 1000) return;
+    this.embeddingCheckAt = nowMs;
+    const mtime = await embeddingSettingsMtime(this.embeddingSettingsPath);
+    if (!force && mtime === this.embeddingSettingsMtimeMs) return;
+    this.embeddingSettingsMtimeMs = mtime;
+    let settings;
+    try {
+      settings = await loadEmbeddingSettings(this.embeddingSettingsPath);
+      this.embeddingSettingsError = null;
+    } catch (error) {
+      // A broken settings file keeps the vectors off and reports why (§6).
+      this.embeddingSettingsError = error;
+      this.embedding = null;
+      return;
+    }
+    const previousPrefix = this.embedding?.identityPrefix?.() ?? null;
+    this.embeddingSettings = settings;
+    if (!settings.enabled) {
+      this.embedding = null;
+      return;
+    }
+    const key = await resolveApiKey(settings.apiKeyEnv, { home: os.homedir() });
+    this.apiKeyStatus = key.status;
+    const client = new EmbeddingClient({ settings, apiKey: key.value, now: this.now });
+    const identityChanged = previousPrefix !== null && previousPrefix !== client.identityPrefix();
+    this.embedding = client;
+    if (identityChanged && this.vectors) {
+      this.vectors.chunks = [];
+      this.vectors.vectors = null;
+      this.vectors.meta = null;
+    }
   }
 
   async root() {
@@ -307,6 +362,16 @@ export class KnowledgeService {
    * callers share one in-flight run instead of racing each other.
    */
   async ensureVectors(options = {}) {
+    // `force` also re-reads embedding.json immediately, past the 1-second
+    // throttle (build-index and tests use it).
+    await this.#refreshEmbeddingClient({ force: options.force === true });
+    if (!this.embedding) {
+      this.pendingChunkCount = 0;
+      this.vectorReason = this.embeddingSettingsError
+        ? this.embeddingSettingsError.code ?? "EMBEDDING_CONFIG_INVALID"
+        : null;
+      return;
+    }
     if (this.ensureVectorsPromise) return this.ensureVectorsPromise;
     this.ensureVectorsPromise = this.#ensureVectors(options).finally(() => {
       this.ensureVectorsPromise = null;
@@ -315,13 +380,16 @@ export class KnowledgeService {
   }
 
   async #ensureVectors({ budgetMs = 3000, force = false } = {}) {
-    if (!this.embedding?.enabled) return;
+    const exclude = this.embeddingSettings?.exclude ?? [];
     const deadline = this.now().getTime() + budgetMs;
     const bySha = new Map((this.vectors.chunks ?? []).map((row) => [row.sha, row]));
     const all = [];
     const missing = [];
     for (const relative of this.index.paths()) {
       if (!relative.endsWith(".md")) continue;
+      // Chunks under an excluded folder never reach the embedder (§6.1); they
+      // stay searchable through the lexical channel.
+      if (isExcluded(relative, exclude)) continue;
       const record = this.index.note(relative);
       if (!record) continue;
       for (let i = 0; i < record.chunks.length; i += 1) {
@@ -339,7 +407,7 @@ export class KnowledgeService {
 
     let dims = this.vectors.meta?.dims ?? null;
     const vectorMap = new Map();
-    if (this.vectors.vectors) {
+    if (this.vectors.vectors && dims) {
       const stored = this.vectors.chunks;
       for (let row = 0; row < stored.length; row += 1) {
         vectorMap.set(stored[row].sha, this.vectors.vectors.subarray(row * dims, (row + 1) * dims));
@@ -352,6 +420,7 @@ export class KnowledgeService {
       return;
     }
     let embeddedNew = false;
+    let sawAuthFailure = false;
     for (const item of missing) {
       if (this.now().getTime() > deadline) break;
       try {
@@ -361,8 +430,18 @@ export class KnowledgeService {
         embeddedNew = true;
       } catch (error) {
         this.vectorReason = error.code ?? "EMBED_FAILED";
+        if (error?.code === "EMBEDDING_AUTH_FAILED") {
+          // Re-resolve the key once after a rejected key (§6.1); the value
+          // never leaves the client.
+          sawAuthFailure = true;
+        }
         return;
       }
+    }
+    if (sawAuthFailure) {
+      const key = await resolveApiKey(this.embeddingSettings.apiKeyEnv, { home: os.homedir() });
+      this.apiKeyStatus = key.status;
+      this.embedding.apiKey = key.value;
     }
     if (!embeddedNew) return;
     this.pendingChunkCount = missing.filter((item) => !vectorMap.has(item.row.sha)).length;
@@ -378,9 +457,13 @@ export class KnowledgeService {
     if (!dims) return;
     const flat = new Float32Array(rows.length * dims);
     vectors.forEach((vector, i) => flat.set(vector, i * dims));
-    const saved = await this.vectors.save({ rows, vectors: flat, model: this.embedding.model, dims });
+    const saved = await this.vectors.save({
+      rows,
+      vectors: flat,
+      identity: this.#vectorIdentity(dims),
+      dims,
+    });
     if (saved) {
-      this.vectorMeta = this.vectors.meta;
       this.vectorReason = this.pendingChunkCount > 0 ? "pending" : null;
     }
   }
@@ -418,7 +501,7 @@ export class KnowledgeService {
 
   async #searchRanked({ query, limit, scope }) {
     await this.index.refresh();
-    const budget = this.embedding?.enabled && !this.backgroundRefreshed ? 3000 : 0;
+    const budget = this.embedding && !this.backgroundRefreshed ? 3000 : 0;
     if (budget > 0) {
       await this.ensureVectors({ budgetMs: budget });
       this.backgroundRefreshed = true;
@@ -439,14 +522,20 @@ export class KnowledgeService {
       lexicalByNote.set(doc.path, entry);
     }
 
-    // Vector channel.
+    // Vector channel. The query embed times out after 3 s on a loopback
+    // endpoint and 8 s otherwise (§6).
     let vectorByNote = new Map();
-    let reason = this.embedding?.enabled ? this.vectorReason ?? null : null;
-    if (this.embedding?.enabled && !this.embedding.recentlyUnreachable()) {
+    let reason = this.embedding ? this.vectorReason ?? null : null;
+    if (this.embedding && !this.embedding.recentlyUnreachable()) {
       try {
         const [queryVector] = await Promise.race([
-          this.embedding.embed([redactSensitiveContent(query)]),
-          new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error("EMBED_FAILED: query embed timed out"), { code: "EMBED_FAILED" })), 3000)),
+          this.embedding.embed([redactSensitiveContent(query)], { timeoutMs: this.embedding.queryTimeoutMs }),
+          new Promise((_, reject) =>
+            setTimeout(
+              () => reject(Object.assign(new Error("the query embed timed out"), { code: "EMBED_FAILED" })),
+              this.embedding.queryTimeoutMs,
+            ),
+          ),
         ]);
         const hits = this.vectors.search(queryVector, { limit: 50 }).filter(({ chunk }) => inScope(chunk.path));
         for (const { chunk, score } of hits) {
@@ -460,6 +549,7 @@ export class KnowledgeService {
         reason = this.pendingChunkCount > 0 ? "pending" : null;
       } catch (error) {
         reason = error.code ?? "EMBED_FAILED";
+        this.embedding.markUnreachable();
         vectorByNote = new Map();
       }
     }
@@ -524,7 +614,7 @@ export class KnowledgeService {
       count: results.length,
       results,
       retrieval: retrievalState({
-        enabled: this.embedding?.enabled ?? false,
+        enabled: Boolean(this.embedding),
         vectorReady: Boolean(this.vectors.vectors),
         reason: reason && reason !== "pending" ? reason : null,
         pendingChunks,

@@ -27,7 +27,7 @@ export class VectorIndex {
     this.meta = null;
   }
 
-  async load({ model, dims }) {
+  async load({ identity, dims }) {
     let meta;
     let rows;
     let buffer;
@@ -42,7 +42,12 @@ export class VectorIndex {
       return false;
     }
     const expectedBytes = rows.length * dims * 4;
-    if (meta.formatVersion !== FORMAT_VERSION || meta.model !== model || meta.dims !== dims || buffer.length !== expectedBytes) {
+    if (
+      meta.formatVersion !== FORMAT_VERSION ||
+      meta.identity !== identity ||
+      meta.dims !== dims ||
+      buffer.length !== expectedBytes
+    ) {
       return false;
     }
     this.meta = meta;
@@ -68,7 +73,7 @@ export class VectorIndex {
   }
 
   /** Replace the stored index atomically; meta.json lands last. */
-  async save({ rows, vectors, model, dims }) {
+  async save({ rows, vectors, identity, dims }) {
     const lock = await this.acquireLock();
     if (!lock) return false;
     try {
@@ -79,10 +84,10 @@ export class VectorIndex {
       await writeFile(temp("vectors.f32"), Buffer.from(vectors.buffer, vectors.byteOffset, vectors.byteLength));
       await rename(temp("chunks.jsonl"), path.join(this.directory, "chunks.jsonl"));
       await rename(temp("vectors.f32"), path.join(this.directory, "vectors.f32"));
-      await writeFile(path.join(this.directory, "meta.json"), `${JSON.stringify({ formatVersion: FORMAT_VERSION, model, dims, count: rows.length }, null, 2)}\n`);
+      await writeFile(path.join(this.directory, "meta.json"), `${JSON.stringify({ formatVersion: FORMAT_VERSION, identity, dims, count: rows.length }, null, 2)}\n`);
       this.chunks = rows;
       this.vectors = vectors;
-      this.meta = { formatVersion: FORMAT_VERSION, model, dims, count: rows.length };
+      this.meta = { formatVersion: FORMAT_VERSION, identity, dims, count: rows.length };
       return true;
     } finally {
       await lock.release();

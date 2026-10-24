@@ -1,4 +1,5 @@
 .DS_Store
+plugins/*/node_modules/
 
 # Task worktrees live inside the primary checkout.
 .worktree/
