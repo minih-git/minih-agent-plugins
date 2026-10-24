@@ -12,11 +12,14 @@ logged, or uploaded.
 
 - Starts a real local shell from the profiles installed on this machine:
   PowerShell, `pwsh`, `cmd`, or Git Bash on Windows; the user's login shell,
-  zsh, bash, or sh on macOS and Linux. The start form always shows the executable
-  and the working directory before anything is spawned.
-- Opens in the active local project directory, and offers the host's own folder
-  picker or the home directory when that is not what you want. A path that does
-  not exist on this machine (a remote project) is refused by name.
+  zsh, bash, or sh on macOS and Linux.
+- Opens the view straight into a terminal. The shell and the working directory
+  come from the plugin's settings (Settings → Plugins → Terminal), where `Auto`
+  means the first supported shell on this machine, and the directory defaults to
+  the active local project. The New terminal dialog is there when you want to
+  choose per tab: it floats over the terminal rather than resizing it, and
+  Escape, the backdrop, or Cancel closes it. A path that does not exist on this
+  machine (a remote project) is refused by name.
 - Keeps terminals alive across chat switches, hiding the page, and minimizing the
   window. Closing a tab ends that terminal **and the jobs it started**: the close
   signals the shell's whole process tree and escalates, so it does not depend on

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.2
+
+- The New terminal form is a dialog over the terminal instead of a block above
+  it, so opening it no longer resizes the shell you are looking at. Escape, the
+  backdrop, and Cancel all dismiss it.
+- Opening the view starts a terminal with your defaults instead of asking first.
+  Shell, working directory, and whether to auto-open are configured once in the
+  plugin's settings; "Auto" keeps using the first shell found on the machine.
+- With no terminal running the page shows a one-line empty state and a single
+  button, rather than a form that has to be answered.
+
 ## 0.1.1
 
 - Start shells as login shells on macOS and Linux. `~/.zprofile` and

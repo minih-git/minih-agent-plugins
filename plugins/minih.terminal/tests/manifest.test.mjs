@@ -72,3 +72,26 @@ test("the app versions it supports are declared the way both readers expect", ()
   assert.equal(typeof manifest.engines.piDesktop, "string");
   assert.equal(manifest.activationEvents.includes("onStartup"), true);
 });
+
+test("the default terminal is configured in settings, not in the start dialog", () => {
+  const settings = manifest.contributes.settings ?? [];
+  const byKey = Object.fromEntries(settings.map((setting) => [setting.key, setting]));
+  assert.deepEqual(Object.keys(byKey).sort(), ["defaultDirectory", "defaultShell", "openOnView"]);
+  // Opening the view means asking for a terminal: the shipped answer starts one.
+  assert.equal(byKey.openOnView.type, "boolean");
+  assert.equal(byKey.openOnView.default, true);
+  // `auto` keeps working on a machine where the named shell is not installed.
+  assert.equal(byKey.defaultShell.type, "select");
+  assert.equal(byKey.defaultShell.default, "auto");
+  assert.ok(
+    byKey.defaultShell.enum.some((option) => option.value === "auto"),
+    "auto must stay selectable",
+  );
+  assert.equal(byKey.defaultDirectory.type, "string");
+  assert.equal(byKey.defaultDirectory.default, "");
+  for (const setting of settings) {
+    // The generated sheet does not localize titles, so they stay plain strings.
+    assert.equal(typeof setting.title, "string", setting.key);
+    assert.ok(setting.title.trim().length > 0, setting.key);
+  }
+});

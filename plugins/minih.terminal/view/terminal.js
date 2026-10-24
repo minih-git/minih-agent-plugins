@@ -34,6 +34,7 @@
       noShells: "No supported shell was found on this machine.",
       noBridge: "This page only runs inside Minih-Agent-Desktop.",
       tabs: "Terminals",
+      emptyHint: "No terminal is running.",
     },
     "zh-CN": {
       newTerminal: "新建终端",
@@ -53,6 +54,7 @@
       noShells: "本机未找到受支持的 shell。",
       noBridge: "此页面只能在 Minih-Agent-Desktop 内运行。",
       tabs: "终端",
+      emptyHint: "当前没有运行中的终端。",
     },
   };
 
@@ -67,11 +69,18 @@
     tabs: [],
     activeId: null,
     sequence: 0,
+    /** Shell, directory, and auto-open, from the plugin's own settings. */
+    defaults: { profileId: null, directory: null, openOnView: true },
   };
 
   const elements = {
     tabs: document.getElementById("tabs"),
     panes: document.getElementById("panes"),
+    modal: document.getElementById("modal"),
+    backdrop: document.getElementById("modal-backdrop"),
+    empty: document.getElementById("empty"),
+    emptyHint: document.getElementById("empty-hint"),
+    emptyStart: document.getElementById("empty-start"),
     start: document.getElementById("start"),
     startDir: document.getElementById("start-dir"),
     startShell: document.getElementById("start-shell"),
@@ -122,6 +131,8 @@
     elements.chooseDir.textContent = t("choose");
     elements.startRun.textContent = t("start");
     elements.startCancel.textContent = t("cancel");
+    elements.emptyHint.textContent = t("emptyHint");
+    elements.emptyStart.textContent = t("newTerminal");
     elements.searchInput.placeholder = t("search");
     document.getElementById("search-next").setAttribute("aria-label", t("next"));
     document.getElementById("search-prev").setAttribute("aria-label", t("previous"));
@@ -148,12 +159,20 @@
     for (const tab of state.tabs) tab.term.options.theme = theme;
   }
 
-  // --- start form -------------------------------------------------------
+  // --- start dialog -----------------------------------------------------
 
+  /**
+   * Open the dialog over the panes.
+   *
+   * `state.startDir` / `state.startProfile` already hold the defaults from the
+   * plugin's settings, so the dialog opens on an answer the user can accept with
+   * one keystroke instead of two choices.
+   */
   function renderStart() {
-    const hasTabs = state.tabs.length > 0;
-    elements.start.hidden = false;
-    elements.startCancel.hidden = !hasTabs;
+    elements.modal.hidden = false;
+    // The dialog is always dismissable: with no terminal behind it, closing
+    // falls back to the empty state rather than trapping the user in a form.
+    elements.startCancel.hidden = false;
     elements.startDir.textContent = state.startDir || state.home;
     elements.startDir.title = state.startDir || state.home;
     elements.startShell.textContent = "";
@@ -170,14 +189,28 @@
     }
     elements.startError.textContent = state.profiles.length === 0 ? t("noShells") : "";
     elements.startRun.disabled = state.profiles.length === 0;
-    if (!hasTabs) {
+    if (state.tabs.length === 0) {
       elements.tabs.textContent = "";
     }
+    updateEmpty();
   }
 
   function hideStart() {
-    elements.start.hidden = true;
+    elements.modal.hidden = true;
     elements.startError.textContent = "";
+    updateEmpty();
+  }
+
+  /**
+   * What the page shows when nothing is running and the dialog is closed.
+   *
+   * The panes stay mounted but give up their box: an empty terminal area behind
+   * the hint would only steal the space the hint is centred in.
+   */
+  function updateEmpty() {
+    const empty = state.tabs.length === 0 && elements.modal.hidden;
+    elements.empty.hidden = !empty;
+    elements.panes.hidden = empty;
   }
 
   // --- tabs -------------------------------------------------------------
@@ -219,10 +252,17 @@
     }));
   }
 
-  async function openTerminal() {
-    const cwd = state.startDir || state.home;
-    const profileId = elements.startShell.value || state.startProfile;
-    state.startProfile = profileId;
+  /**
+   * Start a shell.
+   *
+   * With `fromDefaults` the page sends nothing and the backend applies the
+   * user's settings, so auto-open starts a terminal without a single choice.
+   * Otherwise the dialog's selection wins, because the user just made it.
+   */
+  async function openTerminal({ fromDefaults = false } = {}) {
+    const cwd = fromDefaults ? "" : state.startDir || state.home;
+    const profileId = fromDefaults ? "" : elements.startShell.value || state.startProfile;
+    if (profileId) state.startProfile = profileId;
     elements.startError.textContent = "";
     let reply;
     try {
@@ -233,7 +273,11 @@
         rows: 30,
       });
     } catch (error) {
-      elements.startError.textContent = `${t("openFailed")} ${message(error)}`;
+      // Auto-open has no dialog to write into; the status line is where a failed
+      // default start has to be visible.
+      if (fromDefaults) showStatus(`${t("openFailed")} ${message(error)}`);
+      else elements.startError.textContent = `${t("openFailed")} ${message(error)}`;
+      updateEmpty();
       return;
     }
     hideStart();
@@ -316,6 +360,8 @@
 
     state.tabs.push(tab);
     renderTab(tab);
+    // A terminal exists now, so the empty state yields its box to the panes.
+    updateEmpty();
     return tab;
   }
 
@@ -370,7 +416,9 @@
       if (next) activate(next.id);
       else {
         state.activeId = null;
-        renderStart();
+        // Closing the last terminal returns to the empty state, not to a form
+        // the user just decided not to use.
+        updateEmpty();
       }
     }
   }
@@ -451,8 +499,23 @@
 
   function wire() {
     elements.newTerminal.addEventListener("click", () => {
-      renderStart();
       showStatus("");
+      renderStart();
+    });
+    elements.emptyStart.addEventListener("click", () => {
+      showStatus("");
+      renderStart();
+    });
+    // The backdrop and Escape dismiss the dialog. A modal that can only be left
+    // through its own buttons is the kind of trap a dialog invites.
+    elements.backdrop.addEventListener("click", () => {
+      hideStart();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !elements.modal.hidden) {
+        event.preventDefault();
+        hideStart();
+      }
     });
     elements.chooseDir.addEventListener("click", () => {
       void invoke("terminal.pickDirectory")
@@ -470,8 +533,7 @@
       state.startProfile = elements.startShell.value;
     });
     elements.startCancel.addEventListener("click", () => {
-      if (state.tabs.length > 0) hideStart();
-      else renderStart();
+      hideStart();
     });
     elements.start.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -535,6 +597,27 @@
     activate(state.activeId);
   }
 
+  /**
+   * Start the first terminal of a fresh view, or explain why it cannot.
+   *
+   * Opening the terminal view is already the user asking for a terminal, so the
+   * shipped behaviour starts one with their settings instead of showing a form
+   * they would have to answer every time. A machine with no supported shell gets
+   * the dialog, because that is where the reason is written down.
+   */
+  async function startFirstTerminal() {
+    if (state.tabs.length > 0) return; // adopting an existing shell drew the page
+    if (!state.defaults.openOnView) {
+      updateEmpty();
+      return;
+    }
+    if (state.profiles.length === 0) {
+      renderStart();
+      return;
+    }
+    await openTerminal({ fromDefaults: true });
+  }
+
   async function bootstrap() {
     if (!bridge?.invoke) {
       showStatus(t("noBridge"));
@@ -547,7 +630,7 @@
       if (!state.startDir || state.workspaceIsDefault) {
         state.startDir = state.workspace?.path || state.home;
         state.workspaceIsDefault = true;
-        if (!elements.start.hidden) renderStart();
+        if (!elements.modal.hidden) renderStart();
       }
     });
 
@@ -564,12 +647,19 @@
     state.profiles = catalog?.profiles ?? [];
     state.home = catalog?.home ?? "";
     state.workspace = workspace && workspace.path ? workspace : null;
-    state.startDir = state.workspace?.path || state.home;
-    state.workspaceIsDefault = true;
-    state.startProfile = state.profiles[0]?.id ?? "";
-    renderStart();
+    state.defaults = {
+      profileId: catalog?.defaults?.profileId ?? null,
+      directory: catalog?.defaults?.directory ?? null,
+      openOnView: catalog?.defaults?.openOnView !== false,
+    };
+    // The dialog opens on the user's configured answer — their directory, or the
+    // project they have open, and their shell — so starting is one keystroke.
+    state.startDir = state.defaults.directory || state.workspace?.path || state.home;
+    state.workspaceIsDefault = !state.defaults.directory;
+    state.startProfile = state.defaults.profileId || state.profiles[0]?.id || "";
     wire();
     adoptRunningTerminals(catalog);
+    await startFirstTerminal();
   }
 
   void bootstrap();

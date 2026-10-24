@@ -21,3 +21,14 @@ test("a hidden element cannot keep its box", () => {
   // `display`; if this stops being true the comment above is wrong.
   assert.match(css, /#start\s*\{[^}]*display:\s*flex/);
 });
+
+test("the start dialog floats over the panes instead of sharing their flow", () => {
+  // A dialog in the page flow resized a running terminal every time it opened,
+  // which is what made the old inline form look broken; it must be an overlay.
+  assert.match(css, /#modal\s*\{[^}]*position:\s*absolute/);
+  assert.doesNotMatch(
+    css,
+    /#start\s*\{[^}]*flex:\s*0 0 auto/,
+    "the form must not claim a share of the page's flex flow",
+  );
+});

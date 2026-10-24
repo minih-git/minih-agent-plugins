@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "minih.terminal",
   "name": "Terminal",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "An embedded terminal: local shells in tabs, opened from the sidebar.",
   "author": "minih-git",
   "categories": [
@@ -36,6 +36,39 @@
         "entry": "view/index.html",
         "placement": "sidebar",
         "order": 0
+      }
+    ],
+    "settings": [
+      {
+        "key": "openOnView",
+        "title": "Open a terminal as soon as the view opens",
+        "description": "Starts a shell with the defaults below instead of showing the New terminal form. Turn this off to always choose first.",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "defaultShell",
+        "title": "Default shell",
+        "description": "Shell a new terminal starts with. Auto uses the first supported shell found on this machine.",
+        "type": "select",
+        "default": "auto",
+        "enum": [
+          { "label": "Auto — first installed shell", "value": "auto" },
+          { "label": "zsh", "value": "zsh" },
+          { "label": "bash", "value": "bash" },
+          { "label": "fish", "value": "fish" },
+          { "label": "sh", "value": "sh" },
+          { "label": "PowerShell 7 (pwsh)", "value": "pwsh" },
+          { "label": "Windows PowerShell", "value": "powershell" },
+          { "label": "Command Prompt (cmd)", "value": "cmd" }
+        ]
+      },
+      {
+        "key": "defaultDirectory",
+        "title": "Default working directory",
+        "description": "Absolute path. Leave empty to start in the open project, or in your home directory when no project is open.",
+        "type": "string",
+        "default": ""
       }
     ]
   },

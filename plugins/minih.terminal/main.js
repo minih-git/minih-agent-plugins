@@ -12,8 +12,19 @@
  * shell history: the registry is memory-only and dies with the process.
  */
 const { TerminalEngine, codedError } = require("./lib/terminal-engine.js");
+const { openRequest, terminalDefaults } = require("./lib/settings.js");
 
 const engine = new TerminalEngine();
+
+/**
+ * What a terminal starts with when the page names no directory or shell.
+ *
+ * The values come from `contributes.settings`, so the user configures "my
+ * default terminal" once in the app's Plugins settings instead of answering the
+ * same two questions on every new tab.
+ * @type {{ profileId: string | null, directory: string | null, openOnView: boolean }}
+ */
+let defaults = terminalDefaults();
 
 /** Channels the page may call. Anything else is refused, not forwarded. */
 const CHANNELS = new Set([
@@ -27,9 +38,31 @@ const CHANNELS = new Set([
   "terminal.pickDirectory",
 ]);
 
+/**
+ * Read the user's settings and keep them for the next terminal.
+ *
+ * A settings read that fails leaves the built-in defaults in place: the plugin
+ * still runs terminals, it just cannot honour a preference this session.
+ */
+async function refreshDefaults() {
+  try {
+    const settings = await globalThis.pi.plugin.getSettings();
+    defaults = terminalDefaults(settings);
+  } catch {
+    defaults = terminalDefaults();
+  }
+  return defaults;
+}
+
 async function onLoad() {
   // Warm the shell catalog so the first page render does not pay for detection.
   engine.profiles();
+  await refreshDefaults();
+  // The generated Plugins settings sheet writes through the host, which then
+  // tells this process; without it a change would only apply after a reload.
+  globalThis.pi.events?.on?.("plugin:settingsChanged", () => {
+    void refreshDefaults();
+  });
 }
 
 /**
@@ -46,9 +79,12 @@ async function onPanelInvoke(channel, payload) {
   }
   switch (name) {
     case "terminal.catalog":
-      return engine.catalog();
+      // One read answers both the start form and the auto-open decision.
+      return { ...engine.catalog(), defaults };
     case "terminal.open":
-      return engine.open(payload ?? {});
+      // The page may name a directory and shell (the dialog), or nothing at all
+      // (auto-open). `openRequest` fills in whatever the user configured.
+      return engine.open(openRequest(payload, defaults));
     case "terminal.read":
       return engine.read(payload ?? {});
     case "terminal.write":
