@@ -7,6 +7,10 @@
   allowlist), ADR `plugin-learned-memory-read` (Accepted, D682)
 - Amended 2026-10-24: remote embedding providers behind an explicit switch
   (§6.1), at the user's request
+- Amended 2026-10-24 (2): the view is redesigned as a 3D star map with a flat
+  chart mode; the visual and interaction rules now live in
+  `docs/design/knowledge-universe-v2.md` (§10). `deployment` is read as
+  `release` (§3)
 
 ## Context
 
@@ -169,9 +173,9 @@ them (§5).
 
 | Legacy `type` | Class |
 |---|---|
-| `architecture`, `note`, `feature`, `project-note`, `source-audit`, `deployment`, `operations` | `topic` |
+| `architecture`, `note`, `feature`, `project-note`, `source-audit`, `operations` | `topic` |
 | `runbook`, `incident-runbook`, `troubleshooting` | `procedure` |
-| `release-record`, `agent-release-record` | `release` |
+| `release-record`, `agent-release-record`, `deployment` | `release` |
 | `architecture-decision` | `decision` |
 | `feature-record` | `record` |
 | `inbox-index` | `index` |
@@ -586,64 +590,26 @@ type GraphPayload = {
 };
 ```
 
-**Rendering.** `3d-force-graph` (MIT, built on three.js and d3-force-3d) is
-bundled by `scripts/build.mjs` with esbuild from pinned dev dependencies into
-`view/vendor/`. Its licenses go into `THIRD_PARTY_NOTICES.md`. The page uses
-`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
-img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'none'`. The
-default view is 3D with a 2D switch (`force-graph`, same API), as the user
-chose.
-
-**Visual encoding.**
-
-| Data | Encoding |
-|---|---|
-| `project` | Gold star with a corona |
-| `topic` | Blue planet |
-| `environment` | Cyan space station (ring) |
-| `organization` | Magenta nebula sprite |
-| `technology` | Grey-blue asteroid |
-| `reference` | Pink planet |
-| `convention` | White dwarf |
-| `procedure` | Cyan comet with a short tail |
-| `decision`, `release`, `incident`, `record` | Small moons orbiting their `project`: violet, green, orange-red with a pulse, dark grey |
-| Navigation classes | Faint markers, hidden by default |
-| Memory (P4) | Glints orbiting their project star: preference amber, feedback coral, fact teal, reference lavender. User-scope memories orbit a synthetic center node, "Me" |
-| Size | `r = 2 + 2.2 × log2(1 + degree)`, capped at 14 |
-| Freshness | Glow `clamp(1 − ageDays / 365, 0.25, 1)` from `updated`; a stale note dims and gets a dashed ring |
-| Galaxies | A custom force pulls nodes toward their project centroid (strength 0.05); project stars repel more (charge −120 versus −30); notes with no project float in a shared halo |
-| Typed links | Colored by predicate, width 1.2, two directional particles |
-| Weak links | Opacity 0.06, width 0.3 |
-| Ghosts and archived notes | Hollow ghosts and distant dust; hidden by default |
-
-The background is a deep-space gradient with three parallax star sprite
-layers (seeded, stable across sessions) and faint per-galaxy nebulae. The
-bloom look comes from multi-layer additive-blended glow shells around each
-body rather than an UnrealBloom post-processing pass: the vendored
-`3d-force-graph` bundle ships no composer, and shell glow keeps the canvas
-transparent so the star field shows through. The glow layers switch off
-above 2,000 nodes and under `prefers-reduced-motion`. The universe is
-always dark; overlays use dark glass with the host's font.
-
-**Interaction.**
-
-- Hover: highlight the 1-hop neighborhood and dim the rest; a card shows
-  title, class, status, `updated`, and `verified`.
-- Click: the camera eases to the node; a drawer shows properties, relations
-  grouped by predicate, backlinks, issues, the outline, the body preview, and
-  "Copy Obsidian link".
-- Double-click: focus mode keeps only the 2-hop subgraph.
-- Search (`/` focuses it): fuzzy match on title and aliases; Enter flies to
-  the node.
-- Filters: class, project, stability, stale only; toggles for events, weak
-  links, ghosts, archived notes, and memory.
-- Time-lapse: a slider and play button reveal nodes in `created` order.
-- Health mode: radius by characters, issue colors, and a DOM table of every
-  issue. The table doubles as the accessible text alternative to the canvas.
-- `prefers-reduced-motion` stops rotation, particles, and pulses. Rendering
-  pauses while `document.hidden`. Bloom and particles turn off above 2,000
-  nodes.
-- Every string has `en` and `zh-CN` text, selected by the host locale.
+**Rendering, visual encoding, and interaction (amended 2026-10-24).** The
+first version rendered a free force-directed 3D graph with glow, a dense
+control surface, and 974 lines, most of them invisible. The user reviewed it
+and chose a redesign: a 3D star map on a deep-blue night sky. It keeps a star
+chart's structure (labeled galaxies, readable lines) and adds depth, galaxy
+nebulae, bloom, and slow motion. It uses a fixed, deterministic layout, one
+color family per galaxy, and event moons folded into a ring until the user
+enters a galaxy. The flat star chart is a reading mode and the fallback when
+WebGL is unavailable. The authoritative specification is
+`docs/design/knowledge-universe-v2.md`, with mockups of both modes in
+`docs/design/`. The layout is computed by a pure module, `lib/layout.mjs`,
+and shipped in the graph payload, so both modes and the tests use the same
+positions. Rendering code (`3d-force-graph` for the 3D view, with `three`,
+`UnrealBloomPass`, `OutputPass`, and `CSS2DRenderer` from one copy of
+`three`; `force-graph` for the chart) stays bundled by `scripts/build.mjs`
+with esbuild from pinned dev dependencies into `view/vendor/`, with licenses
+in `THIRD_PARTY_NOTICES.md`. The page keeps the CSP `default-src 'self';
+script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:
+blob:; worker-src 'self' blob:; connect-src 'none'` and every string in `en`
+and `zh-CN`.
 
 "Open in Obsidian" is not offered: ADR 0168 refuses `obsidian://`, and
 changing that boundary is outside this ADR.
