@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "minih.personal-knowledge",
   "name": "Personal Knowledge",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Use a local Obsidian vault as verified, time-aware long-term context: scoped retrieval, guarded write-back, and project routing.",
   "author": "minih-git",
   "license": "MIT",
@@ -11,15 +11,15 @@
     "en": {
       "name": "Personal Knowledge",
       "description": "Use a local Obsidian vault as verified, time-aware long-term context: scoped retrieval, guarded write-back, and project routing.",
-      "safetyNotes": "Spawns a local Node MCP process that reads and writes inside the Obsidian vault you configure (default ~/Documents/Knowledge). Writes are guarded: dry-run by default, updates require the note's current SHA-256, likely credentials are rejected, changes are written atomically and backed up. Nothing leaves the machine. Configure the vault path and a private mapping file in the plugin settings."
+      "safetyNotes": "Spawns a local Node MCP process that reads and writes inside your Obsidian vault (default ~/Documents/Knowledge; override with the vaultPath key in your repo-map or the PERSONAL_KNOWLEDGE_VAULT variable). Writes are guarded: dry-run by default, updates require the note's current SHA-256, likely credentials are rejected, changes are written atomically and backed up. Nothing leaves the machine."
     },
     "zh-CN": {
       "name": "Personal Knowledge",
       "description": "把本地 Obsidian 知识库当作经过校验、带时效的长期上下文：按仓库与主题加载、检索、读取带哈希保护的笔记并安全回写。",
-      "safetyNotes": "会启动一个本地 Node MCP 进程，只在你配置的 Obsidian 知识库（默认 ~/Documents/Knowledge）内读写。写入有防护：默认 dry-run，更新需要笔记当前 SHA-256，拒绝疑似凭据，原子写入并自动备份。数据不出本机。请在插件设置里配置库路径与私有映射文件。"
+      "safetyNotes": "会启动一个本地 Node MCP 进程，只在你的 Obsidian 知识库（默认 ~/Documents/Knowledge，可用 repo-map 的 vaultPath 键或 PERSONAL_KNOWLEDGE_VAULT 覆盖）内读写。写入有防护：默认 dry-run，更新需要笔记当前 SHA-256，拒绝疑似凭据，原子写入并自动备份。数据不出本机。"
     }
   },
-  "safetyNotes": "Spawns a local Node MCP process that reads and writes inside the Obsidian vault you configure (default ~/Documents/Knowledge). Writes are guarded: dry-run by default, updates require the note's current SHA-256, likely credentials are rejected, changes are written atomically and backed up. Nothing leaves the machine. Configure the vault path and a private mapping file in the plugin settings.",
+  "safetyNotes": "Spawns a local Node MCP process that reads and writes inside your Obsidian vault (default ~/Documents/Knowledge; override with the vaultPath key in your repo-map or the PERSONAL_KNOWLEDGE_VAULT variable). Writes are guarded: dry-run by default, updates require the note's current SHA-256, likely credentials are rejected, changes are written atomically and backed up. Nothing leaves the machine.",
   "main": "main.js",
   "contributes": {
     "skills": [
@@ -41,43 +41,7 @@
         "id": "personal-knowledge",
         "transport": "stdio",
         "command": "node",
-        "args": [
-          "mcp/server.mjs"
-        ],
-        "env": {
-          "PERSONAL_KNOWLEDGE_VAULT": {
-            "setting": "vaultPath"
-          },
-          "PERSONAL_KNOWLEDGE_CONFIG": {
-            "setting": "configPath"
-          },
-          "PERSONAL_KNOWLEDGE_READ_ONLY": {
-            "setting": "readOnly"
-          }
-        }
-      }
-    ],
-    "settings": [
-      {
-        "key": "vaultPath",
-        "title": "知识库路径（Vault path）",
-        "description": "Obsidian vault 的绝对路径，默认 ~/Documents/Knowledge。留空使用默认值。",
-        "type": "string",
-        "default": ""
-      },
-      {
-        "key": "configPath",
-        "title": "私有映射文件（Mapping file）",
-        "description": "repo-map 配置的绝对路径：项目路由、主题路由、默认笔记。留空则使用插件自带的空模板，即不做项目路由。",
-        "type": "string",
-        "default": ""
-      },
-      {
-        "key": "readOnly",
-        "title": "只读模式（Read-only）",
-        "description": "开启后 MCP 只读不写：knowledge_write 的 dry-run 仍可用，真实写入会被拒绝。",
-        "type": "boolean",
-        "default": false
+        "args": ["mcp/server.mjs"]
       }
     ]
   },

@@ -4,8 +4,8 @@
   "catalog_id": null,
   "name": "Minih-Agent-Desktop Plugins",
   "homepage": "https://github.com/minih-git/minih-agent-plugins",
-  "updated_at": "2026-10-24T04:40:29Z",
-  "generated_at": "2026-10-24T04:40:29Z",
+  "updated_at": "2026-10-24T07:12:19Z",
+  "generated_at": "2026-10-24T07:12:19Z",
   "policy_version": null,
   "artifact_base_url": "https://raw.githubusercontent.com/minih-git/minih-agent-plugins/main",
   "plugins": [
@@ -155,26 +155,26 @@
       "publisher_id": "minih-git",
       "homepage": null,
       "repository": "https://github.com/minih-git/minih-agent-plugins",
-      "safety_notes": "Spawns a local Node MCP process that reads and writes inside the Obsidian vault you configure (default ~/Documents/Knowledge). Writes are guarded: dry-run by default, updates require the note's current SHA-256, likely credentials are rejected, changes are written atomically and backed up. Nothing leaves the machine. Configure the vault path and a private mapping file in the plugin settings.",
+      "safety_notes": "Spawns a local Node MCP process that reads and writes inside your Obsidian vault (default ~/Documents/Knowledge; override with the vaultPath key in your repo-map or the PERSONAL_KNOWLEDGE_VAULT variable). Writes are guarded: dry-run by default, updates require the note's current SHA-256, likely credentials are rejected, changes are written atomically and backed up. Nothing leaves the machine.",
       "i18n": {
         "en": {
           "name": "Personal Knowledge",
           "description": "Use a local Obsidian vault as verified, time-aware long-term context: scoped retrieval, guarded write-back, and project routing.",
-          "safetyNotes": "Spawns a local Node MCP process that reads and writes inside the Obsidian vault you configure (default ~/Documents/Knowledge). Writes are guarded: dry-run by default, updates require the note's current SHA-256, likely credentials are rejected, changes are written atomically and backed up. Nothing leaves the machine. Configure the vault path and a private mapping file in the plugin settings."
+          "safetyNotes": "Spawns a local Node MCP process that reads and writes inside your Obsidian vault (default ~/Documents/Knowledge; override with the vaultPath key in your repo-map or the PERSONAL_KNOWLEDGE_VAULT variable). Writes are guarded: dry-run by default, updates require the note's current SHA-256, likely credentials are rejected, changes are written atomically and backed up. Nothing leaves the machine."
         },
         "zh-CN": {
           "name": "Personal Knowledge",
           "description": "把本地 Obsidian 知识库当作经过校验、带时效的长期上下文：按仓库与主题加载、检索、读取带哈希保护的笔记并安全回写。",
-          "safetyNotes": "会启动一个本地 Node MCP 进程，只在你配置的 Obsidian 知识库（默认 ~/Documents/Knowledge）内读写。写入有防护：默认 dry-run，更新需要笔记当前 SHA-256，拒绝疑似凭据，原子写入并自动备份。数据不出本机。请在插件设置里配置库路径与私有映射文件。"
+          "safetyNotes": "会启动一个本地 Node MCP 进程，只在你的 Obsidian 知识库（默认 ~/Documents/Knowledge，可用 repo-map 的 vaultPath 键或 PERSONAL_KNOWLEDGE_VAULT 覆盖）内读写。写入有防护：默认 dry-run，更新需要笔记当前 SHA-256，拒绝疑似凭据，原子写入并自动备份。数据不出本机。"
         }
       },
       "versions": [
         {
-          "version": "0.1.1",
-          "publishedAt": "2026-10-24T04:40:29Z",
-          "shasum": "31be0112693a77146844165893a474fcd2ff0dcf1b07965bb7d70bfc53e7a489",
-          "url": "packages/minih.personal-knowledge-0.1.1.piplug",
-          "sizeBytes": 75467,
+          "version": "0.1.2",
+          "publishedAt": "2026-10-24T07:12:19Z",
+          "shasum": "6498699e6151e37564376e469a19454e217fe2eeedc787815765f9c0c8bdc16a",
+          "url": "packages/minih.personal-knowledge-0.1.2.piplug",
+          "sizeBytes": 74994,
           "permissions": [
             "agent.prompt.inject",
             "mcp.server.local"

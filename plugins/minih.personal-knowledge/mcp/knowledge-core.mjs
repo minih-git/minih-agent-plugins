@@ -582,21 +582,30 @@ export class KnowledgeService {
 }
 
 export async function loadConfig(pluginRoot) {
-  // The bundled repo-map is a template; personal mappings live outside the
-  // plugin so an install can be shared without leaking paths or notes.
+  // Resolution order: explicit PERSONAL_KNOWLEDGE_CONFIG, then the per-user
+  // convention file, then the bundled template. The bundled repo-map is a
+  // template so an install can be shared without leaking paths or notes.
   const override = process.env.PERSONAL_KNOWLEDGE_CONFIG;
-  const configPath = override
-    ? path.resolve(override)
-    : path.join(pluginRoot, "config", "repo-map.json");
-  try {
-    return JSON.parse(await readFile(configPath, "utf8"));
-  } catch (error) {
-    if (error?.code === "ENOENT" && !override) {
-      // Template config absent or removed: run with no routes and no defaults.
-      return {};
+  const candidates = override
+    ? [path.resolve(override)]
+    : [
+        path.join(os.homedir(), ".personal-knowledge", "repo-map.json"),
+        path.join(pluginRoot, "config", "repo-map.json"),
+      ];
+  for (const configPath of candidates) {
+    let raw;
+    try {
+      raw = await readFile(configPath, "utf8");
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      continue;
     }
-    throw error;
+    return JSON.parse(raw);
   }
+  if (override) {
+    throw new Error(`PERSONAL_KNOWLEDGE_CONFIG file not found: ${path.resolve(override)}`);
+  }
+  return {};
 }
 
 async function pruneBackups(root, config, now) {
@@ -626,10 +635,17 @@ async function pruneBackups(root, config, now) {
 
 export async function createKnowledgeService({
   pluginRoot,
-  vaultPath = process.env.PERSONAL_KNOWLEDGE_VAULT || path.join(os.homedir(), "Documents", "Knowledge"),
+  vaultPath,
   config,
   now,
 } = {}) {
   const resolvedConfig = config ?? (pluginRoot ? await loadConfig(pluginRoot) : {});
-  return new KnowledgeService({ vaultPath, config: resolvedConfig, now }).initialize();
+  // Vault resolution: explicit argument, then PERSONAL_KNOWLEDGE_VAULT, then
+  // the config file's own "vaultPath" key, then the default location.
+  const resolvedVault =
+    vaultPath ??
+    process.env.PERSONAL_KNOWLEDGE_VAULT ??
+    resolvedConfig.vaultPath ??
+    path.join(os.homedir(), "Documents", "Knowledge");
+  return new KnowledgeService({ vaultPath: resolvedVault, config: resolvedConfig, now }).initialize();
 }

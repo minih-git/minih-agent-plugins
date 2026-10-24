@@ -1,5 +1,5 @@
 {
-  "$comment": "Personal mapping for the Personal Knowledge plugin. This file ships as a template: copy it to a private location, fill in your own vault paths, and point PERSONAL_KNOWLEDGE_CONFIG at it. Paths are vault-relative except repoPrefixes, which are absolute filesystem prefixes.",
+  "$comment": "Personal mapping for the Personal Knowledge plugin. Drop this file at ~/.personal-knowledge/repo-map.json and the plugin picks it up automatically (no settings needed); or point PERSONAL_KNOWLEDGE_CONFIG at any path. Optional top-level keys: vaultPath (absolute path to a non-default Obsidian vault), defaultNotes, projects, topicRoutes, ignoreFolders, backupRetentionDays. Paths are vault-relative except repoPrefixes, which are absolute filesystem prefixes.",
   "defaultNotes": [],
   "projects": [
     {
