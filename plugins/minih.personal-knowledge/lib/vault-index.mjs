@@ -126,6 +126,11 @@ export class VaultIndex {
     this.#derive();
   }
 
+  /** Monotonic counter; consumers (BM25 cache) key their own caches on it. */
+  get version() {
+    return this.versionCounter ?? 0;
+  }
+
   async #readOne(relative, preloadedInfo = null) {
     const absolute = path.join(this.root, ...relative.split("/"));
     let info = preloadedInfo;
@@ -166,6 +171,7 @@ export class VaultIndex {
   }
 
   #derive() {
+    this.versionCounter = (this.versionCounter ?? 0) + 1;
     this.basenames = new Map();
     for (const relative of this.notes.keys()) {
       const base = path.posix.basename(relative);

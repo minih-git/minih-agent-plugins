@@ -14,11 +14,15 @@ import {
 import os from "node:os";
 import path from "node:path";
 
+import { BM25, chunkTermFrequencies } from "../lib/bm25.mjs";
+import { EmbeddingClient, embeddingOptions } from "../lib/embeddings.mjs";
 import { composeNote, parseFrontmatter, patchFrontmatterSource } from "../lib/frontmatter.mjs";
 import { loadOntology } from "../lib/ontology.mjs";
-import { findSensitiveContent, redactSensitiveContent, redactionViolation } from "../lib/redact.mjs";
+import { redactSensitiveContent, findSensitiveContent, redactionViolation } from "../lib/redact.mjs";
+import { expandWithGraph, reciprocalRankFusion, rerank, retrievalState } from "../lib/retrieval.mjs";
 import { appendToSectionSpan, locateSection, replaceSectionSpan } from "../lib/sections.mjs";
 import { VaultIndex } from "../lib/vault-index.mjs";
+import { VectorIndex } from "../lib/vector-index.mjs";
 
 const SEARCH_EXTENSIONS = new Set([".md", ".base"]);
 const WRITE_EXTENSION = ".md";
@@ -140,7 +144,37 @@ export class KnowledgeService {
     if (!this.ontology && this.pluginRoot) {
       this.ontology = await loadOntology({ pluginRoot: this.pluginRoot, index: this.index });
     }
+    // Hybrid retrieval (ADR 0001 §6): a loopback-only embedding client and the
+    // vector index under ~/.personal-knowledge/index/<sha1(vault)>/.
+    const embedding = embeddingOptions(this.config);
+    this.embedding = new EmbeddingClient({ ...embedding, now: this.now });
+    const dirName = createHash("sha1").update(this.rootRealpath).digest("hex");
+    this.indexDirectory =
+      process.env.PERSONAL_KNOWLEDGE_INDEX_DIR ??
+      path.join(os.homedir(), ".personal-knowledge", "index", dirName);
+    this.vectors = new VectorIndex(this.indexDirectory);
+    await mkdir(this.indexDirectory, { recursive: true });
+    this.vectorMeta = null;
+    this.pendingChunkCount = 0;
+    this.vectorReason = null;
+    this.backgroundRefreshed = false;
+    if (embedding.enabled) {
+      const loaded = await this.vectors.load({ model: this.embedding.model, dims: this.#vectorDims() });
+      this.vectorMeta = this.vectors.meta;
+      if (!loaded && this.vectors.meta && this.vectors.meta.model !== this.embedding.model) {
+        // A different model invalidates the index; rebuild below.
+        this.vectors.chunks = [];
+        this.vectors.vectors = null;
+      }
+      // Refresh changed chunks in the background; a tool call spends at most
+      // 3 seconds waiting for it before answering (§6).
+      this.ensureVectors({ budgetMs: 3000 }).catch(() => {});
+    }
     return this;
+  }
+
+  #vectorDims() {
+    return this.vectors.meta?.dims ?? 1024;
   }
 
   async root() {
@@ -236,9 +270,273 @@ export class KnowledgeService {
     return result;
   }
 
-  async search({ query, scope, mode = "all", limit } = {}) {
-    const terms = splitTerms(query);
-    if (!new Set(["all", "any"]).has(mode)) throw new Error('mode must be "all" or "any".');
+  /** BM25 chunk docs for the current index generation, cached per version. */
+  #bm25For() {
+    if (this.bm25Cache && this.bm25CacheVersion === this.index.version) return this.bm25Cache;
+    const docs = [];
+    for (const relative of this.index.paths()) {
+      const record = this.index.note(relative);
+      if (!record || !relative.endsWith(".md")) continue;
+      for (let i = 0; i < record.chunks.length; i += 1) {
+        const chunk = record.chunks[i];
+        docs.push({
+          id: `${relative}#${i}`,
+          path: relative,
+          chunkIndex: i,
+          frequencies: chunkTermFrequencies({
+            title: record.title,
+            aliases: record.aliases,
+            path: relative,
+            headingPath: chunk.headingPath,
+            body: record.chunkTexts[i],
+          }),
+          length: record.chunkTexts[i].length,
+        });
+      }
+    }
+    this.bm25Cache = new BM25(docs);
+    this.bm25CacheVersion = this.index.version;
+    return this.bm25Cache;
+  }
+
+  /**
+   * Embed chunks whose text changed. Chunks are embedded from redacted text.
+   * Stops when `budgetMs` elapses and reports the rest as pending. Only the
+   * `.lock` holder writes; a loser leaves the index as it is. Public because
+   * `scripts/build-index.mjs` drives a full rebuild through it. Concurrent
+   * callers share one in-flight run instead of racing each other.
+   */
+  async ensureVectors(options = {}) {
+    if (this.ensureVectorsPromise) return this.ensureVectorsPromise;
+    this.ensureVectorsPromise = this.#ensureVectors(options).finally(() => {
+      this.ensureVectorsPromise = null;
+    });
+    return this.ensureVectorsPromise;
+  }
+
+  async #ensureVectors({ budgetMs = 3000, force = false } = {}) {
+    if (!this.embedding?.enabled) return;
+    const deadline = this.now().getTime() + budgetMs;
+    const bySha = new Map((this.vectors.chunks ?? []).map((row) => [row.sha, row]));
+    const all = [];
+    const missing = [];
+    for (const relative of this.index.paths()) {
+      if (!relative.endsWith(".md")) continue;
+      const record = this.index.note(relative);
+      if (!record) continue;
+      for (let i = 0; i < record.chunks.length; i += 1) {
+        const chunk = record.chunks[i];
+        const row = { path: relative, headingPath: chunk.headingPath, start: chunk.start, end: chunk.end, sha: chunk.sha };
+        all.push(row);
+        if (force || !bySha.has(chunk.sha)) missing.push({ row, text: redactSensitiveContent(record.chunkTexts[i]) });
+      }
+    }
+    this.pendingChunkCount = missing.length;
+    if (missing.length === 0) {
+      this.vectorReason = null;
+      return;
+    }
+
+    let dims = this.vectors.meta?.dims ?? null;
+    const vectorMap = new Map();
+    if (this.vectors.vectors) {
+      const stored = this.vectors.chunks;
+      for (let row = 0; row < stored.length; row += 1) {
+        vectorMap.set(stored[row].sha, this.vectors.vectors.subarray(row * dims, (row + 1) * dims));
+      }
+    }
+    try {
+      await this.embedding.probe();
+    } catch (error) {
+      this.vectorReason = error.code ?? "OLLAMA_UNREACHABLE";
+      return;
+    }
+    let embeddedNew = false;
+    for (const item of missing) {
+      if (this.now().getTime() > deadline) break;
+      try {
+        const [vector] = await this.embedding.embed([item.text]);
+        if (!dims) dims = vector.length;
+        vectorMap.set(item.row.sha, vector);
+        embeddedNew = true;
+      } catch (error) {
+        this.vectorReason = error.code ?? "EMBED_FAILED";
+        return;
+      }
+    }
+    if (!embeddedNew) return;
+    this.pendingChunkCount = missing.filter((item) => !vectorMap.has(item.row.sha)).length;
+
+    const rows = [];
+    const vectors = [];
+    for (const row of all) {
+      const vector = vectorMap.get(row.sha);
+      if (!vector) continue;
+      rows.push(row);
+      vectors.push(vector);
+    }
+    if (!dims) return;
+    const flat = new Float32Array(rows.length * dims);
+    vectors.forEach((vector, i) => flat.set(vector, i * dims));
+    const saved = await this.vectors.save({ rows, vectors: flat, model: this.embedding.model, dims });
+    if (saved) {
+      this.vectorMeta = this.vectors.meta;
+      this.vectorReason = this.pendingChunkCount > 0 ? "pending" : null;
+    }
+  }
+
+  /** Typed neighbors for graph expansion: project / depends_on / resolved_by. */
+  #typedNeighbors(relative) {
+    const record = this.index.note(relative);
+    if (!record) return [];
+    const neighbors = [];
+    for (const predicate of ["project", "depends_on", "resolved_by"]) {
+      const value = record.metadata[predicate];
+      const links = Array.isArray(value) ? value : value ? [value] : [];
+      for (const link of links) {
+        const match = /\[\[([^\][#|]+)/.exec(String(link));
+        if (!match) continue;
+        const resolved = this.index.resolveTarget(match[1].trim());
+        if (resolved && resolved !== relative && !neighbors.includes(resolved)) neighbors.push(resolved);
+      }
+    }
+    // Reverse project edges: notes that call this note their project.
+    for (const other of this.index.paths()) {
+      const candidate = this.index.note(other);
+      if (!candidate || other === relative) continue;
+      const value = candidate.metadata.project;
+      const links = Array.isArray(value) ? value : value ? [value] : [];
+      for (const link of links) {
+        const match = /\[\[([^\][#|]+)/.exec(String(link));
+        if (!match) continue;
+        if (this.index.resolveTarget(match[1].trim()) === relative && !neighbors.includes(other)) neighbors.push(other);
+        break;
+      }
+    }
+    return neighbors;
+  }
+
+  async #searchRanked({ query, limit, scope }) {
+    await this.index.refresh();
+    const budget = this.embedding?.enabled && !this.backgroundRefreshed ? 3000 : 0;
+    if (budget > 0) {
+      await this.ensureVectors({ budgetMs: budget });
+      this.backgroundRefreshed = true;
+    }
+    const inScope = (relative) =>
+      !scope || relative === scope || relative.startsWith(`${scope}/`);
+
+    // Lexical channel: chunk-level BM25F grouped by note.
+    const bm25 = this.#bm25For();
+    const lexicalHits = bm25.search(query, 50).filter(([doc]) => inScope(doc.path));
+    const lexicalByNote = new Map();
+    for (const [doc, score] of lexicalHits) {
+      const entry = lexicalByNote.get(doc.path) ?? { best: null, score: 0 };
+      if (!entry.best || score > entry.score) {
+        entry.best = doc;
+        entry.score = score;
+      }
+      lexicalByNote.set(doc.path, entry);
+    }
+
+    // Vector channel.
+    let vectorByNote = new Map();
+    let reason = this.embedding?.enabled ? this.vectorReason ?? null : null;
+    if (this.embedding?.enabled && !this.embedding.recentlyUnreachable()) {
+      try {
+        const [queryVector] = await Promise.race([
+          this.embedding.embed([redactSensitiveContent(query)]),
+          new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error("EMBED_FAILED: query embed timed out"), { code: "EMBED_FAILED" })), 3000)),
+        ]);
+        const hits = this.vectors.search(queryVector, { limit: 50 }).filter(({ chunk }) => inScope(chunk.path));
+        for (const { chunk, score } of hits) {
+          const entry = vectorByNote.get(chunk.path) ?? { best: null, score: 0 };
+          if (!entry.best || score > entry.score) {
+            entry.best = chunk;
+            entry.score = score;
+          }
+          vectorByNote.set(chunk.path, entry);
+        }
+        reason = this.pendingChunkCount > 0 ? "pending" : null;
+      } catch (error) {
+        reason = error.code ?? "EMBED_FAILED";
+        vectorByNote = new Map();
+      }
+    }
+
+    const fused = reciprocalRankFusion([
+      [...lexicalByNote.keys()],
+      [...vectorByNote.keys()],
+    ]);
+    const expanded = expandWithGraph(fused, (key) => this.#typedNeighbors(key));
+    const ranked = rerank(expanded, {
+      archived: (key) => {
+        const record = this.index.note(key);
+        return record?.metadata?.status === "archived" || key.startsWith("04 Archive/");
+      },
+      stale: (key) => {
+        const record = this.index.note(key);
+        if (!record) return false;
+        const interval = record.metadata.review_interval;
+        const verified = record.metadata.verified;
+        if (!interval || interval === "none" || typeof verified !== "string") return false;
+        const threshold = interval === "monthly" ? 30 : interval === "quarterly" ? 90 : null;
+        if (threshold === null) return false;
+        const age = Math.floor((this.now().getTime() - Date.parse(`${verified}T00:00:00Z`)) / 86_400_000);
+        return !Number.isNaN(age) && age > threshold;
+      },
+    });
+
+    const results = [];
+    for (const [relative] of ranked) {
+      const record = this.index.note(relative);
+      if (!record) continue;
+      const lexicalEntry = lexicalByNote.get(relative);
+      const vectorEntry = vectorByNote.get(relative);
+      const bestDoc = lexicalEntry?.best ?? null;
+      const bestChunk = bestDoc
+        ? record.chunks[bestDoc.chunkIndex]
+        : vectorEntry?.best ?? record.chunks[0] ?? null;
+      const chunkText = bestChunk ? record.raw.slice(bestChunk.start, bestChunk.end) : record.raw;
+      const matchedBy = [];
+      if (lexicalEntry) matchedBy.push("lexical");
+      if (vectorEntry) matchedBy.push("vector");
+      if (!lexicalEntry && !vectorEntry) matchedBy.push("graph");
+      results.push({
+        path: relative,
+        title: record.title,
+        type: record.metadata.type ?? null,
+        status: record.metadata.status ?? null,
+        updated: record.metadata.updated ?? null,
+        verified: record.metadata.verified ?? null,
+        score: Number((fused.find(([key]) => key === relative)?.[1] ?? 0).toFixed(6)),
+        matchedBy,
+        section: bestChunk?.headingPath?.length ? bestChunk.headingPath.join(" > ") : null,
+        snippet: snippetFor(chunkText, splitTerms(query), 280),
+      });
+      if (results.length >= limit) break;
+    }
+
+    const pendingChunks = this.pendingChunkCount;
+    return {
+      query,
+      mode: "ranked",
+      count: results.length,
+      results,
+      retrieval: retrievalState({
+        enabled: this.embedding?.enabled ?? false,
+        vectorReady: Boolean(this.vectors.vectors),
+        reason: reason && reason !== "pending" ? reason : null,
+        pendingChunks,
+      }),
+    };
+  }
+
+  async search({ query, scope, mode, limit } = {}) {
+    let normalizedMode = mode ?? "ranked";
+    if (!new Set(["ranked", "all", "any"]).has(normalizedMode)) {
+      throw new Error('mode must be "ranked", "all", or "any".');
+    }
     const resultLimit = boundedInteger(limit, 20, 1, 100, "limit");
     let normalizedScope = null;
     if (scope !== undefined) {
@@ -248,7 +546,11 @@ export class KnowledgeService {
       }
       normalizedScope = path.posix.normalize(rawScope).replace(/^\.\//, "").replace(/\/$/, "");
     }
+    if (normalizedMode === "ranked") {
+      return this.#searchRanked({ query, limit: resultLimit, scope: normalizedScope });
+    }
 
+    const terms = splitTerms(query);
     await this.index.refresh();
     const results = [];
     for (const relative of this.index.paths()) {
@@ -281,7 +583,7 @@ export class KnowledgeService {
       });
     }
     results.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path, "zh-CN"));
-    return { query, mode, count: Math.min(results.length, resultLimit), results: results.slice(0, resultLimit) };
+    return { query, mode: normalizedMode, count: Math.min(results.length, resultLimit), results: results.slice(0, resultLimit) };
   }
 
   /**

@@ -83,6 +83,7 @@ type: note
   const config = {
     ignoreFolders: [],
     backupRetentionDays: 0,
+    embedding: { enabled: false },
   };
   const service = await new KnowledgeService({ vaultPath: vault, config, now: fixedNow }).initialize();
   return { root, vault, service };

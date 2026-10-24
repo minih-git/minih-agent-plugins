@@ -72,7 +72,7 @@ Something broke.
     await write("08 Standards/知识本体.md", `---\ntitle: 知识本体\ntype: convention\n---\n\n\`\`\`yaml\n${ontologyNote}\n\`\`\`\n`);
   }
 
-  const config = { ignoreFolders: [], backupRetentionDays: 0 };
+  const config = { ignoreFolders: [], backupRetentionDays: 0, embedding: { enabled: false } };
   const service = await new KnowledgeService({
     vaultPath: vault,
     config,
@@ -159,7 +159,7 @@ test("migration plan lists alias rewrites, base filters, and review items; appli
   const pluginRoot = PLUGIN_ROOT;
   const outDir = await mkdtemp(path.join(os.tmpdir(), "personal-knowledge-plan-"));
   const emptyConfig = path.join(outDir, "repo-map.json");
-  await writeFile(emptyConfig, "{}\n");
+  await writeFile(emptyConfig, '{"embedding": {"enabled": false}}\n');
   const env = {
     ...process.env,
     PERSONAL_KNOWLEDGE_VAULT: vault,

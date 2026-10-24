@@ -53,7 +53,12 @@ const TOOL_DEFINITIONS = [
       properties: {
         query: { type: "string", minLength: 1 },
         scope: { type: "string", description: "Optional vault-relative folder scope." },
-        mode: { type: "string", enum: ["all", "any"], default: "all" },
+        mode: {
+          type: "string",
+          enum: ["ranked", "all", "any"],
+          default: "ranked",
+          description: "ranked fuses BM25F, local vectors, and the link graph (default); all/any keep exact literal matching.",
+        },
         limit: { type: "integer", minimum: 1, maximum: 100 },
       },
       required: ["query"],
