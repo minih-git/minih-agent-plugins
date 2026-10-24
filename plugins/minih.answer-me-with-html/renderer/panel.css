@@ -1,10 +1,10 @@
 /*
  * Answer me with HTML — panel styles.
  *
- * The host owns exactly the 46px drag band and the window-control capsule, and
- * offsets normal-flow content below it; the toolbar is sticky and anchored at
- * --pi-plugin-titlebar-height instead of top: 0. Colours follow the system
- * appearance, because the host exposes no theme variables to a panel.
+ * The host owns the transparent 46px drag band and window-control capsule.
+ * This v2 page owns the spacing and opaque surface beneath that band; its
+ * sticky toolbar is anchored at --pi-plugin-titlebar-height. Colours follow
+ * the system appearance because the host exposes no theme variables.
  */
 
 :root {
@@ -53,6 +53,17 @@ body {
   background: var(--bg);
   color: var(--text);
   font: 13px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+/* Padding scrolls away; keep the transparent host drag band backed by a surface. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: var(--pi-plugin-titlebar-height, 46px);
+  z-index: 6;
+  background: var(--bg);
+  pointer-events: none;
 }
 
 .toolbar {

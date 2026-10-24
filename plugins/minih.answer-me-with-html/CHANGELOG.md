@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Fix summary cards and page rows showing through the transparent top drag band
+  when the panel scrolls. A fixed, theme-aware surface now covers that band
+  without intercepting the host window controls or changing the toolbar offset.
+- Add regression coverage for the titlebar surface, stacking and host-controlled
+  spacing.
+
 ## 0.1.3 — 2026-10-21
 
 接上宿主新增的 `pi.browser.openInPanel`（Desktop ADR 0335）：「打开页面」现在能真正把页面放进工作面板的浏览视图，不再依赖浏览面板是否正被显示。
