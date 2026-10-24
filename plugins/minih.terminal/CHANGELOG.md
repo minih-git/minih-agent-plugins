@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.4
+
+- Pasting with Cmd+V inserted the text twice. The page answered the keystroke and
+  the app's Edit menu pasted it as well, so the shell received both. The page now
+  leaves Cmd+V to the Edit menu and pastes only on Ctrl+Shift+V and from the
+  right-click menu.
+- Focus returns to the shell after the dialog or the menu closes, so Cmd+V has
+  somewhere to land instead of a button that just handled a click.
+
 ## 0.1.3
 
 - Copy and paste work on macOS again. The app's Edit menu owns Cmd+C / Cmd+V and

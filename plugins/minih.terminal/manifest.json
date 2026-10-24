@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "minih.terminal",
   "name": "Terminal",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "An embedded terminal: local shells in tabs, opened from the sidebar.",
   "author": "minih-git",
   "categories": [
@@ -17,9 +17,9 @@
       "safetyNotes": "Runs real local shells (zsh/bash/sh, PowerShell, or cmd) with your own user privileges, so anything typed here can change this machine. Working directories are not sandboxes, and the terminal is not restricted to the open project. Terminal input and output stay in this plugin's memory: nothing is logged, uploaded, or attached to a chat."
     },
     "zh-CN": {
-      "name": "终端",
-      "description": "内嵌终端：以标签页运行本机 shell，从左侧边栏打开。",
-      "safetyNotes": "以你本人的用户权限运行真实的本机 shell（zsh/bash/sh、PowerShell 或 cmd），在此输入的任何命令都可能改动这台机器。工作目录不是沙箱，终端也不限于当前项目。终端的输入与输出只保存在本插件内存中：不记录日志、不上传、不写入会话。"
+      "name": "\u7ec8\u7aef",
+      "description": "\u5185\u5d4c\u7ec8\u7aef\uff1a\u4ee5\u6807\u7b7e\u9875\u8fd0\u884c\u672c\u673a shell\uff0c\u4ece\u5de6\u4fa7\u8fb9\u680f\u6253\u5f00\u3002",
+      "safetyNotes": "\u4ee5\u4f60\u672c\u4eba\u7684\u7528\u6237\u6743\u9650\u8fd0\u884c\u771f\u5b9e\u7684\u672c\u673a shell\uff08zsh/bash/sh\u3001PowerShell \u6216 cmd\uff09\uff0c\u5728\u6b64\u8f93\u5165\u7684\u4efb\u4f55\u547d\u4ee4\u90fd\u53ef\u80fd\u6539\u52a8\u8fd9\u53f0\u673a\u5668\u3002\u5de5\u4f5c\u76ee\u5f55\u4e0d\u662f\u6c99\u7bb1\uff0c\u7ec8\u7aef\u4e5f\u4e0d\u9650\u4e8e\u5f53\u524d\u9879\u76ee\u3002\u7ec8\u7aef\u7684\u8f93\u5165\u4e0e\u8f93\u51fa\u53ea\u4fdd\u5b58\u5728\u672c\u63d2\u4ef6\u5185\u5b58\u4e2d\uff1a\u4e0d\u8bb0\u5f55\u65e5\u5fd7\u3001\u4e0d\u4e0a\u4f20\u3001\u4e0d\u5199\u5165\u4f1a\u8bdd\u3002"
     }
   },
   "safetyNotes": "Runs real local shells (zsh/bash/sh, PowerShell, or cmd) with your own user privileges, so anything typed here can change this machine. Working directories are not sandboxes, and the terminal is not restricted to the open project. Terminal input and output stay in this plugin's memory: nothing is logged, uploaded, or attached to a chat.",
@@ -30,7 +30,7 @@
         "id": "terminal",
         "title": {
           "en": "Terminal",
-          "zh-CN": "终端"
+          "zh-CN": "\u7ec8\u7aef"
         },
         "icon": "terminal",
         "entry": "view/index.html",
@@ -54,7 +54,7 @@
         "default": "auto",
         "enum": [
           {
-            "label": "Auto — first installed shell",
+            "label": "Auto \u2014 first installed shell",
             "value": "auto"
           },
           {

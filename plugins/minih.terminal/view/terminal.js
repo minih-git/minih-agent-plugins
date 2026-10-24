@@ -218,6 +218,8 @@
     elements.modal.hidden = true;
     elements.startError.textContent = "";
     updateEmpty();
+    // The dialog had the keyboard; the shell should have it back.
+    activeTab()?.term.focus();
   }
 
   /**
@@ -422,17 +424,20 @@
       openSearch();
       return false;
     }
-    // Ctrl+C stays the shell's interrupt. Copy and paste are the page's own
-    // chords because macOS routes Cmd+C / Cmd+V to the app's Edit menu, whose
-    // copy reads a DOM selection this page never has; Ctrl+Shift+C and
-    // Ctrl+Shift+V are unclaimed and reach the page on every platform.
+    // Ctrl+C stays the shell's interrupt. Copy answers Cmd+C as well as
+    // Ctrl+Shift+C: a second copy of the same text is harmless, and the app's
+    // Edit menu copy writes nothing here because it reads a DOM selection a
+    // terminal does not have.
+    //
+    // Paste is Ctrl+Shift+V only. Cmd+V also reaches the app's Edit menu, whose
+    // paste already hands the text to the focused terminal; answering the same
+    // keystroke here as well pasted everything twice.
     const shifted = event.ctrlKey && event.shiftKey;
-    const unclaimed = shifted || (isMac && event.metaKey);
-    if (key === "c" && unclaimed && tab.term.hasSelection()) {
+    if (key === "c" && (shifted || (isMac && event.metaKey)) && tab.term.hasSelection()) {
       void copySelection(tab);
       return false;
     }
-    if (key === "v" && unclaimed) {
+    if (key === "v" && shifted) {
       void pasteInto(tab);
       return false;
     }
@@ -490,6 +495,9 @@
     elements.contextMenu.hidden = true;
     state.menuTab = null;
     state.menuText = "";
+    // Cmd+V travels through the app's Edit menu to whatever is focused, so a
+    // button that just handled a click must not keep the keyboard.
+    activeTab()?.term.focus();
   }
 
   async function closeTerminal(id) {
