@@ -14,11 +14,19 @@ import {
 import os from "node:os";
 import path from "node:path";
 
+import { composeNote, parseFrontmatter, patchFrontmatterSource } from "../lib/frontmatter.mjs";
+import { findSensitiveContent, redactSensitiveContent, redactionViolation } from "../lib/redact.mjs";
+import { appendToSectionSpan, locateSection, replaceSectionSpan } from "../lib/sections.mjs";
+import { VaultIndex } from "../lib/vault-index.mjs";
+
 const SEARCH_EXTENSIONS = new Set([".md", ".base"]);
 const WRITE_EXTENSION = ".md";
 const DEFAULT_MAX_READ_CHARS = 24_000;
 const DEFAULT_MAX_CONTEXT_CHARS = 32_000;
 const MAX_NOTE_BYTES = 2 * 1024 * 1024;
+
+// Kept as re-exports so existing imports of this facade keep working.
+export { findSensitiveContent, parseFrontmatter, redactSensitiveContent };
 
 function requireString(value, name) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -35,7 +43,7 @@ function boundedInteger(value, fallback, minimum, maximum, name) {
   return value;
 }
 
-function normalizeRelative(value, { extensions = SEARCH_EXTENSIONS } = {}) {
+function normalizeRelative(value, { extensions = new Set([".md", ".base"]) } = {}) {
   const raw = requireString(value, "path").replaceAll("\\", "/");
   if (path.posix.isAbsolute(raw) || path.win32.isAbsolute(raw)) {
     throw new Error("path must be relative to the knowledge vault.");
@@ -69,91 +77,7 @@ async function exists(filePath) {
 }
 
 function sha256(content) {
-  return createHash("sha256").update(content).digest("hex");
-}
-
-function stripQuotes(value) {
-  if (
-    value.length >= 2 &&
-    ((value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'")))
-  ) {
-    return value.slice(1, -1);
-  }
-  return value;
-}
-
-export function parseFrontmatter(content) {
-  if (!content.startsWith("---\n") && !content.startsWith("---\r\n")) return {};
-  const lines = content.replaceAll("\r\n", "\n").split("\n");
-  const end = lines.indexOf("---", 1);
-  if (end < 0) return {};
-  const data = {};
-  for (const line of lines.slice(1, end)) {
-    const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*?)\s*$/);
-    if (!match) continue;
-    const [, key, rawValue] = match;
-    if (rawValue === "") {
-      data[key] = "";
-      continue;
-    }
-    if (rawValue === "true" || rawValue === "false") {
-      data[key] = rawValue === "true";
-      continue;
-    }
-    if (rawValue.startsWith("[") && rawValue.endsWith("]")) {
-      data[key] = rawValue
-        .slice(1, -1)
-        .split(",")
-        .map((part) => stripQuotes(part.trim()))
-        .filter(Boolean);
-      continue;
-    }
-    data[key] = stripQuotes(rawValue);
-  }
-  return data;
-}
-
-function safePlaceholder(value) {
-  return /^(?:\[?redacted\]?|\*+|x+|<[^>]+>|\$\{[^}]+\}|env|environment|stored|managed|none|n\/a)$/i.test(
-    value,
-  );
-}
-
-export function findSensitiveContent(content) {
-  const findings = [];
-  const fixedPatterns = [
-    ["private-key", /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/],
-    ["aws-access-key", /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/],
-    ["api-token", /\bsk-[A-Za-z0-9_-]{20,}\b/],
-    ["jwt", /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/],
-  ];
-  for (const [kind, pattern] of fixedPatterns) {
-    if (pattern.test(content)) findings.push({ kind });
-  }
-
-  const assignment = /\b(password|passwd|token|secret|api[_-]?key|access[_-]?key|private[_-]?key)\b\s*[:=]\s*["']?([^\s"'`]{8,})/gi;
-  for (const match of content.matchAll(assignment)) {
-    const value = match[2];
-    if (!safePlaceholder(value)) {
-      const line = content.slice(0, match.index).split(/\r?\n/).length;
-      findings.push({ kind: "credential-assignment", line, key: match[1] });
-    }
-  }
-  return findings;
-}
-
-export function redactSensitiveContent(content) {
-  let redacted = content
-    .replace(/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g, "[REDACTED PRIVATE KEY]")
-    .replace(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, "[REDACTED ACCESS KEY]")
-    .replace(/\bsk-[A-Za-z0-9_-]{20,}\b/g, "[REDACTED TOKEN]")
-    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, "[REDACTED JWT]");
-  redacted = redacted.replace(
-    /(\b(?:password|passwd|token|secret|api[_-]?key|access[_-]?key|private[_-]?key)\b\s*[:=]\s*["']?)([^\s"'`]{8,})/gi,
-    (full, prefix, value) => (safePlaceholder(value) ? full : `${prefix}[REDACTED]`),
-  );
-  return redacted;
+  return createHash("sha256").update(content, "utf8").digest("hex");
 }
 
 function snippetFor(content, terms, maximum = 280) {
@@ -168,44 +92,8 @@ function snippetFor(content, terms, maximum = 280) {
   return `${start > 0 ? "…" : ""}${normalized.slice(start, end)}${end < normalized.length ? "…" : ""}`;
 }
 
-function titleFor(relativePath, metadata) {
-  return typeof metadata.title === "string" && metadata.title.trim()
-    ? metadata.title.trim()
-    : path.posix.basename(relativePath, path.posix.extname(relativePath));
-}
-
 function unique(values) {
   return [...new Set(values)];
-}
-
-function normalizeLinkTarget(value) {
-  return value.trim().replaceAll("\\", "/").replace(/\.md$/i, "");
-}
-
-function outgoingLinks(content) {
-  return unique(
-    [...content.matchAll(/\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]/g)].map((match) =>
-      normalizeLinkTarget(match[1]),
-    ),
-  );
-}
-
-async function walk(root, current, ignoredTopLevel, output) {
-  const entries = await readdir(current, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.name.startsWith(".")) continue;
-    const absolute = path.join(current, entry.name);
-    const relative = path.relative(root, absolute).split(path.sep).join("/");
-    const topLevel = relative.split("/")[0];
-    if (ignoredTopLevel.has(topLevel)) continue;
-    if (entry.isDirectory()) {
-      await walk(root, absolute, ignoredTopLevel, output);
-      continue;
-    }
-    if (entry.isFile() && SEARCH_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
-      output.push(relative);
-    }
-  }
 }
 
 function splitTerms(query) {
@@ -237,12 +125,15 @@ export class KnowledgeService {
     this.config = config;
     this.now = now;
     this.rootRealpath = null;
+    this.index = null;
   }
 
   async initialize() {
     const info = await stat(this.vaultPath);
     if (!info.isDirectory()) throw new Error(`Knowledge vault is not a directory: ${this.vaultPath}`);
     this.rootRealpath = await realpath(this.vaultPath);
+    this.index = new VaultIndex({ root: this.rootRealpath, config: this.config, now: this.now });
+    await this.index.refresh({ force: true });
     return this;
   }
 
@@ -252,11 +143,24 @@ export class KnowledgeService {
   }
 
   async listFiles() {
-    const root = await this.root();
-    const output = [];
-    const ignored = new Set(this.config.ignoreFolders ?? []);
-    await walk(root, root, ignored, output);
-    return output.sort((a, b) => a.localeCompare(b, "zh-CN"));
+    await this.index.refresh();
+    return this.index.paths();
+  }
+
+  /** Resolve a note reference (path, basename, or unique name) via the index. */
+  async findNote(note) {
+    await this.index.refresh();
+    const raw = requireString(note, "note").replaceAll("\\", "/");
+    const directCandidates = SEARCH_EXTENSIONS.has(path.posix.extname(raw).toLowerCase())
+      ? [raw]
+      : [`${raw}.md`, `${raw}.base`];
+    for (const candidate of directCandidates) {
+      if (this.index.note(candidate)) return this.resolveExisting(candidate);
+    }
+    const matches = this.index.basenames.get(raw) ?? this.index.basenames.get(`${raw}.md`) ?? [];
+    if (matches.length === 0) throw new Error(`Knowledge note not found: ${raw}`);
+    if (matches.length > 1) throw new Error(`Knowledge note is ambiguous: ${matches.join(", ")}`);
+    return this.resolveExisting(matches[0]);
   }
 
   async resolveExisting(relativePath) {
@@ -272,50 +176,58 @@ export class KnowledgeService {
     return { absolute: resolved, relative: normalized, info };
   }
 
-  async findNote(note) {
-    const raw = requireString(note, "note").replaceAll("\\", "/");
-    const exactCandidates = [];
-    if (SEARCH_EXTENSIONS.has(path.posix.extname(raw).toLowerCase())) {
-      exactCandidates.push(raw);
-    } else {
-      exactCandidates.push(`${raw}.md`, `${raw}.base`);
-    }
-    for (const candidate of exactCandidates) {
-      try {
-        return await this.resolveExisting(candidate);
-      } catch (error) {
-        if (error?.code !== "ENOENT") {
-          if (!String(error.message).includes("no such file")) throw error;
-        }
-      }
-    }
-
-    const normalizedNeedle = normalizeLinkTarget(raw).toLowerCase();
-    const matches = [];
-    for (const relative of await this.listFiles()) {
-      const basename = normalizeLinkTarget(path.posix.basename(relative)).toLowerCase();
-      const withoutExtension = normalizeLinkTarget(relative).toLowerCase();
-      if (basename === normalizedNeedle || withoutExtension === normalizedNeedle) matches.push(relative);
-    }
-    if (matches.length === 0) throw new Error(`Knowledge note not found: ${raw}`);
-    if (matches.length > 1) throw new Error(`Knowledge note is ambiguous: ${matches.join(", ")}`);
-    return this.resolveExisting(matches[0]);
-  }
-
-  async read({ note, maxChars } = {}) {
+  async read({ note, maxChars, section, outline } = {}) {
     const limit = boundedInteger(maxChars, DEFAULT_MAX_READ_CHARS, 1_000, 100_000, "maxChars");
     const resolved = await this.findNote(note);
-    const raw = await readFile(resolved.absolute, "utf8");
-    const metadata = parseFrontmatter(raw);
+    const record = this.index.note(resolved.relative);
+    const raw = record?.raw ?? (await readFile(resolved.absolute, "utf8"));
+    const metadata = record?.metadata ?? parseFrontmatter(raw).data;
     const safe = redactSensitiveContent(raw);
-    return {
+
+    const result = {
       path: resolved.relative,
-      title: titleFor(resolved.relative, metadata),
+      title: record?.title ?? resolved.relative,
       metadata,
-      sha256: sha256(raw),
+      sha256: record?.sha256 ?? sha256(raw),
       truncated: safe.length > limit,
       content: safe.slice(0, limit),
+      redacted: safe !== raw,
     };
+
+    if (outline === true) {
+      result.outline = (record?.outline ?? []).map((entry) => ({
+        level: entry.level,
+        text: entry.text,
+        line: entry.line,
+      }));
+    }
+
+    if (section !== undefined && section !== null) {
+      const lookup = locateSection(raw, section);
+      if (!lookup.ok) {
+        const error = new Error(
+          `${lookup.code}: ${JSON.stringify(section)}` +
+            (lookup.candidates?.length
+              ? ` Candidates: ${lookup.candidates.map((c) => c.text).join("; ")}.`
+              : ""),
+        );
+        error.code = lookup.code;
+        error.candidates = lookup.candidates;
+        throw error;
+      }
+      const lines = raw.split(/(?<=\n)/);
+      const sectionText = lines.slice(lookup.startLine, lookup.endLine).join("");
+      result.section = {
+        spec: String(section),
+        heading: lookup.startLine,
+        startLine: lookup.startLine,
+        endLine: lookup.endLine,
+      };
+      result.sectionSha256 = sha256(sectionText);
+      result.content = redactSensitiveContent(sectionText).slice(0, limit);
+      result.truncated = result.content.length < sectionText.length && sectionText.length > limit;
+    }
+    return result;
   }
 
   async search({ query, scope, mode = "all", limit } = {}) {
@@ -331,13 +243,15 @@ export class KnowledgeService {
       normalizedScope = path.posix.normalize(rawScope).replace(/^\.\//, "").replace(/\/$/, "");
     }
 
+    await this.index.refresh();
     const results = [];
-    for (const relative of await this.listFiles()) {
+    for (const relative of this.index.paths()) {
       if (normalizedScope && relative !== normalizedScope && !relative.startsWith(`${normalizedScope}/`)) continue;
-      const { absolute } = await this.resolveExisting(relative);
-      const raw = await readFile(absolute, "utf8");
-      const metadata = parseFrontmatter(raw);
-      const title = titleFor(relative, metadata);
+      const record = this.index.note(relative);
+      if (!record) continue;
+      const raw = record.raw;
+      const metadata = record.metadata;
+      const title = record.title;
       const searchable = `${relative}\n${title}\n${raw}`.toLowerCase();
       const matches = terms.map((term) => searchable.includes(term));
       if (mode === "all" ? matches.some((matched) => !matched) : matches.every((matched) => !matched)) continue;
@@ -364,11 +278,33 @@ export class KnowledgeService {
     return { query, mode, count: Math.min(results.length, resultLimit), results: results.slice(0, resultLimit) };
   }
 
+  /**
+   * Context routing (ADR 0001 §7): mapping-file projects first, then notes of
+   * the project class whose `repo` is a path prefix of the working directory
+   * (worktrees under `<repo>/.worktree/` match their repository), then alias
+   * matches against the topic.
+   */
   async context({ cwd, topic = "", maxChars } = {}) {
     const totalLimit = boundedInteger(maxChars, DEFAULT_MAX_CONTEXT_CHARS, 4_000, 100_000, "maxChars");
-    const workingPath = typeof cwd === "string" && cwd.trim() ? path.resolve(cwd.trim()) : "";
+    // Worktree-aware matching compares the cwd's real path so macOS `/var`
+    // style symlinks and per-worktree checkouts resolve to their repository.
+    // A cwd that does not exist (dry callers, tests) keeps its literal path.
+    let workingPath = "";
+    if (typeof cwd === "string" && cwd.trim()) {
+      const literal = path.resolve(cwd.trim());
+      try {
+        workingPath = await realpath(literal);
+      } catch (error) {
+        if (error?.code === "ENOENT") workingPath = literal;
+        else throw error;
+      }
+    }
     const loweredTopic = String(topic ?? "").toLowerCase();
-    const projects = (this.config.projects ?? []).filter((project) => {
+
+    await this.index.refresh();
+
+    // 1. Mapping-file entries (unchanged behavior).
+    const mappingProjects = (this.config.projects ?? []).filter((project) => {
       const pathMatch = workingPath && (project.repoPrefixes ?? []).some((prefix) => {
         const resolvedPrefix = path.resolve(prefix);
         return workingPath === resolvedPrefix || workingPath.startsWith(`${resolvedPrefix}${path.sep}`);
@@ -379,9 +315,35 @@ export class KnowledgeService {
     const routes = (this.config.topicRoutes ?? []).filter((route) =>
       loweredTopic && (route.aliases ?? []).some((alias) => loweredTopic.includes(String(alias).toLowerCase())),
     );
-    const requestedNotes = unique([
-      ...projects.flatMap((project) => project.notes ?? []),
+
+    // 2. Project-class notes whose `repo` covers the working directory.
+    const routedNotes = new Set([
+      ...mappingProjects.flatMap((project) => project.notes ?? []),
       ...routes.flatMap((route) => route.notes ?? []),
+    ]);
+    const metadataProjects = [];
+    for (const relative of this.index.paths()) {
+      const record = this.index.note(relative);
+      if (!record || (record.metadata.type ?? "") !== "project") continue;
+      const repoPath = typeof record.metadata.repo === "string" ? record.metadata.repo.trim() : "";
+      if (!repoPath || !workingPath) continue;
+      const resolvedRepo = path.resolve(repoPath);
+      const matches =
+        workingPath === resolvedRepo || workingPath.startsWith(`${resolvedRepo}${path.sep}`);
+      const aliasMatch =
+        loweredTopic &&
+        (record.aliases ?? []).some((alias) => loweredTopic.includes(String(alias).toLowerCase()));
+      const topicFallback = loweredTopic && loweredTopic.includes(record.title.toLowerCase());
+      if (matches || aliasMatch || topicFallback) {
+        metadataProjects.push(record);
+        routedNotes.add(relative);
+      }
+    }
+
+    const requestedNotes = unique([
+      ...mappingProjects.flatMap((project) => project.notes ?? []),
+      ...routes.flatMap((route) => route.notes ?? []),
+      ...[...routedNotes].filter((note) => this.index.note(note)),
       ...(this.config.defaultNotes ?? []),
     ]);
     const summaryLimit = boundedInteger(
@@ -421,7 +383,10 @@ export class KnowledgeService {
     return {
       cwd: workingPath || null,
       topic: topic || null,
-      matchedProjects: projects.map((project) => project.name),
+      matchedProjects: unique([
+        ...mappingProjects.map((project) => project.name),
+        ...metadataProjects.map((record) => record.title),
+      ]),
       matchedRoutes: routes.map((route) => route.name),
       requestedNotes,
       notes,
@@ -434,12 +399,13 @@ export class KnowledgeService {
   async stale({ limit, includeUnverified = true } = {}) {
     const resultLimit = boundedInteger(limit, 100, 1, 500, "limit");
     const today = this.now();
+    await this.index.refresh();
     const due = [];
-    for (const relative of await this.listFiles()) {
+    for (const relative of this.index.paths()) {
       if (!relative.endsWith(".md")) continue;
-      const { absolute } = await this.resolveExisting(relative);
-      const raw = await readFile(absolute, "utf8");
-      const metadata = parseFrontmatter(raw);
+      const record = this.index.note(relative);
+      if (!record) continue;
+      const metadata = record.metadata;
       const interval = metadata.review_interval;
       if (!interval || interval === "none") continue;
       const ageDays = dateAgeDays(metadata.verified, today);
@@ -459,7 +425,7 @@ export class KnowledgeService {
       if (!reason) continue;
       due.push({
         path: relative,
-        title: titleFor(relative, metadata),
+        title: record.title,
         type: metadata.type ?? null,
         stability: metadata.stability ?? null,
         reviewInterval: interval,
@@ -479,46 +445,32 @@ export class KnowledgeService {
 
   async links({ note } = {}) {
     const resolved = await this.findNote(note);
-    const raw = await readFile(resolved.absolute, "utf8");
-    const targetRelative = normalizeLinkTarget(resolved.relative);
-    const targetBasename = normalizeLinkTarget(path.posix.basename(resolved.relative));
-    const backlinks = [];
-    for (const relative of await this.listFiles()) {
-      if (!relative.endsWith(".md") || relative === resolved.relative) continue;
-      const candidate = await this.resolveExisting(relative);
-      const candidateContent = await readFile(candidate.absolute, "utf8");
-      const links = outgoingLinks(candidateContent);
-      if (links.some((link) => link === targetRelative || link === targetBasename)) backlinks.push(relative);
-    }
+    await this.index.refresh();
+    const record = this.index.note(resolved.relative);
     return {
       path: resolved.relative,
-      outgoing: outgoingLinks(raw),
-      backlinks: backlinks.sort((a, b) => a.localeCompare(b, "zh-CN")),
+      outgoing: record.linkTargets,
+      backlinks: this.index.backlinksOf(resolved.relative),
+      ghosts: this.index.ghostsOf(resolved.relative),
     };
   }
 
-  async write({ path: notePath, content, expectedSha256, dryRun = true, create = false } = {}) {
+  async write({
+    path: notePath,
+    content,
+    expectedSha256,
+    dryRun = true,
+    create = false,
+    operation = "replace",
+    section,
+    frontmatter,
+  } = {}) {
     const relative = normalizeRelative(notePath, { extensions: new Set([WRITE_EXTENSION]) });
-    if (typeof content !== "string" || content.trim() === "") {
-      throw new Error("content must be a non-empty string.");
-    }
-    const normalizedContent = `${content.replace(/\s+$/, "")}\n`;
-    if (Buffer.byteLength(normalizedContent, "utf8") > MAX_NOTE_BYTES) {
-      throw new Error("content is larger than the supported 2 MB limit.");
-    }
-    const metadata = parseFrontmatter(normalizedContent);
-    if (!metadata.title || !metadata.type) {
-      throw new Error("content must include frontmatter with non-empty title and type properties.");
-    }
-    const sensitive = findSensitiveContent(normalizedContent);
-    if (sensitive.length) {
-      throw new Error(`content appears to contain sensitive credentials: ${sensitive.map((item) => item.kind).join(", ")}`);
-    }
-
     const root = await this.root();
     const absolute = path.resolve(root, ...relative.split("/"));
     if (!isInside(root, absolute)) throw new Error("path escapes the knowledge vault.");
     const present = await exists(absolute);
+
     let before = "";
     let beforeHash = null;
     let mode = 0o600;
@@ -537,15 +489,42 @@ export class KnowledgeService {
       throw new Error("note does not exist; pass create: true to create it.");
     }
 
+    const normalizedContent = await this.#composeContent({
+      relative,
+      operation,
+      section,
+      frontmatter,
+      content,
+      before,
+      present,
+    });
+
+    if (Buffer.byteLength(normalizedContent, "utf8") > MAX_NOTE_BYTES) {
+      throw new Error("content is larger than the supported 2 MB limit.");
+    }
+    const metadata = parseFrontmatter(normalizedContent);
+    if (!metadata.data.title || !metadata.data.type) {
+      throw new Error("content must include frontmatter with non-empty title and type properties.");
+    }
+    const sensitive = findSensitiveContent(normalizedContent);
+    if (sensitive.length) {
+      throw new Error(`content appears to contain sensitive credentials: ${sensitive.map((item) => item.kind).join(", ")}`);
+    }
+    if (present && redactionViolation(before, normalizedContent)) {
+      throw new Error("REDACTED_PLACEHOLDER: the result introduces [REDACTED markers the stored note does not contain.");
+    }
+
     const afterHash = sha256(normalizedContent);
     const action = present ? (beforeHash === afterHash ? "unchanged" : "update") : "create";
     const summary = {
       path: relative,
+      operation,
       action,
       dryRun: Boolean(dryRun),
       beforeSha256: beforeHash,
       afterSha256: afterHash,
       ...lineChangeSummary(before, normalizedContent),
+      warnings: [],
       backupPath: null,
     };
     if (action === "unchanged" || dryRun) return summary;
@@ -577,7 +556,56 @@ export class KnowledgeService {
     }
     const persisted = await readFile(absolute, "utf8");
     summary.afterSha256 = sha256(persisted);
+    await this.index.invalidate(relative);
     return summary;
+  }
+
+  /** Build the resulting note text for any write operation (ADR 0001 §7-§8). */
+  async #composeContent({ relative, operation, section, frontmatter, content, before, present }) {
+    if (operation === "replace") {
+      if (typeof content !== "string" || content.trim() === "") {
+        throw new Error("content must be a non-empty string.");
+      }
+      return `${content.replace(/\s+$/, "")}\n`;
+    }
+    if (!present) {
+      throw new Error(`${operation} requires an existing note.`);
+    }
+
+    if (operation === "patchFrontmatter") {
+      if (frontmatter === null || typeof frontmatter !== "object" || Array.isArray(frontmatter)) {
+        throw new Error("frontmatter must be an object mapping keys to new values (null removes a key).");
+      }
+      const parsed = parseFrontmatter(before);
+      const nextSource = patchFrontmatterSource(parsed, frontmatter);
+      if (nextSource === null) return before;
+      return composeNote(nextSource, parsed.body);
+    }
+
+    if (operation === "replaceSection" || operation === "appendToSection") {
+      if (typeof content !== "string" || content.trim() === "") {
+        throw new Error("content must be a non-empty string.");
+      }
+      if (typeof section !== "string" || !section.trim()) {
+        throw new Error(`section is required for ${operation}.`);
+      }
+      const lookup = locateSection(before, section);
+      if (!lookup.ok) {
+        const detail = lookup.candidates?.length
+          ? ` Candidates: ${lookup.candidates.map((entry) => entry.text).join("; ")}.`
+          : "";
+        const error = new Error(`${lookup.code}: no unique heading for ${JSON.stringify(section)}.${detail}`);
+        error.code = lookup.code;
+        error.candidates = lookup.candidates;
+        throw error;
+      }
+      if (operation === "replaceSection") {
+        return replaceSectionSpan(before, lookup.startLine, lookup.endLine, content);
+      }
+      return appendToSectionSpan(before, lookup.startLine, lookup.endLine, content);
+    }
+
+    throw new Error('operation must be one of: replace, replaceSection, appendToSection, patchFrontmatter.');
   }
 }
 

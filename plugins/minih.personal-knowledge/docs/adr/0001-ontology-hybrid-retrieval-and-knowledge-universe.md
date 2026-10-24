@@ -1,6 +1,6 @@
 # ADR 0001: Lightweight ontology, hybrid retrieval, and the Knowledge Universe view
 
-- Status: Proposed — pending user review (2026-10-24)
+- Status: Accepted (2026-10-24)
 - Plugin: `minih.personal-knowledge`, baseline 0.1.2 (`a10dd1d`)
 - Related (Minih-Agent-Desktop): ADR `agent-long-term-memory` (D668),
   ADR `learned-memory-consolidation` (Proposed), ADR 0168 (external URL

@@ -4,7 +4,15 @@
   "version": "0.1.2",
   "description": "Use a local Obsidian vault as verified, time-aware long-term context: scoped retrieval, guarded write-back, and project routing.",
   "scripts": {
-    "test": "node --test tests/*.test.mjs",
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/build.mjs --lib && node --test tests/*.test.mjs",
     "probe": "node scripts/probe-mcp.mjs"
+  },
+  "devDependencies": {
+    "@esbuild/darwin-arm64": "0.25.10",
+    "3d-force-graph": "1.80.1",
+    "esbuild": "0.25.10",
+    "force-graph": "1.49.0",
+    "yaml": "2.9.1"
   }
 }

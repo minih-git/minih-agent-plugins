@@ -65,12 +65,17 @@ const TOOL_DEFINITIONS = [
     name: "knowledge_read",
     title: "Read a Personal Knowledge Note",
     description:
-      "Read one exact or uniquely named knowledge note, returning its content, metadata, and SHA-256 for guarded write-back.",
+      "Read one exact or uniquely named knowledge note, returning its content, metadata, and SHA-256 for guarded write-back. Optionally limit the read to one heading section and return the outline.",
     inputSchema: {
       type: "object",
       properties: {
         note: { type: "string", minLength: 1, description: "Vault-relative path, basename, or unique note name." },
         maxChars: { type: "integer", minimum: 1000, maximum: 100000 },
+        section: {
+          type: "string",
+          description: "Heading text or 'H2 > H3' path; the read returns that section only.",
+        },
+        outline: { type: "boolean", description: "Include the heading outline." },
       },
       required: ["note"],
       additionalProperties: false,
@@ -110,17 +115,32 @@ const TOOL_DEFINITIONS = [
     name: "knowledge_write",
     title: "Safely Write Personal Knowledge",
     description:
-      "Create or replace one Markdown note inside the vault. Defaults to dry-run, requires the current SHA-256 for updates, rejects likely credentials and unsafe paths, writes atomically, and backs up changed notes.",
+      "Create or edit one Markdown note inside the vault. Operations: full replace (default), section replace or append, and frontmatter patch. Defaults to dry-run, requires the current SHA-256 for updates, rejects likely credentials and unsafe paths, writes atomically, and backs up changed notes.",
     inputSchema: {
       type: "object",
       properties: {
         path: { type: "string", minLength: 1, description: "Vault-relative .md path." },
-        content: { type: "string", minLength: 1, description: "Complete replacement Markdown note with title and type frontmatter." },
+        content: {
+          type: "string",
+          description:
+            "For replace: the complete note with title and type frontmatter. For replaceSection: the section including its heading line. For appendToSection: the text to append.",
+        },
+        operation: {
+          type: "string",
+          enum: ["replace", "replaceSection", "appendToSection", "patchFrontmatter"],
+          default: "replace",
+          description: "replace rewrites the whole note; the others edit one part and keep the rest byte-identical.",
+        },
+        section: { type: "string", description: "Heading text or 'H2 > H3' path; required for section operations." },
+        frontmatter: {
+          type: "object",
+          description: "For patchFrontmatter: keys to set; a null value removes the key. Other keys keep their order and formatting.",
+        },
         expectedSha256: { type: "string", pattern: "^[a-fA-F0-9]{64}$" },
         dryRun: { type: "boolean", default: true },
         create: { type: "boolean", default: false },
       },
-      required: ["path", "content"],
+      required: ["path"],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
