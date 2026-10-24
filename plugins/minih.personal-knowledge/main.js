@@ -228,6 +228,13 @@ async function graph(payload) {
     memory: { status: memory.status, count: memory.count },
   });
   attachMemory(result, memory);
+  // Memory satellites arrived after the payload was laid out; re-apply so
+  // they get positions just outside their galaxy's event ring (design §13).
+  const { applyUniverseLayout } = await import("./lib/layout.mjs");
+  applyUniverseLayout(result, {
+    navigationNamePatterns: ontology.navigationNamePatterns,
+    projectTitlePrefixes: ontology.projectTitlePrefixes,
+  });
   state.memory = memory;
   return result;
 }

@@ -60,6 +60,13 @@ export class Ontology {
     this.enforcement = data.enforcement === "enforce" ? "enforce" : "warn";
     this.oversizeChars = Number.isInteger(data.oversizeChars) ? data.oversizeChars : 24_000;
     this.ontologyNote = typeof data.ontologyNote === "string" ? data.ontologyNote : "08 Standards/知识本体.md";
+    // Knowledge Universe v2 (design doc §3): name-based nav detection and the
+    // project-title prefix used by the folder rule. Invalid patterns are
+    // skipped so a vault override cannot break the view.
+    this.navigationNamePatterns = toArray(data.navigationNamePatterns, ["(总览|索引)$", "^Home$"])
+      .map((pattern) => toRegExp(pattern))
+      .filter(Boolean);
+    this.projectTitlePrefixes = toArray(data.projectTitlePrefixes, ["项目 - "]).map(String);
   }
 
   /** Resolve a `type` value to its class name, or `null` when unknown. */
@@ -195,6 +202,19 @@ function wikilinkTarget(value) {
   const match = /\[\[([^\][#|]+)(?:#[^][|]*)?(?:\|[^][]*)?\]\]/.exec(value);
   if (match) return match[1].trim();
   return null;
+}
+
+function toArray(value, fallback) {
+  if (!Array.isArray(value)) return fallback;
+  return value.filter((item) => typeof item === "string" && item.trim()).map(String);
+}
+
+function toRegExp(source) {
+  try {
+    return new RegExp(source);
+  } catch {
+    return null;
+  }
 }
 
 function staleness(metadata, now) {

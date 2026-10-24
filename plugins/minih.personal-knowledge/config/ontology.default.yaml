@@ -36,13 +36,13 @@ typeAliases:
   feature: topic
   project-note: topic
   source-audit: topic
-  deployment: topic
   operations: topic
   runbook: procedure
   incident-runbook: procedure
   troubleshooting: procedure
   release-record: release
   agent-release-record: release
+  deployment: release
   architecture-decision: decision
   feature-record: record
   inbox-index: index
@@ -71,3 +71,15 @@ stabilities: [stable, mixed, volatile, historical]
 
 # A note above this many characters is an OVERSIZE defect (§4 rule 3).
 oversizeChars: 24000
+
+# Knowledge Universe v2 (design doc §3.2): an untyped note whose file name
+# matches one of these patterns is a `nav` node.
+navigationNamePatterns:
+  - "(总览|索引)$"
+  - "^Home$"
+
+# Project note titles are "<prefix><FolderName>"; the folder rule (design doc
+# §3.1 rule 3) maps `01 Projects/<Name>/` notes to the project note titled
+# "<prefix><Name>".
+projectTitlePrefixes:
+  - "项目 - "

@@ -12,47 +12,31 @@
 </head>
 <body>
   <div id="universe-app" class="universe-app">
-    <!-- Deep-space parallax starfield + per-galaxy radial nebula canvas -->
-    <canvas id="cosmos-bg" class="cosmos-bg" aria-hidden="true"></canvas>
+    <!-- Renderers: 3D (default) and the flat chart share the same payload -->
+    <main id="stage-3d" class="graph-stage" role="application" aria-label="Knowledge Universe 3D"></main>
+    <main id="stage-chart" class="graph-stage is-hidden" role="application" aria-label="Knowledge Universe star chart"></main>
 
-    <!-- 3D and 2D ForceGraph containers sharing the same graphData -->
-    <main id="stage-wrap" class="stage-wrap">
-      <div
-        id="graph-3d"
-        class="graph-stage"
-        role="application"
-        aria-label="Knowledge Universe 3D Graph"
-      ></div>
-      <div
-        id="graph-2d"
-        class="graph-stage is-hidden"
-        role="application"
-        aria-label="Knowledge Universe 2D Graph"
-      ></div>
-    </main>
+    <div id="webgl-notice" class="webgl-notice is-hidden" role="status"></div>
 
-    <!-- Top Instrument Header -->
-    <header class="hud-header glass-panel" role="banner">
-      <div class="header-left">
-        <div class="brand-cluster">
-          <span class="brand-star" aria-hidden="true"></span>
-          <h1 id="hud-title" class="hud-title">知识宇宙</h1>
-        </div>
-        <span id="vault-badge" class="hud-pill vault-pill" title="Vault">—</span>
-        <span id="counts-badge" class="hud-pill counts-pill">—</span>
-        <span id="fixture-badge" class="hud-pill fixture-pill is-hidden">FIXTURE</span>
+    <div id="bridge-error-banner" class="bridge-banner is-hidden" role="alert">
+      <span id="bridge-error-text"></span>
+      <button id="btn-retry-bridge" type="button" class="ghost-btn"></button>
+      <button id="btn-dismiss-error" type="button" class="ghost-btn"></button>
+    </div>
+
+    <!-- Top corners: title/count or breadcrumb · search · mode/layers/settings -->
+    <header class="hud-top">
+      <div class="corner corner-left">
+        <h1 id="hud-title" class="hud-title">知识宇宙</h1>
+        <span id="hud-counts" class="pill pill-muted"></span>
+        <span id="vault-badge" class="pill">—</span>
+        <span id="fixture-badge" class="pill pill-warn is-hidden"></span>
       </div>
-
-      <div class="header-center">
+      <div class="corner corner-center">
         <div class="search-box" role="search">
-          <svg class="search-icon" viewBox="0 0 16 16" aria-hidden="true">
-            <circle cx="6.8" cy="6.8" r="5" fill="none" stroke="currentColor" stroke-width="1.5" />
-            <line x1="10.5" y1="10.5" x2="14.2" y2="14.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-          </svg>
           <input
             id="search-input"
             type="search"
-            class="search-input"
             autocomplete="off"
             spellcheck="false"
             aria-autocomplete="list"
@@ -60,413 +44,237 @@
             aria-expanded="false"
           />
           <kbd class="search-kbd" aria-hidden="true">/</kbd>
-          <ul id="search-results" class="search-results glass-panel is-hidden" role="listbox"></ul>
+          <ul id="search-results" class="menu-popover search-popover is-hidden" role="listbox"></ul>
         </div>
       </div>
-
-      <div class="header-right">
-        <div id="focus-pill" class="focus-pill is-hidden" role="status">
-          <span id="focus-pill-label" class="focus-pill-text"></span>
-          <button id="btn-exit-focus" type="button" class="focus-exit-btn">Esc</button>
-        </div>
-
-        <div class="segmented-control" role="group" aria-label="Dimension switch">
-          <button id="btn-mode-3d" type="button" class="seg-btn is-active" aria-pressed="true">3D</button>
-          <button id="btn-mode-2d" type="button" class="seg-btn" aria-pressed="false">2D</button>
-        </div>
-
-        <button id="btn-health-mode" type="button" class="hud-btn" aria-pressed="false">
-          <span class="status-dot health-dot" aria-hidden="true"></span>
-          <span id="label-health-btn">健康度</span>
-          <span id="health-count-badge" class="mini-badge">0</span>
+      <div class="corner corner-right">
+        <button id="btn-mode-toggle" type="button" class="corner-btn">星图</button>
+        <button id="btn-layers" type="button" class="corner-btn" aria-haspopup="true" aria-expanded="false" aria-controls="layers-menu">
+          <span aria-hidden="true">≡</span><span id="label-layers" class="corner-btn-text"></span>
         </button>
-
-        <button id="btn-toggle-filters" type="button" class="hud-btn is-active" aria-expanded="true" aria-controls="filters-panel">
-          <span id="label-filters-btn">筛选</span>
+        <button id="btn-settings-menu" type="button" class="corner-btn" aria-haspopup="true" aria-expanded="false" aria-controls="settings-menu">
+          <span aria-hidden="true">⚙</span><span id="label-settings-menu" class="corner-btn-text"></span>
         </button>
-
-        <button id="btn-toggle-legend" type="button" class="hud-btn is-active" aria-expanded="true" aria-controls="legend-panel">
-          <span id="label-legend-btn">图例</span>
-        </button>
-
-        <button id="btn-zoom-fit" type="button" class="hud-btn icon-btn" title="Fit to view">
-          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-            <path d="M2 5.5V2h3.5M10.5 2H14v3.5M14 10.5V14h-3.5M5.5 14H2v-3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </button>
-        <button
-          id="btn-settings"
-          type="button"
-          class="hud-btn"
-          aria-expanded="false"
-          aria-controls="settings-panel"
-          title="检索设置"
-          aria-label="检索设置"
-        >
-          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-            <path
-              d="M6.8 1.5h2.4l.35 1.65c.42.14.81.37 1.15.65l1.6-.55 1.2 2.08-1.25 1.1c.09.38.14.77.14 1.17s-.05.79-.14 1.17l1.25 1.1-1.2 2.08-1.6-.55c-.34.28-.73.51-1.15.65L9.2 13.7H6.8l-.35-1.65a4.6 4.6 0 0 1-1.15-.65l-1.6.55-1.2-2.08 1.25-1.1A4.8 4.8 0 0 1 3.6 7.6c0-.4.05-.79.14-1.17L2.5 5.33l1.2-2.08 1.6.55c.34-.28.73-.51 1.15-.65L6.8 1.5Z"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.3"
-              stroke-linejoin="round"
-            />
-            <circle cx="8" cy="7.6" r="2.1" fill="none" stroke="currentColor" stroke-width="1.3" />
-          </svg>
-          <span id="label-settings-btn">检索设置</span>
-        </button>
-
-        <button id="btn-lang" type="button" class="hud-btn lang-btn" aria-label="Switch language">EN</button>
       </div>
     </header>
 
-    <!-- Inline Bridge Error / Timeout Banner -->
-    <div id="bridge-error-banner" class="bridge-error-banner glass-panel is-hidden" role="alert">
-      <span id="bridge-error-text" class="bridge-error-text"></span>
-      <div class="bridge-error-actions">
-        <button id="btn-retry-bridge" type="button" class="hud-btn small-btn"></button>
-        <button id="btn-dismiss-error" type="button" class="hud-btn small-btn"></button>
-      </div>
+    <!-- Bottom-right zoom -->
+    <div class="hud-bottom">
+      <button id="btn-zoom-in" type="button" class="corner-btn zoom-btn">+</button>
+      <button id="btn-zoom-out" type="button" class="corner-btn zoom-btn">−</button>
     </div>
 
-    <!-- Left Filters & Toggles Panel -->
-    <aside id="filters-panel" class="hud-filters glass-panel" aria-label="Filters">
-      <div class="panel-header">
-        <h2 id="filters-heading" class="panel-title">星图筛选</h2>
-        <button id="btn-reset-filters" type="button" class="link-btn">重置</button>
-      </div>
-
-      <div class="filter-group">
-        <label id="label-filter-class" for="filter-class" class="filter-label">本体类别</label>
-        <select id="filter-class" class="hud-select"></select>
-      </div>
-
-      <div class="filter-group">
-        <label id="label-filter-project" for="filter-project" class="filter-label">所属星系 (项目)</label>
-        <select id="filter-project" class="hud-select"></select>
-      </div>
-
-      <div class="filter-group">
-        <label id="label-filter-stability" for="filter-stability" class="filter-label">稳定性</label>
-        <select id="filter-stability" class="hud-select"></select>
-      </div>
-
-      <div class="filter-divider" role="separator"></div>
-
-      <div class="toggle-list">
-        <label class="toggle-row">
-          <input id="filter-stale-only" type="checkbox" class="hud-checkbox" />
-          <span id="label-toggle-stale" class="toggle-text">仅显示待复核 (Stale)</span>
-        </label>
-        <label class="toggle-row">
-          <input id="toggle-events" type="checkbox" class="hud-checkbox" checked />
-          <span id="label-toggle-events" class="toggle-text">事件卫星 (Moons)</span>
-        </label>
-        <label class="toggle-row">
-          <input id="toggle-navigation" type="checkbox" class="hud-checkbox" />
-          <span id="label-toggle-navigation" class="toggle-text">导航节点 (MOC/Index)</span>
-        </label>
-        <label class="toggle-row">
-          <input id="toggle-weak-links" type="checkbox" class="hud-checkbox" checked />
-          <span id="label-toggle-weak" class="toggle-text">正文弱引用 (Wikilinks)</span>
-        </label>
-        <label class="toggle-row">
-          <input id="toggle-ghosts" type="checkbox" class="hud-checkbox" />
-          <span id="label-toggle-ghosts" class="toggle-text">未解析幽灵节点 (Ghosts)</span>
-        </label>
-        <label class="toggle-row">
-          <input id="toggle-archived" type="checkbox" class="hud-checkbox" />
-          <span id="label-toggle-archived" class="toggle-text">归档星尘 (Archived)</span>
-        </label>
-        <label id="memory-toggle-row" class="toggle-row">
-          <input id="toggle-memory" type="checkbox" class="hud-checkbox" />
-          <span id="label-toggle-memory" class="toggle-text">记忆卫星 (Memory)</span>
-        </label>
-      </div>
+    <!-- Layers menu (≡): toggles and filters -->
+    <aside id="layers-menu" class="menu-popover layers-popover is-hidden" aria-label="Layers">
+      <h2 id="layers-heading" class="menu-heading"></h2>
+      <label class="menu-row">
+        <input id="layer-events" type="checkbox" checked />
+        <span id="label-layer-events"></span>
+      </label>
+      <label class="menu-row">
+        <input id="layer-constellation" type="checkbox" checked />
+        <span id="label-layer-constellation"></span>
+      </label>
+      <label class="menu-row">
+        <input id="layer-lanes" type="checkbox" checked />
+        <span id="label-layer-lanes"></span>
+      </label>
+      <label class="menu-row">
+        <input id="layer-nav" type="checkbox" />
+        <span id="label-layer-nav"></span>
+      </label>
+      <label class="menu-row">
+        <input id="layer-ghosts" type="checkbox" />
+        <span id="label-layer-ghosts"></span>
+      </label>
+      <label class="menu-row" id="archived-toggle-row">
+        <input id="layer-archived" type="checkbox" />
+        <span id="label-layer-archived"></span>
+      </label>
+      <label class="menu-row is-hidden" id="memory-toggle-row">
+        <input id="layer-memory" type="checkbox" />
+        <span id="label-layer-memory"></span>
+      </label>
+      <div class="menu-divider" role="separator"></div>
+      <label class="menu-row menu-select-row">
+        <span id="label-filter-class"></span>
+        <select id="filter-class" class="menu-select"></select>
+      </label>
+      <label class="menu-row menu-select-row">
+        <span id="label-filter-stability"></span>
+        <select id="filter-stability" class="menu-select"></select>
+      </label>
     </aside>
 
-    <!-- Bottom-Left Legend Overlay -->
-    <aside id="legend-panel" class="hud-legend glass-panel" aria-label="Legend">
-      <div class="panel-header">
-        <h2 id="legend-heading" class="panel-title">天体与关系图例</h2>
-      </div>
-      <div id="legend-classes" class="legend-grid"></div>
-      <div class="filter-divider" role="separator"></div>
-      <div id="legend-predicates-title" class="legend-subtitle">类型化关系谓词</div>
-      <div id="legend-predicates" class="legend-predicates"></div>
-      <div id="legend-health-wrap" class="is-hidden">
-        <div class="filter-divider" role="separator"></div>
-        <div id="legend-health-title" class="legend-subtitle">健康度着色 (半径 = log2 字符数)</div>
-        <div id="legend-health" class="legend-predicates"></div>
-      </div>
-    </aside>
-
-    <!-- Health Mode Accessible DOM Table Region -->
-    <section
-      id="health-region"
-      class="hud-health glass-panel is-hidden"
-      role="region"
-      aria-label="知识库本体健康问题列表"
-      tabindex="-1"
-    >
-      <div class="health-header">
-        <div class="health-title-group">
-          <h2 id="health-heading" class="panel-title">本体健康诊断表</h2>
-          <div id="health-summary-pills" class="health-summary-pills"></div>
-        </div>
-        <div class="health-controls">
-          <label for="health-severity-filter" class="sr-only" id="label-health-filter">Filter issues</label>
-          <select id="health-severity-filter" class="hud-select compact-select"></select>
-          <button id="btn-close-health" type="button" class="icon-close-btn" aria-label="Close health table">×</button>
-        </div>
-      </div>
-      <div class="health-table-scroll" tabindex="0">
-        <table class="health-table">
-          <thead>
-            <tr>
-              <th id="th-health-path" scope="col">笔记路径 / 标题</th>
-              <th id="th-health-class" scope="col">类别</th>
-              <th id="th-health-chars" scope="col">字符数</th>
-              <th id="th-health-issues" scope="col">问题代码</th>
-            </tr>
-          </thead>
-          <tbody id="health-tbody"></tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- Bottom Time-Lapse Control Bar -->
-    <section id="timelapse-bar" class="hud-timelapse glass-panel" aria-label="Time-lapse">
-      <button id="timelapse-play" type="button" class="hud-btn play-btn" aria-label="Play time-lapse">
-        <span id="timelapse-play-icon" aria-hidden="true">▶</span>
-        <span id="timelapse-play-label">演化</span>
+    <!-- Settings menu (⚙): health, time-lapse, retrieval, language -->
+    <aside id="settings-menu" class="menu-popover settings-popover is-hidden" aria-label="Settings">
+      <h2 id="settings-menu-heading" class="menu-heading"></h2>
+      <button id="menu-health" type="button" class="menu-row menu-action" aria-checked="false">
+        <span id="menu-health-text"></span>
       </button>
-      <div class="timelapse-track-wrap">
-        <label id="label-timelapse" for="timelapse-slider" class="timelapse-label">时间演化 (按创建日期)</label>
-        <input
-          id="timelapse-slider"
-          type="range"
-          min="0"
-          max="1000"
-          step="1"
-          value="1000"
-          class="timelapse-slider"
-        />
+      <button id="menu-timelapse" type="button" class="menu-row menu-action" aria-checked="false">
+        <span id="menu-timelapse-text"></span>
+      </button>
+      <button id="menu-retrieval" type="button" class="menu-row menu-action">
+        <span id="menu-retrieval-text"></span>
+      </button>
+      <div class="menu-divider" role="separator"></div>
+      <div class="menu-row menu-lang-row">
+        <span id="menu-language-text"></span>
+        <span class="menu-lang-options">
+          <button id="opt-lang-auto" type="button" class="lang-opt"></button>
+          <button id="opt-lang-zh" type="button" class="lang-opt">中文</button>
+          <button id="opt-lang-en" type="button" class="lang-opt">EN</button>
+        </span>
       </div>
-      <div id="timelapse-readout" class="timelapse-readout">全部时间</div>
-      <button id="timelapse-reset" type="button" class="link-btn">重置</button>
+    </aside>
+
+    <!-- Health mode panel (right) -->
+    <section id="health-region" class="side-panel health-panel is-hidden" aria-label="Ontology health">
+      <div class="panel-header">
+        <h2 id="health-heading" class="panel-title"></h2>
+        <select id="health-severity-filter" class="menu-select">
+          <option id="health-sev-all" value="all"></option>
+          <option id="health-sev-red" value="red"></option>
+          <option id="health-sev-amber" value="amber"></option>
+          <option id="health-sev-muted" value="muted"></option>
+        </select>
+        <button id="health-close" type="button" class="icon-btn" aria-label="Close">×</button>
+      </div>
+      <div id="health-list" class="health-list"></div>
     </section>
 
-    <!-- Right Note Inspector Drawer -->
-    <aside id="note-drawer" class="hud-drawer glass-panel is-hidden" aria-label="Note inspector" tabindex="-1">
-      <div class="drawer-top">
-        <div class="drawer-badges">
-          <span id="drawer-cls-badge" class="cls-badge"></span>
-          <span id="drawer-status-badge" class="status-badge"></span>
-          <span id="drawer-stale-badge" class="stale-badge is-hidden">STALE</span>
-          <span id="drawer-redacted-badge" class="redacted-badge is-hidden">REDACTED</span>
-        </div>
-        <button id="drawer-close" type="button" class="icon-close-btn" aria-label="Close drawer">×</button>
-      </div>
+    <!-- Time-lapse bar (only mode where the timeline appears) -->
+    <section id="timelapse-bar" class="timelapse-bar is-hidden" aria-label="Time-lapse">
+      <button id="timelapse-play" type="button" class="ghost-btn">▶</button>
+      <input id="timelapse-slider" type="range" min="0" max="1000" step="1" value="1000" />
+      <span id="timelapse-readout" class="timelapse-readout"></span>
+      <button id="timelapse-exit" type="button" class="ghost-btn"></button>
+    </section>
 
+    <!-- Note drawer (§6.5) -->
+    <aside id="note-drawer" class="drawer is-hidden" aria-label="Note inspector">
+      <div class="drawer-top">
+        <span id="drawer-cls-badge" class="cls-badge"></span>
+        <span id="drawer-stale-badge" class="badge badge-warn is-hidden">STALE</span>
+        <span id="drawer-redacted-badge" class="badge is-hidden"></span>
+        <button id="drawer-close" type="button" class="icon-btn" aria-label="Close drawer">×</button>
+      </div>
       <h2 id="drawer-title" class="drawer-title">—</h2>
       <div id="drawer-path" class="drawer-path">—</div>
-
+      <div id="drawer-belong" class="drawer-belong"></div>
       <div class="drawer-actions">
-        <button id="btn-copy-link" type="button" class="hud-btn primary-btn">
-          <span id="label-copy-link">复制 Obsidian 链接</span>
-        </button>
-        <button id="btn-focus-subgraph" type="button" class="hud-btn">
-          <span id="label-focus-subgraph">聚焦二跳星系</span>
-        </button>
-        <button id="btn-promote-memory" type="button" class="hud-btn is-hidden">
-          <span id="label-promote-memory">固化为笔记</span>
-        </button>
+        <button id="btn-copy-link" type="button" class="primary-btn"></button>
+        <button id="btn-promote-memory" type="button" class="ghost-btn is-hidden"></button>
       </div>
-
       <div id="drawer-error" class="drawer-error is-hidden" role="alert"></div>
-
-      <div class="drawer-scroll">
-        <section class="drawer-section">
-          <h3 id="sec-props-title" class="drawer-sec-title">元数据属性</h3>
-          <dl id="drawer-props" class="props-grid"></dl>
+      <div id="drawer-scroll" class="drawer-scroll">
+        <section id="drawer-hints" class="drawer-section is-hidden">
+          <h3 id="drawer-hints-head" class="drawer-sec-title drawer-hints-head">
+            <span id="drawer-hints-label">维护提示</span>
+            <span id="drawer-hints-count" class="hints-count"></span>
+            <span id="drawer-hints-caret" aria-hidden="true">▸</span>
+          </h3>
+          <div id="drawer-hints-body" class="hints-body is-collapsed"></div>
         </section>
-
-        <section id="sec-issues-wrap" class="drawer-section">
-          <h3 id="sec-issues-title" class="drawer-sec-title">本体校验问题</h3>
-          <div id="drawer-issues" class="drawer-issues"></div>
-        </section>
-
         <section class="drawer-section">
-          <h3 id="sec-relations-title" class="drawer-sec-title">类型化关系 (按谓词分组)</h3>
-          <div id="drawer-relations" class="drawer-relations"></div>
-        </section>
-
-        <section class="drawer-section">
-          <h3 id="sec-backlinks-title" class="drawer-sec-title">反向链接 (Backlinks)</h3>
-          <div id="drawer-backlinks" class="drawer-chip-list"></div>
-        </section>
-
-        <section class="drawer-section">
-          <h3 id="sec-outline-title" class="drawer-sec-title">笔记大纲 (Outline)</h3>
-          <ul id="drawer-outline" class="drawer-outline"></ul>
-        </section>
-
-        <section class="drawer-section">
-          <div class="drawer-sec-head">
-            <h3 id="sec-preview-title" class="drawer-sec-title">正文预览</h3>
-            <span id="drawer-truncated-badge" class="truncated-badge is-hidden">已截断 (≤8000)</span>
-          </div>
+          <h3 class="drawer-sec-title">
+            <span id="drawer-preview-label">正文预览</span>
+            <span id="drawer-truncated-badge" class="badge is-hidden"></span>
+          </h3>
           <pre id="drawer-content" class="drawer-body-preview" tabindex="0"></pre>
         </section>
       </div>
     </aside>
 
-    <!-- Retrieval Settings Panel -->
-    <aside
-      id="settings-panel"
-      class="hud-settings glass-panel is-hidden"
-      aria-label="检索设置"
-      tabindex="-1"
-    >
-      <div class="panel-header settings-header">
-        <div class="settings-title-group">
+    <!-- Retrieval settings (moved under ⚙; same fields as 0.2.0) -->
+    <aside id="settings-panel" class="side-panel settings-panel is-hidden" aria-label="Retrieval settings" tabindex="-1">
+      <div class="panel-header">
+        <div>
           <h2 id="settings-heading" class="panel-title">检索设置</h2>
-          <span id="settings-unsaved-pill" class="unsaved-pill is-hidden">
-            <span class="status-dot unsaved-dot" aria-hidden="true"></span>
+          <span id="settings-unsaved-pill" class="badge badge-warn is-hidden">
             <span id="settings-unsaved-label">未保存更改</span>
           </span>
         </div>
-        <button id="settings-close" type="button" class="icon-close-btn" aria-label="Close settings">×</button>
+        <button id="settings-close" type="button" class="icon-btn" aria-label="Close settings">×</button>
       </div>
-
-      <div id="settings-fixture-notice" class="settings-fixture-notice is-hidden" role="status"></div>
-
+      <div id="settings-fixture-notice" class="settings-notice is-hidden" role="status"></div>
       <div class="settings-scroll">
-        <label id="settings-enabled-row" class="toggle-row settings-switch-row" for="settings-enabled">
-          <input id="settings-enabled" type="checkbox" class="hud-checkbox" />
-          <span id="label-settings-enabled" class="toggle-text">启用向量检索 (Vector On/Off)</span>
+        <label class="menu-row" for="settings-enabled">
+          <input id="settings-enabled" type="checkbox" />
+          <span id="label-settings-enabled"></span>
         </label>
-
-        <div class="filter-group">
-          <label id="label-settings-provider" for="settings-provider" class="filter-label">接口类型 (Provider)</label>
-          <select id="settings-provider" class="hud-select">
-            <option id="opt-provider-ollama" value="ollama">本地 Ollama (ollama)</option>
-            <option id="opt-provider-openai" value="openai-compatible">OpenAI 兼容接口 (openai-compatible)</option>
+        <div class="field-group">
+          <label id="label-settings-provider" for="settings-provider" class="field-label"></label>
+          <select id="settings-provider" class="menu-select">
+            <option id="opt-provider-ollama" value="ollama"></option>
+            <option id="opt-provider-openai" value="openai-compatible"></option>
           </select>
         </div>
-
-        <div class="filter-group">
-          <label id="label-settings-baseurl" for="settings-baseurl" class="filter-label">接口地址 (Base URL)</label>
-          <input
-            id="settings-baseurl"
-            type="text"
-            class="hud-input font-mono"
-            autocomplete="off"
-            spellcheck="false"
-          />
+        <div class="field-group">
+          <label id="label-settings-baseurl" for="settings-baseurl" class="field-label"></label>
+          <input id="settings-baseurl" type="text" class="field-input" autocomplete="off" spellcheck="false" />
           <div id="hint-settings-baseurl" class="field-hint"></div>
         </div>
-
-        <div class="filter-group">
-          <label id="label-settings-model" for="settings-model" class="filter-label">向量模型 (Model)</label>
-          <input
-            id="settings-model"
-            type="text"
-            class="hud-input font-mono"
-            autocomplete="off"
-            spellcheck="false"
-          />
+        <div class="field-group">
+          <label id="label-settings-model" for="settings-model" class="field-label"></label>
+          <input id="settings-model" type="text" class="field-input" autocomplete="off" spellcheck="false" />
         </div>
-
-        <div class="filter-group">
-          <label id="label-settings-apikey-env" for="settings-apikey-env" class="filter-label">密钥环境变量名 (API Key Env)</label>
-          <input
-            id="settings-apikey-env"
-            type="text"
-            class="hud-input font-mono"
-            autocomplete="off"
-            spellcheck="false"
-          />
+        <div class="field-group">
+          <label id="label-settings-apikey-env" for="settings-apikey-env" class="field-label"></label>
+          <input id="settings-apikey-env" type="text" class="field-input" autocomplete="off" spellcheck="false" />
           <div id="hint-settings-apikey-env" class="field-hint"></div>
         </div>
-
-        <div class="filter-group">
-          <label id="label-settings-exclude" for="settings-exclude" class="filter-label">排除目录 (Exclude Folders)</label>
-          <input
-            id="settings-exclude"
-            type="text"
-            class="hud-input font-mono"
-            autocomplete="off"
-            spellcheck="false"
-          />
+        <div class="field-group">
+          <label id="label-settings-exclude" for="settings-exclude" class="field-label"></label>
+          <input id="settings-exclude" type="text" class="field-input" autocomplete="off" spellcheck="false" />
           <div id="hint-settings-exclude" class="field-hint"></div>
         </div>
-
-        <label id="settings-remote-row" class="toggle-row settings-switch-row" for="settings-allow-remote">
-          <input id="settings-allow-remote" type="checkbox" class="hud-checkbox" />
-          <span id="label-settings-allow-remote" class="toggle-text">允许发送到远程地址 (allowRemote)</span>
+        <label class="menu-row" for="settings-allow-remote">
+          <input id="settings-allow-remote" type="checkbox" />
+          <span id="label-settings-allow-remote"></span>
         </label>
-
-        <div id="settings-remote-warning" class="settings-remote-warning is-hidden" role="note"></div>
-
-        <div class="filter-divider" role="separator"></div>
-
+        <div id="settings-remote-warning" class="settings-warning is-hidden" role="note"></div>
         <div class="settings-readonly-box">
-          <div class="settings-stat-row">
-            <span id="label-settings-key-status" class="settings-stat-label">密钥状态</span>
+          <div class="stat-row">
+            <span id="label-settings-key-status" class="stat-label"></span>
             <span id="settings-key-status" class="key-status-badge status-not-required">—</span>
           </div>
-          <div class="settings-stat-row settings-stat-col">
-            <span id="label-settings-index" class="settings-stat-label">索引统计</span>
-            <span id="settings-index-stats" class="settings-stat-value">—</span>
+          <div class="stat-row">
+            <span id="label-settings-index" class="stat-label"></span>
+            <span id="settings-index-stats" class="stat-value">—</span>
           </div>
-          <div class="settings-stat-row">
-            <span id="label-settings-estimate" class="settings-stat-label">预计发送规模</span>
-            <span class="settings-estimate-wrap">
-              <span id="settings-estimate-value" class="settings-stat-value">—</span>
-              <span
-                id="settings-estimate-dirty-dot"
-                class="status-dot unsaved-dot is-hidden"
-                title="未保存更改"
-              ></span>
+          <div class="stat-row">
+            <span id="label-settings-estimate" class="stat-label"></span>
+            <span class="stat-estimate">
+              <span id="settings-estimate-value" class="stat-value">—</span>
+              <span id="settings-estimate-dirty-dot" class="dot-warn is-hidden" title=""></span>
             </span>
           </div>
         </div>
-
         <div id="settings-feedback" class="settings-feedback is-hidden" role="alert"></div>
-
         <div class="settings-actions">
-          <button id="btn-settings-test" type="button" class="hud-btn">
-            <span id="label-settings-test">测试连接 (1 次请求)</span>
+          <button id="btn-settings-test" type="button" class="ghost-btn">
+            <span id="label-settings-test"></span>
           </button>
-          <button id="btn-settings-save" type="button" class="hud-btn primary-btn">
-            <span id="label-settings-save">保存</span>
+          <button id="btn-settings-save" type="button" class="primary-btn">
+            <span id="label-settings-save"></span>
           </button>
-          <button id="btn-settings-confirm" type="button" class="hud-btn confirm-send-btn is-hidden">
+          <button id="btn-settings-confirm" type="button" class="confirm-btn is-hidden">
             <span id="label-settings-confirm"></span>
           </button>
         </div>
       </div>
     </aside>
 
-    <!-- Floating 1-Hop Hover Card -->
-    <div id="hover-card" class="hover-card glass-panel is-hidden" role="status" aria-live="polite">
-      <div class="hover-card-head">
-        <span id="hover-cls" class="cls-badge"></span>
-        <span id="hover-status" class="status-badge"></span>
-        <span id="hover-stale" class="stale-badge is-hidden">STALE</span>
-      </div>
+    <!-- Hover card -->
+    <div id="hover-card" class="hover-card is-hidden" role="status" aria-live="polite">
       <div id="hover-title" class="hover-title"></div>
-      <div id="hover-path" class="hover-path"></div>
-      <div class="hover-meta">
-        <span id="hover-updated"></span>
-        <span id="hover-verified"></span>
-      </div>
+      <div id="hover-meta-line" class="hover-meta"></div>
+      <div id="hover-updated" class="hover-meta muted"></div>
     </div>
 
-    <!-- Toast Notification -->
-    <div id="toast" class="hud-toast glass-panel is-hidden" role="status" aria-live="polite"></div>
+    <div id="toast" class="toast is-hidden" role="status" aria-live="polite"></div>
   </div>
 
   <script type="module" src="./app.js"></script>

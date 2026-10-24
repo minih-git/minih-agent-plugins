@@ -9,8 +9,10 @@
  *
  *   lib/vendor/yaml.mjs     the `yaml` package as one self-contained ESM file
  *                           (frontmatter parsing with round-trip Documents)
- *   view/vendor/*.mjs       `3d-force-graph` and `force-graph` (Knowledge
- *                           Universe view, 3D and 2D renderers)
+ *   view/vendor/*.mjs       `force-graph` (flat chart mode) and
+ *                           `universe-3d` (`3d-force-graph` + `three` +
+ *                           bloom/output/CSS2D add-ons in one `three` copy)
+ *                           for the Knowledge Universe view
  *   THIRD_PARTY_NOTICES.md  licenses of everything vendored above
  *
  *   node scripts/build.mjs --lib    # only lib/vendor/yaml.mjs (test speed)
@@ -54,8 +56,15 @@ function copyYaml() {
 function copyViewLibraries() {
   const vendor = join(root, "view", "vendor");
   mkdirSync(vendor, { recursive: true });
-  bundle(join(modules, "3d-force-graph", "dist", "3d-force-graph.mjs"), join(vendor, "3d-force-graph.mjs"));
+  // Chart mode (flat star chart).
   bundle(join(modules, "force-graph", "dist", "force-graph.mjs"), join(vendor, "force-graph.mjs"));
+  // 3D star map: one bundle re-exporting 3d-force-graph, three, and the
+  // three add-ons (bloom, output, CSS2D labels, fat lines) so everything
+  // shares a single three instance (design doc §7).
+  bundle(join(root, "scripts", "vendor-universe-3d.entry.mjs"), join(vendor, "universe-3d.mjs"));
+  // The pure layout module, so the view never reaches outside view/ for a
+  // module import (panel browsers may sandbox the view directory).
+  bundle(join(root, "lib", "layout.mjs"), join(vendor, "layout.mjs"));
 }
 
 function notices() {
@@ -89,7 +98,7 @@ function notices() {
 
 function requiredFiles() {
   const required = ["lib/vendor/yaml.mjs"];
-  if (!libOnly) required.push("view/vendor/3d-force-graph.mjs", "view/vendor/force-graph.mjs", "THIRD_PARTY_NOTICES.md");
+  if (!libOnly) required.push("view/vendor/force-graph.mjs", "view/vendor/universe-3d.mjs", "view/vendor/layout.mjs", "THIRD_PARTY_NOTICES.md");
   const missing = required.filter((relative) => {
     try {
       return readFileSync(join(root, relative)) === null;

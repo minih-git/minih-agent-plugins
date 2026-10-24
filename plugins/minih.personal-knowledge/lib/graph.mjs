@@ -1,9 +1,12 @@
 /**
- * Knowledge Universe graph payload (ADR 0001 §10).
+ * Knowledge Universe graph payload (ADR 0001 §10, design doc §3).
  *
  * Pure derivation over the shared vault index and ontology, so the view
- * backend, the tests, and the health mode all read the same numbers.
+ * backend, the tests, and the health mode all read the same numbers. The
+ * Knowledge Universe v2 classification and layout (`lib/layout.mjs`) run on
+ * the finished payload, so 2D chart, 3D view, and tests share one geometry.
  */
+import { applyUniverseLayout } from "./layout.mjs";
 
 function wikilinkTargets(value) {
   const links = Array.isArray(value) ? value : value ? [value] : [];
@@ -90,12 +93,18 @@ export function buildGraphPayload({ index, ontology, now = new Date(), vaultName
     }
   }
 
-  return {
-    generatedAt: now.toISOString(),
-    vaultName,
-    nodes,
-    links,
-    ghosts: [...ghostMap.values()],
-    memory,
-  };
+  return applyUniverseLayout(
+    {
+      generatedAt: now.toISOString(),
+      vaultName,
+      nodes,
+      links,
+      ghosts: [...ghostMap.values()],
+      memory,
+    },
+    {
+      navigationNamePatterns: ontology.navigationNamePatterns,
+      projectTitlePrefixes: ontology.projectTitlePrefixes,
+    },
+  );
 }

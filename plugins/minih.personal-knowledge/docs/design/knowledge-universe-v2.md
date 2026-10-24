@@ -43,7 +43,7 @@ same numbers.
 | Field | Values |
 |---|---|
 | `node.galaxy` | Galaxy id: a project note id, or `shared` |
-| `node.kind` | `star`, `planet`, `moon`, `nav` |
+| `node.kind` | `star`, `planet`, `moon`, `nav`; memory satellites (§13) get `satellite` |
 | `node.ring` | `inner` or `outer` (planets only) |
 | `node.x`, `node.y`, `node.z` | Layout position in world units (§4) |
 | `link.kind` | One of the kinds in §3.4 |
@@ -91,11 +91,14 @@ real vault.
 | `typed` | Predicate other than `wikilink` and `project` | 4 | Shown |
 | `parent` | Predicate `project`, or a wikilink between a star and a note of its own galaxy | 209 | Hidden: the orbits show belonging |
 | `lane` | Wikilink between planets or stars of different galaxies | 42 links in 19 galaxy pairs | One line per galaxy pair |
-| `tether` | Wikilink between an event and a planet | 145 | Galaxy view, hovered or selected planet only |
+| `tether` | Wikilink between an event and a planet | 146 | Galaxy view, hovered or selected planet only |
 | `moon` | Wikilink between two events | 66 | Hovered event only |
-| `constellation` | Wikilink between two planets of the same galaxy | 104 | Shown |
+| `constellation` | Wikilink between two planets of the same galaxy | 103 | Shown |
 
-The overview shows 127 lines: 104 constellation lines, 19 lanes, 4 typed lines.
+The overview shows 126 lines: 103 constellation lines, 19 lanes, 4 typed
+lines. (The first prototype counted 127 with one `deployment` note still read
+as a planet; the §10 alias change makes it an event, turning its one
+constellation line into a tether.)
 
 ## 4. Layout
 
@@ -356,7 +359,7 @@ Codes appear only inside health mode, next to the words.
 3. On those screenshots, check:
    - the map covers at least 90% of the viewport;
    - every galaxy name is readable;
-   - the overview has 120–135 lines (127 today);
+   - the overview has 120–135 lines (126 today);
    - the largest galaxy is at most 40% of the width (22% today);
    - the overview shows at most 12 planet names.
 4. Measure frame rate on the user's M5 Pro at device pixel ratio 2: at least
