@@ -16,15 +16,8 @@ import path from "node:path";
  * result, a view payload, or an error message.
  */
 
-export const EMBEDDING_DEFAULTS = Object.freeze({
-  enabled: true,
-  provider: "ollama",
-  baseUrl: "http://127.0.0.1:11434",
-  model: "bge-m3",
-  allowRemote: false,
-  apiKeyEnv: "",
-  exclude: [],
-});
+export { EMBEDDING_DEFAULTS } from "./embedding-defaults.mjs";
+import { EMBEDDING_DEFAULTS } from "./embedding-defaults.mjs";
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
 const API_KEY_ENV_PATTERN = /^[A-Z_][A-Z0-9_]{0,63}$/;

@@ -8,16 +8,9 @@
 
 import { invokeBridge, hasBridge } from "./bridge.js";
 import { BRIDGE_TIMEOUT_MS } from "./strings.js";
-
-const DEFAULT_EMBEDDING_SETTINGS = {
-  enabled: false,
-  provider: "ollama",
-  baseUrl: "http://127.0.0.1:11434",
-  model: "nomic-embed-text",
-  allowRemote: false,
-  apiKeyEnv: "",
-  exclude: [],
-};
+// One source of truth with the backend validator (lib/embeddings.mjs
+// re-exports the same frozen object; build.mjs bundles it for the view).
+import { EMBEDDING_DEFAULTS as DEFAULT_EMBEDDING_SETTINGS } from "./vendor/embedding-defaults.mjs";
 
 function parseExcludeFolders(rawText) {
   return String(rawText || "")

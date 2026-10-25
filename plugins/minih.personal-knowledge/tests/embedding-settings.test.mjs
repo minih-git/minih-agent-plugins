@@ -40,7 +40,7 @@ test("settings rules reject every §6.1 violation and keep valid remote settings
   assert.throws(() => validateEmbeddingSettings({ exclude: ["/abs"] }), /EMBEDDING_CONFIG_INVALID/);
   assert.throws(() => validateEmbeddingSettings("not an object"), /EMBEDDING_CONFIG_INVALID/);
   const ok = validateEmbeddingSettings({
-    baseUrl: "https://rc.hmini.org/v1",
+    baseUrl: "https://example.com/v1",
     allowRemote: true,
     provider: "openai-compatible",
     model: "text-embedding-3-small",

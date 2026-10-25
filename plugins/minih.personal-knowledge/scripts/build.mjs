@@ -65,6 +65,8 @@ function copyViewLibraries() {
   // The pure layout module, so the view never reaches outside view/ for a
   // module import (panel browsers may sandbox the view directory).
   bundle(join(root, "lib", "layout.mjs"), join(vendor, "layout.mjs"));
+  // The embedding defaults shared with lib/embeddings.mjs (one source).
+  bundle(join(root, "lib", "embedding-defaults.mjs"), join(vendor, "embedding-defaults.mjs"));
 }
 
 function notices() {
@@ -98,7 +100,7 @@ function notices() {
 
 function requiredFiles() {
   const required = ["lib/vendor/yaml.mjs"];
-  if (!libOnly) required.push("view/vendor/force-graph.mjs", "view/vendor/universe-3d.mjs", "view/vendor/layout.mjs", "THIRD_PARTY_NOTICES.md");
+  if (!libOnly) required.push("view/vendor/force-graph.mjs", "view/vendor/universe-3d.mjs", "view/vendor/layout.mjs", "view/vendor/embedding-defaults.mjs", "THIRD_PARTY_NOTICES.md");
   const missing = required.filter((relative) => {
     try {
       return readFileSync(join(root, relative)) === null;

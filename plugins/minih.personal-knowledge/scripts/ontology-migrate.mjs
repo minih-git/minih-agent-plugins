@@ -21,6 +21,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { createKnowledgeService } from "../mcp/knowledge-core.mjs";
+import { groupReviewChanges, mapStatusChange } from "../lib/migrate-rules.mjs";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const BATCH_SIZE = 30;
@@ -61,13 +62,14 @@ function planChanges(note, ontology) {
     const status = metadata.status;
     if (vocabulary && status !== undefined && status !== "" && !vocabulary.includes(String(status))) {
       const value = String(status);
-      const prefix = vocabulary.find((entry) => value.startsWith(`${entry}-`) || value.startsWith(`${entry} `));
+      const mapping = mapStatusChange(value, cls, vocabulary);
       changes.push({
         key: "status",
         from: value,
-        to: prefix ?? ontology.defaultStatus(cls),
-        to2: { outcome: value },
-        rule: "status-to-outcome",
+        to: mapping.to,
+        ...(mapping.to2 ? { to2: mapping.to2 } : {}),
+        ...(mapping.to === null ? { note: "无法自动映射，需人工决定目标状态" } : {}),
+        rule: mapping.rule,
         review: true,
       });
     }
@@ -209,10 +211,15 @@ function renderPlanMd(plan) {
       lines.push(`| ${note.path} | ${change.key} | ${change.from ?? "∅"} | ${change.to} | ${change.rule} |`);
     }
   }
-  lines.push("", "## 需要人工确认的变更（review: true）", "", "| 笔记 | 键 | 从 | 建议 | 规则 |", "| --- | --- | --- | --- | --- |");
+  const reviewGroups = groupReviewChanges(plan.notes);
+  lines.push("", "## 需要人工确认的变更（按组汇总，可整组批准）", "", "| 规则 | 键 | 从 | 建议 | 条数 | 示例笔记 |", "| --- | --- | --- | --- | --- | --- |");
+  for (const group of reviewGroups) {
+    lines.push(`| ${group.rule} | ${group.key} | ${group.from} | ${group.to} | ${group.count} | ${group.examplePaths[0]} |`);
+  }
+  lines.push("", "### 待确认明细", "", "| 笔记 | 键 | 从 | 建议 | 规则 |", "| --- | --- | --- | --- | --- |");
   for (const note of plan.notes) {
     for (const change of note.changes.filter((change) => change.review)) {
-      lines.push(`| ${note.path} | ${change.key} | ${change.from ?? "∅"} | ${change.to}${change.to2 ? ` + ${JSON.stringify(change.to2)}` : ""} | ${change.rule} |`);
+      lines.push(`| ${note.path} | ${change.key} | ${change.from ?? "∅"} | ${change.to ?? "需人工决定"}${change.to2 ? ` + ${JSON.stringify(change.to2)}` : ""} | ${change.rule} |`);
     }
   }
   lines.push("", "## Base 过滤器", "", "| 文件 | 从 | 到 | 规则 | review |", "| --- | --- | --- | --- | --- |");
@@ -301,7 +308,7 @@ if (process.argv.includes("--plan")) {
       path: note.path,
       patch: Object.fromEntries(
         note.changes
-          .filter((change) => !change.review)
+          .filter((change) => !change.review && change.to != null)
           .map((change) => [change.key, change.to]),
       ),
     }))

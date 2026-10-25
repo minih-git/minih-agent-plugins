@@ -46,7 +46,7 @@ const memoryEntry = {
   id: "m-1",
   scope: "project",
   kind: "fact",
-  content: "Router 生产网关运行在 rc.hmini.org",
+  content: "Router 生产网关运行在 rc.example.com",
   rationale: "来自会话确认",
   origin: "explicit",
   evidence: "verified",
@@ -132,7 +132,7 @@ test("promotion applies after confirmation and is refused in read-only mode", as
   assert.equal(applied.promoted, true);
   const written = await readFile(path.join(vault, preview.draft.path), "utf8");
   assert.match(written, /type: reference/);
-  assert.match(written, /Router 生产网关运行在 rc\.hmini\.org/);
+  assert.match(written, /Router 生产网关运行在 rc\.example\.com/);
 
   // Read-only mode refuses the write but the preview still works.
   process.env.PERSONAL_KNOWLEDGE_READ_ONLY = "1";
