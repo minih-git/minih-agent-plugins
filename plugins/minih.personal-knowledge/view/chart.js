@@ -641,16 +641,108 @@ export class ChartView {
     ctx.textBaseline = "alphabetic";
 
     // Galaxy names are always shown (§5.5): serif below the event ring.
-    for (const galaxy of this.visibleGalaxies()) {
+    // Majors claim their (forced) boxes first so belt names can dodge them;
+    // the reverse order would let a forced major land on a placed belt name.
+    const orderedGalaxies = [...this.visibleGalaxies()].sort(
+      (a, b) => (a.role === "belt" ? 1 : 0) - (b.role === "belt" ? 1 : 0),
+    );
+    for (const galaxy of orderedGalaxies) {
       const c = this.toScreen(galaxy);
       const major = galaxy.role !== "belt";
       const name = galaxy.id === "shared" ? t("sharedGalaxy") : galaxy.name;
       const y = c.y + (focus ? galaxy.re * this.transform.scale + 34 : major ? galaxy.re * this.transform.scale + 22 : 16);
       ctx.font = major ? `600 17px ${SERIF}` : `11px ${SANS}`;
-      if (this.placeLabel(c.x, y, name, { anchor: "middle", force: true })) {
+      // Galaxy names are always shown. Belt (outer-ring) names yield first:
+      // try offset slots when the default spot collides, and only fall back
+      // to a forced placement when nothing fits.
+      const beltOffsets = (() => {
+        if (major) return [{ dx: 0, dy: 0, anchor: "middle" }];
+        const w = ctx.measureText(name).width;
+        const beside = w / 2 + 8;
+        const wide = w * 0.55 + 6;
+        const farther = w * 1.15 + 16;
+        const farthest = w * 1.8 + 30;
+        return [
+          { dx: 0, dy: 0, anchor: "middle" },
+          { dx: 0, dy: 16, anchor: "middle" },
+          { dx: 0, dy: -16, anchor: "middle" },
+          // Anchor next to the point instead of centered on it — a different
+          // footprint that escapes centered-name pile-ups.
+          { dx: beside, dy: 0, anchor: "start" },
+          { dx: -beside, dy: 0, anchor: "end" },
+          { dx: beside, dy: 14, anchor: "start" },
+          { dx: -beside, dy: 14, anchor: "end" },
+          { dx: beside, dy: -12, anchor: "start" },
+          { dx: -beside, dy: -12, anchor: "end" },
+          { dx: wide, dy: -8, anchor: "middle" },
+          { dx: -wide, dy: -8, anchor: "middle" },
+          { dx: wide, dy: 14, anchor: "middle" },
+          { dx: -wide, dy: 14, anchor: "middle" },
+          { dx: 0, dy: 32, anchor: "middle" },
+          { dx: 0, dy: -32, anchor: "middle" },
+          { dx: farther, dy: 0, anchor: "middle" },
+          { dx: -farther, dy: 0, anchor: "middle" },
+          { dx: farther, dy: -16, anchor: "middle" },
+          { dx: -farther, dy: -16, anchor: "middle" },
+          { dx: farther, dy: 16, anchor: "middle" },
+          { dx: -farther, dy: 16, anchor: "middle" },
+          { dx: 0, dy: 48, anchor: "middle" },
+          { dx: 0, dy: -48, anchor: "middle" },
+          { dx: wide, dy: 32, anchor: "middle" },
+          { dx: -wide, dy: 32, anchor: "middle" },
+          { dx: wide, dy: -32, anchor: "middle" },
+          { dx: -wide, dy: -32, anchor: "middle" },
+          { dx: 0, dy: 64, anchor: "middle" },
+          { dx: 0, dy: -64, anchor: "middle" },
+          { dx: 0, dy: 8, anchor: "middle" },
+          { dx: 0, dy: -8, anchor: "middle" },
+          { dx: 0, dy: 24, anchor: "middle" },
+          { dx: 0, dy: -24, anchor: "middle" },
+          { dx: 0, dy: 40, anchor: "middle" },
+          { dx: 0, dy: -40, anchor: "middle" },
+          { dx: 0, dy: 56, anchor: "middle" },
+          { dx: 0, dy: -56, anchor: "middle" },
+          { dx: 0, dy: 72, anchor: "middle" },
+          { dx: 0, dy: -72, anchor: "middle" },
+          { dx: 0, dy: 80, anchor: "middle" },
+          { dx: 0, dy: -80, anchor: "middle" },
+          { dx: wide, dy: 48, anchor: "middle" },
+          { dx: -wide, dy: 48, anchor: "middle" },
+          { dx: wide, dy: -48, anchor: "middle" },
+          { dx: -wide, dy: -48, anchor: "middle" },
+          { dx: farthest, dy: 0, anchor: "middle" },
+          { dx: -farthest, dy: 0, anchor: "middle" },
+          { dx: farthest, dy: -16, anchor: "middle" },
+          { dx: -farthest, dy: -16, anchor: "middle" },
+        ];
+      })();
+      let placedName = false;
+      for (const candidate of beltOffsets) {
+        if (major && (candidate.dx !== 0 || candidate.dy !== 0)) continue;
+        if (this.placeLabel(c.x + candidate.dx, y + candidate.dy, name, { anchor: candidate.anchor, force: major })) {
+          const label = this.pendingLabels[this.pendingLabels.length - 1];
+          // Keep the candidate on the canvas; a box hanging off the edge is
+          // as useless as a collision, so reject it and try the next slot.
+          const box = label.box;
+          if (!major && (box.x0 < 0 || box.y0 < 0 || box.x1 > this.width || box.y1 > this.height)) {
+            this.labelBoxes.pop();
+            this.pendingLabels.pop();
+            continue;
+          }
+          label.serif = major;
+          label.fontSize = major ? 17 : 11;
+          label.color = mixTowardWhite(galaxy.hue, 0.25);
+          label.galaxyId = galaxy.id;
+          placedName = true;
+          break;
+        }
+      }
+      if (!placedName && !major) {
+        // Must display: force the default spot as the last resort.
+        this.placeLabel(c.x, y, name, { anchor: "middle", force: true });
         const label = this.pendingLabels[this.pendingLabels.length - 1];
-        label.serif = major;
-        label.fontSize = major ? 17 : 11;
+        label.serif = false;
+        label.fontSize = 11;
         label.color = mixTowardWhite(galaxy.hue, 0.25);
         label.galaxyId = galaxy.id;
       }

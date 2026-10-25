@@ -1216,7 +1216,13 @@ export class ThreeView {
     // names cannot cover them. Names are always shown; when the default spot
     // collides with an earlier box, try one slot above, then below, and keep
     // the default as the last resort.
-    for (const [id, label] of this.galaxyLabels) {
+    // Majors claim their boxes first so belt names can dodge them.
+    const orderedGalaxyLabels = [...this.galaxyLabels].sort(
+      ([idA], [idB]) =>
+        (this.model.galaxiesById.get(idA)?.role === "belt" ? 1 : 0) -
+        (this.model.galaxiesById.get(idB)?.role === "belt" ? 1 : 0),
+    );
+    for (const [id, label] of orderedGalaxyLabels) {
       const galaxy = this.model.galaxiesById.get(id);
       if (!galaxy) continue;
       const p = this.projectToScreen(label.position.x, label.position.y, label.position.z);
@@ -1228,7 +1234,6 @@ export class ThreeView {
         major ? fonts.nameSpacing : "0.03em",
         galaxy.id === "shared" ? this.t("sharedGalaxy") : galaxy.name,
       );
-      void 0;
       let totalHeight = major ? 22 : 15;
       let captionWidth = 0;
       if (major) {
@@ -1272,9 +1277,28 @@ export class ThreeView {
           chosenOffset = [dx, dy];
           break;
         }
+        // Slide the chosen box whole so it stays on the canvas (§ 外圈名
+        // 贴边内移): the box never shrinks, so the collision test stays true.
+        const slideX =
+          Math.max(0, chosen.x1 - (width - 4)) - Math.min(0, chosen.x0 - 4);
+        if (slideX !== 0) {
+          chosen.x0 += slideX;
+          chosen.x1 += slideX;
+          chosenOffset[0] += slideX;
+        }
         label.element.style.translate = `${Math.round(chosenOffset[0])}px ${Math.round(chosenOffset[1])}px`;
       } else {
-        label.element.style.translate = "";
+        // Even without a collision the default spot can cross the viewport
+        // edge; slide it back whole.
+        const slideX =
+          Math.max(0, chosen.x1 - (width - 4)) - Math.min(0, chosen.x0 - 4);
+        if (slideX !== 0) {
+          chosen.x0 += slideX;
+          chosen.x1 += slideX;
+          label.element.style.translate = `${Math.round(slideX)}px 0`;
+        } else {
+          label.element.style.translate = "";
+        }
       }
       boxes.push(chosen);
     }
