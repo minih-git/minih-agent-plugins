@@ -494,9 +494,7 @@ async function promotePreview(payload) {
  * atomic write) still applies. */
 async function promoteApply(payload) {
   if (await isReadOnlyMode()) {
-    throw new Error(
-      "promotion is refused: PERSONAL_KNOWLEDGE_READ_ONLY is set, or readOnly is enabled in repo-map.json.",
-    );
+    throw new Error(`promotion is refused: ${readOnlyState.refusalReason()}.`);
   }
   const notePath = String(payload?.path ?? "");
   const content = String(payload?.content ?? "");

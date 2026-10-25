@@ -748,7 +748,7 @@ function renderIndexSection() {
       : String(status.model)
     : "—";
   $("index-stat-written").textContent = status.writtenAt
-    ? status.writtenAt.replace("T", " ").replace(/\.\d+Z$/, "Z")
+    ? new Date(status.writtenAt).toLocaleString()
     : t("indexStatNever");
 
   const reasonEl = $("index-reason");

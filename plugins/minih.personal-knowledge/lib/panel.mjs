@@ -53,10 +53,21 @@ export function createConfigStore({ env = process.env, home = os.homedir(), plug
     }
   }
 
-  function validate(values) {
+  async function validate(values) {
     if (values.vaultPath !== undefined && values.vaultPath !== null) {
       if (!path.isAbsolute(values.vaultPath)) {
         throw configError("CONFIG_INVALID", "vaultPath must be an absolute path");
+      }
+      // settings-panel.md §4: the vault must already be a directory on disk,
+      // so a typo cannot point the whole plugin at nothing.
+      let vaultStat;
+      try {
+        vaultStat = await stat(values.vaultPath);
+      } catch {
+        throw configError("CONFIG_INVALID", `vaultPath does not exist: ${values.vaultPath}`);
+      }
+      if (!vaultStat.isDirectory()) {
+        throw configError("CONFIG_INVALID", `vaultPath is not a directory: ${values.vaultPath}`);
       }
     }
     if (values.backupRetentionDays !== undefined && values.backupRetentionDays !== null) {
@@ -115,15 +126,23 @@ export function createConfigStore({ env = process.env, home = os.homedir(), plug
           throw configError("CONFIG_LOCKED", `${key} is locked by the environment variable ${locked[key]}`);
         }
       }
-      validate(values);
+      await validate(values);
       let existing = null;
       try {
         existing = await readJson(configPath);
       } catch (error) {
         if (error?.code !== "ENOENT") throw error;
       }
-      const { raw: template } = await current();
-      const merged = { ...template, ...(existing ?? {}) };
+      // The user file is the base as-is: keys the user dropped must not come
+      // back on the next save. The bundled template only seeds the very first
+      // save, without its $comment annotation (settings-panel.md §4).
+      let merged;
+      if (existing) {
+        merged = { ...existing };
+      } else {
+        merged = { ...(await current()).raw };
+        delete merged.$comment;
+      }
       for (const key of EDITABLE_KEYS) {
         const value = values[key];
         if (value === undefined) continue;

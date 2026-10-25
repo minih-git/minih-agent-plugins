@@ -165,9 +165,7 @@ const handlers = {
   knowledge_links: (args) => service.links(args),
   knowledge_write: async (args) => {
     if (args?.dryRun === false && (await readOnlyState.isReadOnly())) {
-      throw new Error(
-        "knowledge_write is read-only: PERSONAL_KNOWLEDGE_READ_ONLY is set, or readOnly is enabled in repo-map.json.",
-      );
+      throw new Error(`knowledge_write is read-only: ${readOnlyState.refusalReason()}.`);
     }
     return service.write(args);
   },

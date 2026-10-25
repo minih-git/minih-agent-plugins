@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { copyFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -54,6 +54,64 @@ async function makeBackend({ lockVault = true } = {}) {
   const backend = require(path.join(PLUGIN_ROOT, "main.js"));
   await backend.onLoad();
   return { backend, vault, configPath, dataPath, root };
+}
+
+/** Drive the real MCP stdio server as a child process. The callback receives
+ * a `call(id, method, params)` helper that frames JSON-RPC lines and resolves
+ * per response id; every request carries a timeout so a wedged or crashed
+ * server fails the test instead of hanging the suite. */
+async function withMcpServer(run) {
+  const { spawn } = await import("node:child_process");
+  const child = spawn(process.execPath, [path.join(PLUGIN_ROOT, "mcp", "server.mjs")], {
+    env: process.env,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const stderr = [];
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => stderr.push(chunk));
+  const waiters = new Map();
+  let pending = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    pending += chunk;
+    for (let newline = pending.indexOf("\n"); newline >= 0; newline = pending.indexOf("\n")) {
+      const line = pending.slice(0, newline);
+      pending = pending.slice(newline + 1);
+      let message;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const waiter = waiters.get(message.id);
+      if (waiter) {
+        waiters.delete(message.id);
+        clearTimeout(waiter.timer);
+        waiter.resolve(message);
+      }
+    }
+  });
+  child.on("exit", () => {
+    for (const waiter of waiters.values()) {
+      clearTimeout(waiter.timer);
+      waiter.reject(new Error(`MCP server exited before answering; stderr: ${stderr.join("")}`));
+    }
+    waiters.clear();
+  });
+  const call = (id, method, params) =>
+    new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`MCP request ${id} (${method}) timed out; stderr: ${stderr.join("")}`)),
+        15_000,
+      );
+      waiters.set(id, { reject, resolve, timer });
+      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+    });
+  try {
+    return await run({ call });
+  } finally {
+    child.kill("SIGTERM");
+  }
 }
 
 test("kg.config: env locks its field, unedited keys survive, backup written, template used, invalid refused", async () => {
@@ -138,7 +196,7 @@ test("kg.config: with no user file the first save starts from the bundled templa
   const saved = JSON.parse(await readFile(configPath, "utf8"));
   assert.equal(saved.backupRetentionDays, 14);
   assert.ok(Array.isArray(saved.projects), "template keys seed the first save");
-  assert.equal(saved.$comment, TEMPLATE.$comment, "template annotation survives");
+  assert.equal("$comment" in saved, false, "the first save drops the template's $comment");
 });
 
 test("kg.routing and kg.memory.status answer with exists flags", async () => {
@@ -184,4 +242,87 @@ test("kg.prefs round-trips and kg.openSettings reports a missing host API", asyn
     /CONFIG_INVALID/,
   );
   await assert.rejects(backend.onPanelInvoke("kg.openSettings", {}), /pi\.ui\.openPanel/);
+});
+
+test("kg.config.set: an existing user file never regains template keys it dropped", async () => {
+  const { backend, configPath, vault } = await makeBackend({ lockVault: false });
+  // A user file that dropped topicRoutes and $comment on purpose.
+  const userFile = { vaultPath: vault, projects: [], ignoreFolders: [".obsidian"], backupRetentionDays: 7 };
+  await writeFile(configPath, `${JSON.stringify(userFile, null, 2)}\n`);
+  await backend.onPanelInvoke("kg.config.set", { values: { backupRetentionDays: 21 } });
+  const saved = JSON.parse(await readFile(configPath, "utf8"));
+  assert.equal(saved.backupRetentionDays, 21);
+  assert.equal("topicRoutes" in saved, false, "topicRoutes must not bleed back from the template");
+  assert.equal("$comment" in saved, false, "the template $comment must not bleed back");
+  assert.deepEqual(saved.projects, []);
+  assert.deepEqual(saved.ignoreFolders, [".obsidian"]);
+  assert.equal(saved.vaultPath, vault, "other keys stay byte-equal in value");
+});
+
+test("kg.config.set: vaultPath must be an existing directory", async () => {
+  const { backend } = await makeBackend({ lockVault: false });
+  const root = await mkdtemp(path.join(os.tmpdir(), "personal-knowledge-vaultcheck-"));
+  const missing = path.join(root, "Does Not Exist");
+  await assert.rejects(
+    backend.onPanelInvoke("kg.config.set", { values: { vaultPath: missing } }),
+    (error) => error.code === "CONFIG_INVALID" && /does not exist/.test(error.message),
+    "a missing path is refused",
+  );
+  const filePath = path.join(root, "plain-file.txt");
+  await writeFile(filePath, "not a vault\n");
+  await assert.rejects(
+    backend.onPanelInvoke("kg.config.set", { values: { vaultPath: filePath } }),
+    (error) => error.code === "CONFIG_INVALID" && /not a directory/.test(error.message),
+    "a plain file is refused",
+  );
+  // A real directory passes.
+  const saved = await backend.onPanelInvoke("kg.config.set", { values: { vaultPath: root } });
+  assert.equal(saved.saved, true);
+});
+
+test("an unparseable repo-map fails closed for every real write", async () => {
+  const { backend, configPath, vault } = await makeBackend({ lockVault: false });
+  const mcpWrite = { path: "00 Inbox/Mcp Repair.md", content: "---\ntitle: Mcp Repair\ntype: reference\n---\n# Mcp Repair\n", create: true, dryRun: false };
+  // The MCP server starts on the still-valid config, then the file is
+  // corrupted underneath the running process — the case the guard's
+  // mtime-triggered re-read exists for.
+  await withMcpServer(async ({ call }) => {
+    await call(1, "ping", {});
+    await writeFile(configPath, "{ this is not json");
+
+    // Panel channel: a real write is refused while the file is unparseable.
+    await assert.rejects(
+      backend.onPanelInvoke("kg.promote.apply", { path: "00 Inbox/Memory - X.md", content: "---\ntitle: X\ntype: reference\n---\n# X\n" }),
+      /readOnly is enabled in repo-map\.json/,
+      "kg.promote.apply is refused while repo-map.json is unparseable",
+    );
+
+    // MCP channel: the same guard refuses knowledge_write with dry-run off.
+    const refused = await call(2, "tools/call", { name: "knowledge_write", arguments: mcpWrite });
+    assert.equal(refused.result?.isError, true, "knowledge_write(dryRun:false) is refused while repo-map.json is unparseable");
+    assert.match(refused.result?.content?.[0]?.text ?? "", /readOnly is enabled in repo-map\.json/);
+
+    // Repairing the file releases the guard without a restart on both
+    // channels: the MCP write goes through, and the panel refusal is no
+    // longer about read-only mode but about the (deliberately wrong) target
+    // path, which only reaches the check after the read-only gate passed.
+    await writeRepoMap({ vaultPath: vault });
+    const allowed = await call(3, "tools/call", { name: "knowledge_write", arguments: mcpWrite });
+    assert.equal(allowed.result?.isError, undefined, "the repaired config lets knowledge_write through");
+    assert.equal(allowed.result?.structuredContent?.action, "create");
+    assert.ok((await stat(path.join(vault, "00 Inbox", "Mcp Repair.md"))).isFile(), "the note is really written");
+
+    let afterRepairMessage = null;
+    try {
+      await backend.onPanelInvoke("kg.promote.apply", {
+        path: "01 Projects/Evil.md",
+        content: "---\ntitle: X\ntype: reference\n---\n# X\n",
+      });
+      assert.fail("expected a refusal for the non-Inbox target");
+    } catch (error) {
+      afterRepairMessage = String(error?.message ?? error);
+    }
+    assert.doesNotMatch(afterRepairMessage, /readOnly is enabled/, "the read-only refusal is gone after repair");
+    assert.match(afterRepairMessage, /00 Inbox/, "the failure is about the target path, not read-only");
+  });
 });
