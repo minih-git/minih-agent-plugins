@@ -405,7 +405,8 @@ export class KnowledgeService {
    */
   async ensureVectors(options = {}) {
     // `force` also re-reads embedding.json immediately, past the 1-second
-    // throttle (build-index and tests use it).
+    // throttle (build-index and tests use it). `onProgress({ done, total })`
+    // fires between batches; `signal` (AbortSignal) aborts between batches.
     await this.#refreshEmbeddingClient({ force: options.force === true });
     if (!this.embedding) {
       this.pendingChunkCount = 0;
@@ -435,7 +436,8 @@ export class KnowledgeService {
     }
     this.ensureVectorsInFlightBudgetMs = budgetMs;
     this.ensureVectorsInFlightForce = force;
-    this.ensureVectorsPromise = this.#ensureVectors({ budgetMs, force }).finally(() => {
+    const { onProgress = null, signal = null } = options;
+    this.ensureVectorsPromise = this.#ensureVectors({ budgetMs, force, onProgress, signal }).finally(() => {
       this.ensureVectorsPromise = null;
       this.ensureVectorsInFlightBudgetMs = null;
       this.ensureVectorsInFlightForce = null;
@@ -443,7 +445,7 @@ export class KnowledgeService {
     return this.ensureVectorsPromise;
   }
 
-  async #ensureVectors({ budgetMs = 3000, force = false } = {}) {
+  async #ensureVectors({ budgetMs = 3000, force = false, onProgress = null, signal = null } = {}) {
     const exclude = this.embeddingSettings?.exclude ?? [];
     const deadline = this.now().getTime() + budgetMs;
     const bySha = new Map((this.vectors.chunks ?? []).map((row) => [row.sha, row]));
@@ -486,10 +488,17 @@ export class KnowledgeService {
     let embeddedNew = false;
     let sawAuthFailure = false;
     let embedError = null;
+    let aborted = false;
     // Batched requests: EMBED_BATCH texts per call. Successes from earlier
-    // batches are kept and saved; the budget is checked between batches.
+    // batches are kept and saved; the budget and the abort signal are checked
+    // between batches.
+    let done = 0;
     for (let start = 0; start < missing.length; start += EMBED_BATCH) {
       if (this.now().getTime() > deadline) break;
+      if (signal?.aborted) {
+        aborted = true;
+        break;
+      }
       const batch = missing.slice(start, start + EMBED_BATCH);
       try {
         const vectors = await this.embedding.embed(batch.map((item) => item.text));
@@ -498,6 +507,7 @@ export class KnowledgeService {
           if (!dims) dims = vector.length;
           vectorMap.set(item.row.sha, vector);
           embeddedNew = true;
+          done += 1;
         });
       } catch (error) {
         embedError = error;
@@ -509,7 +519,9 @@ export class KnowledgeService {
         }
         break;
       }
+      onProgress?.({ done, total: missing.length });
     }
+    onProgress?.({ done, total: missing.length });
     if (sawAuthFailure) {
       const key = await resolveApiKey(this.embeddingSettings.apiKeyEnv, { home: os.homedir() });
       this.apiKeyStatus = key.status;
@@ -551,8 +563,10 @@ export class KnowledgeService {
     });
     if (saved) {
       this.vectorReason =
-        embedError?.code ?? (this.pendingChunkCount > 0 ? "pending" : null);
-      if (embedError && this.pendingChunkCount === 0) this.vectorReason = embedError.code ?? "EMBED_FAILED";
+        embedError?.code ??
+        (aborted ? "ABORTED" : this.pendingChunkCount > 0 ? "pending" : null);
+    } else if (aborted) {
+      this.#setVectorReason("ABORTED");
     }
   }
 

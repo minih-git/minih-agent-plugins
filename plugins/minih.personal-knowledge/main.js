@@ -17,6 +17,9 @@
 const { createHash } = require("node:crypto");
 const path = require("node:path");
 
+const { createReadOnlyState } = require("./lib/read-only.mjs");
+const { createConfigStore, createPrefsStore } = require("./lib/panel.mjs");
+
 const pluginRoot = __dirname;
 const manifest = require("./manifest.json");
 
@@ -30,12 +33,151 @@ const CHANNELS = new Set([
   "kg.settings.get",
   "kg.settings.set",
   "kg.settings.test",
+  "kg.config.get",
+  "kg.config.set",
+  "kg.routing.get",
+  "kg.index.status",
+  "kg.index.rebuild",
+  "kg.memory.status",
+  "kg.prefs.get",
+  "kg.prefs.set",
+  "kg.openSettings",
 ]);
 
 const MAX_PREVIEW_CHARS = 8000;
 const USER_CENTER_ID = "memory:user-center";
 
 let state = null;
+let panelStores = null;
+let indexRun = null; // { controller, done, total, mode, error }
+let lastIndexRun = null; // survives unload so status can still report
+
+function panelStoresFor() {
+  if (!panelStores) {
+    panelStores = {
+      config: createConfigStore({ env: process.env, pluginRoot }),
+      prefs: createPrefsStore({ dataPath: globalThis.pi?.plugin?.getDataPath?.() ?? null }),
+    };
+  }
+  return panelStores;
+}
+
+/** The KnowledgeService for panel channels (vector index, notes count). */
+async function ensurePanelService() {
+  if (!state) throw new Error("plugin state is not initialized");
+  if (!state.service) {
+    const { createKnowledgeService } = await import("./mcp/knowledge-core.mjs");
+    state.service = await createKnowledgeService({
+      pluginRoot,
+      vaultPath: state.vaultPath,
+      config: state.config,
+    });
+  }
+  return state.service;
+}
+
+function indexRunState() {
+  if (!indexRun) return { running: false, done: 0, total: 0, mode: null };
+  return { running: true, done: indexRun.done, total: indexRun.total, mode: indexRun.mode };
+}
+
+async function startIndexRun(mode) {
+  if (indexRun) return { started: false, reason: "RUNNING" };
+  const service = await ensurePanelService();
+  await service.index.refresh();
+  if (!service.embedding) return { started: false, reason: "DISABLED" };
+  const controller = new AbortController();
+  indexRun = { controller, done: 0, total: service.pendingChunkCount, mode, error: null };
+  const run = service
+    .ensureVectors({
+      budgetMs: Number.POSITIVE_INFINITY,
+      force: mode === "full",
+      onProgress: ({ done, total }) => {
+        if (indexRun) {
+          indexRun.done = done;
+          indexRun.total = total;
+        }
+      },
+      signal: controller.signal,
+    })
+    .catch((error) => {
+      if (indexRun) indexRun.error = error?.message ?? String(error);
+    })
+    .finally(() => {
+      lastIndexRun = {
+        running: false,
+        done: indexRun?.done ?? 0,
+        total: indexRun?.total ?? 0,
+        mode,
+        error: indexRun?.error ?? null,
+      };
+      indexRun = null;
+    });
+  void run;
+  return { started: true };
+}
+
+async function indexStatusPayload() {
+  if (!state) {
+    // The plugin was unloaded; report the last run without touching the vault.
+    return {
+      enabled: false,
+      vectorReady: false,
+      notes: 0,
+      chunks: 0,
+      stored: 0,
+      pending: 0,
+      model: null,
+      dims: null,
+      writtenAt: null,
+      running: false,
+      done: lastIndexRun?.done ?? 0,
+      total: lastIndexRun?.total ?? 0,
+      reason: lastIndexRun?.error ? "ABORTED" : null,
+    };
+  }
+  const service = await ensurePanelService();
+  await service.index.refresh();
+  const { stat } = await import("node:fs/promises");
+  let writtenAt = null;
+  try {
+    writtenAt = (await stat(path.join(service.indexDirectory, "meta.json"))).mtime.toISOString();
+  } catch {
+    writtenAt = null;
+  }
+  const meta = service.vectors?.meta ?? null;
+  const run = indexRunState();
+  return {
+    enabled: Boolean(service.embedding),
+    vectorReady: Boolean(service.vectors?.vectors),
+    notes: service.index.paths().filter((p) => p.endsWith(".md")).length,
+    chunks: meta?.count ?? 0,
+    stored: service.vectors?.chunks?.length ?? 0,
+    pending: service.pendingChunkCount ?? 0,
+    model: service.embedding?.settings?.model ?? null,
+    dims: meta?.dims ?? null,
+    writtenAt,
+    running: run.running,
+    done: run.done,
+    total: run.total,
+    reason: service.vectorReason ?? null,
+  };
+}
+
+async function configPayload() {
+  const service = await ensurePanelService();
+  await service.index.refresh();
+  const notesCount = service.index.paths().filter((p) => p.endsWith(".md")).length;
+  return panelStoresFor().config.get({ notesCount });
+}
+
+async function routingPayload() {
+  const service = await ensurePanelService();
+  await service.index.refresh();
+  return panelStoresFor().config.routing({
+    noteExists: (note) => Boolean(service.index.note(note)) || Boolean(service.index.resolveTarget(note)),
+  });
+}
 
 async function ensureState() {
   if (state) return state;
@@ -84,10 +226,11 @@ function refusal(message) {
   return error;
 }
 
-function isReadOnlyMode() {
-  return ["1", "true", "yes", "on"].includes(
-    String(process.env.PERSONAL_KNOWLEDGE_READ_ONLY ?? "").trim().toLowerCase(),
-  );
+// Read-only: env wins, otherwise the repo-map `readOnly` key, re-read on
+// mtime change so the settings panel flips it without a restart.
+const readOnlyState = createReadOnlyState({ env: process.env });
+async function isReadOnlyMode() {
+  return readOnlyState.isReadOnly();
 }
 
 /** Page through `pi.memory.list` until `nextOffset` is null (ADR 0001 §9). */
@@ -350,8 +493,10 @@ async function promotePreview(payload) {
  * knowledge_write (dry-run off, CAS n/a for create, credential detector,
  * atomic write) still applies. */
 async function promoteApply(payload) {
-  if (isReadOnlyMode()) {
-    throw new Error("promotion is refused because PERSONAL_KNOWLEDGE_READ_ONLY=1");
+  if (await isReadOnlyMode()) {
+    throw new Error(
+      "promotion is refused: PERSONAL_KNOWLEDGE_READ_ONLY is set, or readOnly is enabled in repo-map.json.",
+    );
   }
   const notePath = String(payload?.path ?? "");
   const content = String(payload?.content ?? "");
@@ -484,6 +629,32 @@ async function onPanelInvoke(channel, payload) {
   if (channel === "kg.settings.get") return settingsGet();
   if (channel === "kg.settings.set") return settingsSet(payload);
   if (channel === "kg.settings.test") return settingsTest(payload);
+  if (channel === "kg.config.get") return configPayload();
+  if (channel === "kg.config.set") {
+    const result = await panelStoresFor().config.set(payload?.values ?? {});
+    return { saved: result.saved, reloadRequired: result.reloadRequired };
+  }
+  if (channel === "kg.routing.get") return routingPayload();
+  if (channel === "kg.index.status") return indexStatusPayload();
+  if (channel === "kg.index.rebuild") {
+    const mode = payload?.mode === "full" ? "full" : payload?.mode === "incremental" ? "incremental" : null;
+    if (!mode) throw refusal("kg.index.rebuild requires mode \"incremental\" or \"full\"");
+    return startIndexRun(mode);
+  }
+  if (channel === "kg.memory.status") {
+    if (typeof globalThis.pi?.memory?.list !== "function") return { readEnabled: false };
+    const listed = await globalThis.pi.memory.list({ limit: 1 });
+    return { readEnabled: listed.readEnabled !== false };
+  }
+  if (channel === "kg.prefs.get") return panelStoresFor().prefs.get();
+  if (channel === "kg.prefs.set") return panelStoresFor().prefs.set(String(payload?.language ?? ""));
+  if (channel === "kg.openSettings") {
+    if (typeof globalThis.pi?.ui?.openPanel !== "function") {
+      throw refusal("this host does not expose pi.ui.openPanel");
+    }
+    await globalThis.pi.ui.openPanel();
+    return { opened: true };
+  }
   throw refusal(`unknown channel: ${channel}`);
 }
 
@@ -493,6 +664,9 @@ async function onLoad() {
 }
 
 async function onUnload() {
+  indexRun?.controller?.abort();
+  indexRun = null;
+  panelStores = null;
   state = null;
 }
 

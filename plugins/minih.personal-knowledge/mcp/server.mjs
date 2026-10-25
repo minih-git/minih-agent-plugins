@@ -3,6 +3,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
+import { createReadOnlyState } from "../lib/read-only.mjs";
 import { createKnowledgeService } from "./knowledge-core.mjs";
 
 const serverDir = path.dirname(fileURLToPath(import.meta.url));
@@ -152,13 +153,9 @@ const TOOL_DEFINITIONS = [
   },
 ];
 
-// Boolean settings arrive as strings from MCP env injection; accept every
-// truthy spelling so a plugin-settings toggle is honored (0.1.1).
-function isReadOnlyMode() {
-  return ["1", "true", "yes", "on"].includes(
-    String(process.env.PERSONAL_KNOWLEDGE_READ_ONLY ?? "").trim().toLowerCase(),
-  );
-}
+// The read-only switch: env wins, otherwise the repo-map `readOnly` key,
+// re-read on mtime change so the settings panel flips it without a restart.
+const readOnlyState = createReadOnlyState({ env: process.env });
 
 const handlers = {
   knowledge_context: (args) => service.context(args),
@@ -166,9 +163,11 @@ const handlers = {
   knowledge_read: (args) => service.read(args),
   knowledge_stale: (args) => service.stale(args),
   knowledge_links: (args) => service.links(args),
-  knowledge_write: (args) => {
-    if (isReadOnlyMode() && args?.dryRun === false) {
-      throw new Error("knowledge_write is read-only because PERSONAL_KNOWLEDGE_READ_ONLY=1.");
+  knowledge_write: async (args) => {
+    if (args?.dryRun === false && (await readOnlyState.isReadOnly())) {
+      throw new Error(
+        "knowledge_write is read-only: PERSONAL_KNOWLEDGE_READ_ONLY is set, or readOnly is enabled in repo-map.json.",
+      );
     }
     return service.write(args);
   },

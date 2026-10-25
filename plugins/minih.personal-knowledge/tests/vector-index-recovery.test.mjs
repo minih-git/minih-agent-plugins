@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { createRequire } from "node:module";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -12,6 +13,7 @@ import { isolatedHome } from "./helpers/home.mjs";
 await isolatedHome();
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(import.meta.url);
 const PLUGIN_PARENT = path.resolve(PLUGIN_ROOT, "..");
 
 /** A vault whose notes chunk deterministically: `chunks` headings per note. */
@@ -307,5 +309,86 @@ test("a small budget after a failed hot-enable load must not shrink the index", 
   } finally {
     VectorIndex.prototype.load = originalLoad;
     fake.restore();
+  }
+});
+
+test("kg.index.rebuild: single run, monotonic progress, abort leaves no shrink", async () => {
+  const vault = await fixtureVault({ notes: 6, chunksPerNote: 18 });
+  const indexDir = await freshIndexDir();
+  const settingsFile = process.env.PERSONAL_KNOWLEDGE_EMBEDDING_CONFIG;
+  await writeFile(
+    settingsFile,
+    `${JSON.stringify(
+      {
+        enabled: true,
+        provider: "ollama",
+        baseUrl: "http://127.0.0.1:9",
+        model: "fake-embedding",
+        allowRemote: false,
+        apiKeyEnv: "",
+        exclude: [],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  const { EmbeddingClient } = await import("../lib/embeddings.mjs");
+  const calls = { n: 0 };
+  EmbeddingClient.prototype.probe = async () => {};
+  const originalEmbed = EmbeddingClient.prototype.embed;
+  EmbeddingClient.prototype.embed = async function embed(texts) {
+    calls.n += 1;
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    return texts.map(() => new Float32Array(4).fill(0.5));
+  };
+  const dataPath = await mkdtemp(path.join(os.tmpdir(), "personal-knowledge-panel-data-"));
+  globalThis.pi = { plugin: { getDataPath: () => dataPath }, memory: undefined };
+  for (const key of Object.keys(require.cache)) {
+    if (key.startsWith(PLUGIN_ROOT)) delete require.cache[key];
+  }
+  const backend = require(path.join(PLUGIN_ROOT, "main.js"));
+  process.env.PERSONAL_KNOWLEDGE_VAULT = vault;
+  try {
+    await backend.onLoad();
+
+    // Single-run guard: the second request while one runs is refused.
+    const first = await backend.onPanelInvoke("kg.index.rebuild", { mode: "incremental" });
+    assert.equal(first.started, true);
+    const second = await backend.onPanelInvoke("kg.index.rebuild", { mode: "incremental" });
+    assert.equal(second.started, false);
+    assert.equal(second.reason, "RUNNING");
+
+    // Progress only moves forward until the run settles.
+    let last = -1;
+    for (;;) {
+      const status = await backend.onPanelInvoke("kg.index.status", {});
+      if (status.running) {
+        assert.ok(status.done >= last, `progress must be monotonic (${status.done} < ${last})`);
+        last = status.done;
+        assert.ok(status.done <= status.total);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      } else {
+        assert.equal(status.pending, 0, "the incremental run fills every chunk");
+        break;
+      }
+    }
+    const callsAfterIncremental = calls.n;
+
+    // onUnload aborts a running full rebuild between batches; the disk keeps
+    // the rows saved so far and never shrinks.
+    const before = (await backend.onPanelInvoke("kg.index.status", {})).chunks;
+    await backend.onPanelInvoke("kg.index.rebuild", { mode: "full" });
+    await backend.onUnload();
+    // A run aborted onUnload must not stay registered.
+    const status = await backend.onPanelInvoke("kg.index.status", {});
+    assert.equal(status.running, false, "onUnload aborts the run");
+    const meta = JSON.parse(await readFile(path.join(indexDir, "meta.json"), "utf8"));
+    assert.ok(
+      meta.count >= before,
+      `an aborted full rebuild must not shrink the index (${meta.count} < ${before})`,
+    );
+    void callsAfterIncremental;
+  } finally {
+    EmbeddingClient.prototype.embed = originalEmbed;
   }
 });

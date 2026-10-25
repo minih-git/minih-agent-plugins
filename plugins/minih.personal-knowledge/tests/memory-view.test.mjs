@@ -138,7 +138,7 @@ test("promotion applies after confirmation and is refused in read-only mode", as
   process.env.PERSONAL_KNOWLEDGE_READ_ONLY = "1";
   await assert.rejects(
     backend.onPanelInvoke("kg.promote.apply", preview.draft),
-    /PERSONAL_KNOWLEDGE_READ_ONLY=1/,
+    /readOnly is enabled in repo-map\.json|PERSONAL_KNOWLEDGE_READ_ONLY is set/,
   );
   delete process.env.PERSONAL_KNOWLEDGE_READ_ONLY;
 
