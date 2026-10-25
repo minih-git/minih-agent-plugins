@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'none'"
+  />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>知识库设置 · Personal Knowledge Settings</title>
+  <link rel="stylesheet" href="./settings-panel.css" />
+</head>
+<body class="theme-dark">
+  <div id="settings-app" class="settings-app">
+    <header class="panel-top">
+      <div class="panel-top-titles">
+        <h1 id="panel-title" class="panel-main-title">知识库设置</h1>
+        <p id="panel-subtitle" class="panel-subtitle"></p>
+      </div>
+      <nav class="section-nav" aria-label="Sections">
+        <a href="#sec-vault" id="nav-vault" class="nav-pill"></a>
+        <a href="#sec-retrieval" id="nav-retrieval" class="nav-pill"></a>
+        <a href="#sec-index" id="nav-index" class="nav-pill"></a>
+        <a href="#sec-display" id="nav-display" class="nav-pill"></a>
+        <a href="#sec-health" id="nav-health" class="nav-pill"></a>
+        <a href="#sec-routing" id="nav-routing" class="nav-pill"></a>
+        <a href="#sec-memory" id="nav-memory" class="nav-pill"></a>
+      </nav>
+    </header>
+
+    <div id="panel-stub-notice" class="panel-notice is-hidden" role="status"></div>
+
+    <main class="sections-stack">
+      <!-- 1. Vault -->
+      <section id="sec-vault" class="panel-section">
+        <div class="section-header">
+          <div>
+            <h2 id="vault-heading" class="section-title"></h2>
+            <p id="vault-desc" class="section-desc"></p>
+          </div>
+          <div class="section-badges">
+            <span id="vault-source-badge" class="badge"></span>
+          </div>
+        </div>
+        <div id="vault-config-path" class="mono-path"></div>
+
+        <div class="field-group">
+          <div class="field-label-row">
+            <label id="label-vault-path" for="vault-path" class="field-label"></label>
+            <div class="field-Inline-tags">
+              <span id="vault-path-reload" class="badge badge-muted"></span>
+              <span id="vault-path-lock" class="badge badge-warn is-hidden"></span>
+            </div>
+          </div>
+          <input id="vault-path" type="text" class="field-input" autocomplete="off" spellcheck="false" />
+          <div class="field-meta-row">
+            <span id="vault-status-badge" class="status-pill">—</span>
+          </div>
+        </div>
+
+        <div class="field-row-grid">
+          <div class="field-group">
+            <div class="field-label-row">
+              <label class="checkbox-row" for="vault-readonly">
+                <input id="vault-readonly" type="checkbox" />
+                <span id="label-vault-readonly"></span>
+              </label>
+              <span id="vault-readonly-lock" class="badge badge-warn is-hidden"></span>
+            </div>
+            <div id="hint-vault-readonly" class="field-hint"></div>
+          </div>
+
+          <div class="field-group">
+            <label id="label-vault-retention" for="vault-retention" class="field-label"></label>
+            <input id="vault-retention" type="number" min="1" max="3650" step="1" class="field-input" />
+            <div id="hint-vault-retention" class="field-hint"></div>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <div class="field-label-row">
+            <label id="label-vault-ignore" for="vault-ignore-folders" class="field-label"></label>
+            <span id="vault-ignore-reload" class="badge badge-muted"></span>
+          </div>
+          <input id="vault-ignore-folders" type="text" class="field-input" autocomplete="off" spellcheck="false" />
+          <div id="hint-vault-ignore" class="field-hint"></div>
+        </div>
+
+        <div id="vault-feedback" class="settings-feedback is-hidden" role="alert"></div>
+        <div class="section-actions">
+          <button id="btn-vault-save" type="button" class="primary-btn">
+            <span id="label-vault-save"></span>
+          </button>
+        </div>
+      </section>
+
+      <!-- 2. Vector retrieval -->
+      <section id="sec-retrieval" class="panel-section">
+        <div class="section-header">
+          <div class="section-title-group">
+            <h2 id="settings-heading" class="section-title"></h2>
+            <span id="settings-unsaved-pill" class="badge badge-warn is-hidden">
+              <span id="settings-unsaved-label"></span>
+            </span>
+          </div>
+        </div>
+        <div id="settings-fixture-notice" class="panel-notice is-hidden" role="status"></div>
+
+        <label class="checkbox-row" for="settings-enabled">
+          <input id="settings-enabled" type="checkbox" />
+          <span id="label-settings-enabled"></span>
+        </label>
+
+        <div class="field-row-grid">
+          <div class="field-group">
+            <label id="label-settings-provider" for="settings-provider" class="field-label"></label>
+            <select id="settings-provider" class="field-select">
+              <option id="opt-provider-ollama" value="ollama"></option>
+              <option id="opt-provider-openai" value="openai-compatible"></option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label id="label-settings-model" for="settings-model" class="field-label"></label>
+            <input id="settings-model" type="text" class="field-input" autocomplete="off" spellcheck="false" />
+          </div>
+        </div>
+
+        <div class="field-group">
+          <label id="label-settings-baseurl" for="settings-baseurl" class="field-label"></label>
+          <input id="settings-baseurl" type="text" class="field-input" autocomplete="off" spellcheck="false" />
+          <div id="hint-settings-baseurl" class="field-hint"></div>
+        </div>
+
+        <div class="field-row-grid">
+          <div class="field-group">
+            <label id="label-settings-apikey-env" for="settings-apikey-env" class="field-label"></label>
+            <input id="settings-apikey-env" type="text" class="field-input" autocomplete="off" spellcheck="false" />
+            <div id="hint-settings-apikey-env" class="field-hint"></div>
+          </div>
+          <div class="field-group">
+            <label id="label-settings-exclude" for="settings-exclude" class="field-label"></label>
+            <input id="settings-exclude" type="text" class="field-input" autocomplete="off" spellcheck="false" />
+            <div id="hint-settings-exclude" class="field-hint"></div>
+          </div>
+        </div>
+
+        <label class="checkbox-row" for="settings-allow-remote">
+          <input id="settings-allow-remote" type="checkbox" />
+          <span id="label-settings-allow-remote"></span>
+        </label>
+        <div id="settings-remote-warning" class="settings-warning is-hidden" role="note"></div>
+
+        <div class="settings-readonly-box">
+          <div class="stat-row">
+            <span id="label-settings-key-status" class="stat-label"></span>
+            <span id="settings-key-status" class="key-status-badge status-not-required">—</span>
+          </div>
+          <div class="stat-row">
+            <span id="label-settings-index" class="stat-label"></span>
+            <span id="settings-index-stats" class="stat-value">—</span>
+          </div>
+          <div class="stat-row">
+            <span id="label-settings-estimate" class="stat-label"></span>
+            <span class="stat-estimate">
+              <span id="settings-estimate-value" class="stat-value">—</span>
+              <span id="settings-estimate-dirty-dot" class="dot-warn is-hidden" title=""></span>
+            </span>
+          </div>
+        </div>
+
+        <div id="settings-feedback" class="settings-feedback is-hidden" role="alert"></div>
+        <div class="section-actions">
+          <button id="btn-settings-test" type="button" class="ghost-btn">
+            <span id="label-settings-test"></span>
+          </button>
+          <button id="btn-settings-save" type="button" class="primary-btn">
+            <span id="label-settings-save"></span>
+          </button>
+          <button id="btn-settings-confirm" type="button" class="confirm-btn is-hidden">
+            <span id="label-settings-confirm"></span>
+          </button>
+        </div>
+      </section>
+
+      <!-- 3. Index -->
+      <section id="sec-index" class="panel-section">
+        <div class="section-header">
+          <div>
+            <h2 id="index-heading" class="section-title"></h2>
+            <p id="index-desc" class="section-desc"></p>
+          </div>
+          <span id="index-status-badge" class="status-pill">—</span>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <span id="label-index-notes" class="stat-card-label"></span>
+            <strong id="index-stat-notes" class="stat-card-value">0</strong>
+          </div>
+          <div class="stat-card">
+            <span id="label-index-chunks" class="stat-card-label"></span>
+            <strong id="index-stat-chunks" class="stat-card-value">0</strong>
+          </div>
+          <div class="stat-card">
+            <span id="label-index-stored" class="stat-card-label"></span>
+            <strong id="index-stat-stored" class="stat-card-value">0</strong>
+          </div>
+          <div class="stat-card">
+            <span id="label-index-pending" class="stat-card-label"></span>
+            <strong id="index-stat-pending" class="stat-card-value">0</strong>
+          </div>
+          <div class="stat-card">
+            <span id="label-index-model" class="stat-card-label"></span>
+            <strong id="index-stat-model" class="stat-card-value">—</strong>
+          </div>
+          <div class="stat-card">
+            <span id="label-index-written" class="stat-card-label"></span>
+            <strong id="index-stat-written" class="stat-card-value">—</strong>
+          </div>
+        </div>
+
+        <div id="index-reason" class="field-hint is-hidden"></div>
+
+        <div id="index-progress-wrap" class="progress-wrap is-hidden" role="status" aria-live="polite">
+          <div class="progress-track">
+            <div
+              id="index-progress-bar"
+              class="progress-fill"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="0"
+            ></div>
+          </div>
+          <span id="index-progress-text" class="progress-text">0 / 0</span>
+        </div>
+
+        <div id="index-confirm-box" class="confirm-dialog is-hidden" role="alertdialog" aria-labelledby="index-confirm-text">
+          <p id="index-confirm-text" class="confirm-dialog-text"></p>
+          <div class="section-actions">
+            <button id="btn-index-confirm-full" type="button" class="confirm-btn"></button>
+            <button id="btn-index-cancel-full" type="button" class="ghost-btn"></button>
+          </div>
+        </div>
+
+        <div id="index-feedback" class="settings-feedback is-hidden" role="alert"></div>
+
+        <div class="section-actions">
+          <button id="btn-index-rebuild-incremental" type="button" class="primary-btn">
+            <span id="label-index-incremental"></span>
+          </button>
+          <button id="btn-index-rebuild-full" type="button" class="ghost-btn">
+            <span id="label-index-full"></span>
+          </button>
+        </div>
+      </section>
+
+      <!-- 4. Display -->
+      <section id="sec-display" class="panel-section">
+        <div class="section-header">
+          <div>
+            <h2 id="display-heading" class="section-title"></h2>
+            <p id="display-desc" class="section-desc"></p>
+          </div>
+        </div>
+        <div class="display-row">
+          <span id="label-display-language" class="field-label"></span>
+          <div class="lang-segmented" role="group" aria-labelledby="label-display-language">
+            <button id="opt-lang-auto" type="button" class="lang-opt" data-lang="auto"></button>
+            <button id="opt-lang-zh" type="button" class="lang-opt" data-lang="zh-CN">中文</button>
+            <button id="opt-lang-en" type="button" class="lang-opt" data-lang="en">EN</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 5. Ontology health -->
+      <section id="sec-health" class="panel-section">
+        <div class="section-header">
+          <div>
+            <h2 id="health-heading" class="section-title"></h2>
+            <p id="health-desc" class="section-desc"></p>
+          </div>
+          <div class="health-controls">
+            <span id="health-summary-count" class="badge"></span>
+            <select id="health-severity-filter" class="field-select">
+              <option id="health-sev-all" value="all"></option>
+              <option id="health-sev-red" value="red"></option>
+              <option id="health-sev-amber" value="amber"></option>
+              <option id="health-sev-muted" value="muted"></option>
+            </select>
+          </div>
+        </div>
+        <div id="health-list" class="health-list"></div>
+      </section>
+
+      <!-- 6. Project routing -->
+      <section id="sec-routing" class="panel-section">
+        <div class="section-header">
+          <div>
+            <h2 id="routing-heading" class="section-title"></h2>
+            <p id="routing-readonly-hint" class="section-desc"></p>
+          </div>
+        </div>
+
+        <div class="routing-block">
+          <h3 id="routing-projects-heading" class="sub-heading"></h3>
+          <div id="routing-projects-list" class="routing-list"></div>
+        </div>
+
+        <div class="routing-block">
+          <h3 id="routing-topics-heading" class="sub-heading"></h3>
+          <div id="routing-topics-list" class="routing-list"></div>
+        </div>
+
+        <div class="routing-block">
+          <h3 id="routing-defaults-heading" class="sub-heading"></h3>
+          <div id="routing-defaults-list" class="routing-list"></div>
+        </div>
+      </section>
+
+      <!-- 7. Memory -->
+      <section id="sec-memory" class="panel-section">
+        <div class="section-header">
+          <div>
+            <h2 id="memory-heading" class="section-title"></h2>
+            <p id="memory-desc" class="section-desc"></p>
+          </div>
+        </div>
+        <div class="memory-row">
+          <span id="label-memory-status" class="field-label"></span>
+          <span id="memory-status-badge" class="status-pill">—</span>
+        </div>
+        <p id="memory-where-hint" class="field-hint"></p>
+      </section>
+    </main>
+
+    <div id="toast" class="toast is-hidden" role="status" aria-live="polite"></div>
+  </div>
+
+  <script type="module" src="./settings-page.js"></script>
+</body>
+</html>

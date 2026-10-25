@@ -52,19 +52,25 @@
         <button id="btn-layers" type="button" class="corner-btn" aria-haspopup="true" aria-expanded="false" aria-controls="layers-menu">
           <span aria-hidden="true">≡</span><span id="label-layers" class="corner-btn-text"></span>
         </button>
-        <button id="btn-settings-menu" type="button" class="corner-btn" aria-haspopup="true" aria-expanded="false" aria-controls="settings-menu">
+        <button id="btn-settings-menu" type="button" class="corner-btn">
           <span aria-hidden="true">⚙</span><span id="label-settings-menu" class="corner-btn-text"></span>
         </button>
       </div>
     </header>
 
-    <!-- Bottom-right zoom -->
+    <!-- Bottom-right corner: time-lapse control + zoom buttons -->
+    <section id="timelapse-bar" class="timelapse-corner" aria-label="Time-lapse">
+      <button id="timelapse-play" type="button" class="corner-btn timelapse-play-btn">▶</button>
+      <input id="timelapse-slider" type="range" min="0" max="1000" step="1" value="1000" />
+      <span id="timelapse-readout" class="timelapse-readout"></span>
+    </section>
+
     <div class="hud-bottom">
       <button id="btn-zoom-in" type="button" class="corner-btn zoom-btn">+</button>
       <button id="btn-zoom-out" type="button" class="corner-btn zoom-btn">−</button>
     </div>
 
-    <!-- Layers menu (≡): toggles and filters -->
+    <!-- Layers menu (≡): toggles, health coloring, and filters -->
     <aside id="layers-menu" class="menu-popover layers-popover is-hidden" aria-label="Layers">
       <h2 id="layers-heading" class="menu-heading"></h2>
       <label class="menu-row">
@@ -95,6 +101,10 @@
         <input id="layer-memory" type="checkbox" />
         <span id="label-layer-memory"></span>
       </label>
+      <label class="menu-row" id="health-toggle-row">
+        <input id="layer-health" type="checkbox" />
+        <span id="label-layer-health"></span>
+      </label>
       <div class="menu-divider" role="separator"></div>
       <label class="menu-row menu-select-row">
         <span id="label-filter-class"></span>
@@ -105,52 +115,6 @@
         <select id="filter-stability" class="menu-select"></select>
       </label>
     </aside>
-
-    <!-- Settings menu (⚙): health, time-lapse, retrieval, language -->
-    <aside id="settings-menu" class="menu-popover settings-popover is-hidden" aria-label="Settings">
-      <h2 id="settings-menu-heading" class="menu-heading"></h2>
-      <button id="menu-health" type="button" class="menu-row menu-action" aria-checked="false">
-        <span id="menu-health-text"></span>
-      </button>
-      <button id="menu-timelapse" type="button" class="menu-row menu-action" aria-checked="false">
-        <span id="menu-timelapse-text"></span>
-      </button>
-      <button id="menu-retrieval" type="button" class="menu-row menu-action">
-        <span id="menu-retrieval-text"></span>
-      </button>
-      <div class="menu-divider" role="separator"></div>
-      <div class="menu-row menu-lang-row">
-        <span id="menu-language-text"></span>
-        <span class="menu-lang-options">
-          <button id="opt-lang-auto" type="button" class="lang-opt"></button>
-          <button id="opt-lang-zh" type="button" class="lang-opt">中文</button>
-          <button id="opt-lang-en" type="button" class="lang-opt">EN</button>
-        </span>
-      </div>
-    </aside>
-
-    <!-- Health mode panel (right) -->
-    <section id="health-region" class="side-panel health-panel is-hidden" aria-label="Ontology health">
-      <div class="panel-header">
-        <h2 id="health-heading" class="panel-title"></h2>
-        <select id="health-severity-filter" class="menu-select">
-          <option id="health-sev-all" value="all"></option>
-          <option id="health-sev-red" value="red"></option>
-          <option id="health-sev-amber" value="amber"></option>
-          <option id="health-sev-muted" value="muted"></option>
-        </select>
-        <button id="health-close" type="button" class="icon-btn" aria-label="Close">×</button>
-      </div>
-      <div id="health-list" class="health-list"></div>
-    </section>
-
-    <!-- Time-lapse bar (only mode where the timeline appears) -->
-    <section id="timelapse-bar" class="timelapse-bar is-hidden" aria-label="Time-lapse">
-      <button id="timelapse-play" type="button" class="ghost-btn">▶</button>
-      <input id="timelapse-slider" type="range" min="0" max="1000" step="1" value="1000" />
-      <span id="timelapse-readout" class="timelapse-readout"></span>
-      <button id="timelapse-exit" type="button" class="ghost-btn"></button>
-    </section>
 
     <!-- Note drawer (§6.5) -->
     <aside id="note-drawer" class="drawer is-hidden" aria-label="Note inspector">
@@ -184,86 +148,6 @@
           </h3>
           <pre id="drawer-content" class="drawer-body-preview" tabindex="0"></pre>
         </section>
-      </div>
-    </aside>
-
-    <!-- Retrieval settings (moved under ⚙; same fields as 0.2.0) -->
-    <aside id="settings-panel" class="side-panel settings-panel is-hidden" aria-label="Retrieval settings" tabindex="-1">
-      <div class="panel-header">
-        <div>
-          <h2 id="settings-heading" class="panel-title">检索设置</h2>
-          <span id="settings-unsaved-pill" class="badge badge-warn is-hidden">
-            <span id="settings-unsaved-label">未保存更改</span>
-          </span>
-        </div>
-        <button id="settings-close" type="button" class="icon-btn" aria-label="Close settings">×</button>
-      </div>
-      <div id="settings-fixture-notice" class="settings-notice is-hidden" role="status"></div>
-      <div class="settings-scroll">
-        <label class="menu-row" for="settings-enabled">
-          <input id="settings-enabled" type="checkbox" />
-          <span id="label-settings-enabled"></span>
-        </label>
-        <div class="field-group">
-          <label id="label-settings-provider" for="settings-provider" class="field-label"></label>
-          <select id="settings-provider" class="menu-select">
-            <option id="opt-provider-ollama" value="ollama"></option>
-            <option id="opt-provider-openai" value="openai-compatible"></option>
-          </select>
-        </div>
-        <div class="field-group">
-          <label id="label-settings-baseurl" for="settings-baseurl" class="field-label"></label>
-          <input id="settings-baseurl" type="text" class="field-input" autocomplete="off" spellcheck="false" />
-          <div id="hint-settings-baseurl" class="field-hint"></div>
-        </div>
-        <div class="field-group">
-          <label id="label-settings-model" for="settings-model" class="field-label"></label>
-          <input id="settings-model" type="text" class="field-input" autocomplete="off" spellcheck="false" />
-        </div>
-        <div class="field-group">
-          <label id="label-settings-apikey-env" for="settings-apikey-env" class="field-label"></label>
-          <input id="settings-apikey-env" type="text" class="field-input" autocomplete="off" spellcheck="false" />
-          <div id="hint-settings-apikey-env" class="field-hint"></div>
-        </div>
-        <div class="field-group">
-          <label id="label-settings-exclude" for="settings-exclude" class="field-label"></label>
-          <input id="settings-exclude" type="text" class="field-input" autocomplete="off" spellcheck="false" />
-          <div id="hint-settings-exclude" class="field-hint"></div>
-        </div>
-        <label class="menu-row" for="settings-allow-remote">
-          <input id="settings-allow-remote" type="checkbox" />
-          <span id="label-settings-allow-remote"></span>
-        </label>
-        <div id="settings-remote-warning" class="settings-warning is-hidden" role="note"></div>
-        <div class="settings-readonly-box">
-          <div class="stat-row">
-            <span id="label-settings-key-status" class="stat-label"></span>
-            <span id="settings-key-status" class="key-status-badge status-not-required">—</span>
-          </div>
-          <div class="stat-row">
-            <span id="label-settings-index" class="stat-label"></span>
-            <span id="settings-index-stats" class="stat-value">—</span>
-          </div>
-          <div class="stat-row">
-            <span id="label-settings-estimate" class="stat-label"></span>
-            <span class="stat-estimate">
-              <span id="settings-estimate-value" class="stat-value">—</span>
-              <span id="settings-estimate-dirty-dot" class="dot-warn is-hidden" title=""></span>
-            </span>
-          </div>
-        </div>
-        <div id="settings-feedback" class="settings-feedback is-hidden" role="alert"></div>
-        <div class="settings-actions">
-          <button id="btn-settings-test" type="button" class="ghost-btn">
-            <span id="label-settings-test"></span>
-          </button>
-          <button id="btn-settings-save" type="button" class="primary-btn">
-            <span id="label-settings-save"></span>
-          </button>
-          <button id="btn-settings-confirm" type="button" class="confirm-btn is-hidden">
-            <span id="label-settings-confirm"></span>
-          </button>
-        </div>
       </div>
     </aside>
 

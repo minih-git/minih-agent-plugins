@@ -176,6 +176,45 @@ body {
   padding: 0;
 }
 
+/* ---- time-lapse corner control (settings-panel.md §5) ---- */
+
+.timelapse-corner {
+  position: absolute;
+  right: 64px;
+  bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px 5px 6px;
+  border-radius: 10px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass);
+  backdrop-filter: blur(8px);
+  z-index: 30;
+}
+
+.timelapse-play-btn {
+  padding: 4px 9px;
+  min-width: 32px;
+  justify-content: center;
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.timelapse-corner input[type="range"] {
+  width: 120px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.timelapse-readout {
+  color: var(--ink-dim);
+  font-size: 11.5px;
+  white-space: nowrap;
+  min-width: 72px;
+  text-align: right;
+}
+
 /* ---- search ---- */
 
 .search-box {
@@ -260,11 +299,6 @@ body {
   right: 16px;
 }
 
-.settings-popover {
-  top: 54px;
-  right: 90px;
-}
-
 .menu-heading {
   margin: 2px 0 8px;
   font-size: 12px;
@@ -280,21 +314,7 @@ body {
   padding: 5px 2px;
   color: var(--ink);
   font-size: 12.5px;
-}
-
-.menu-action {
-  width: 100%;
-  background: none;
-  border: none;
-  border-radius: 8px;
-  text-align: left;
   cursor: pointer;
-  color: var(--ink);
-  font-family: var(--sans);
-}
-
-.menu-action:hover {
-  background: rgba(147, 197, 253, 0.1);
 }
 
 .menu-divider {
@@ -318,64 +338,6 @@ body {
   padding: 3px 6px;
 }
 
-.menu-lang-row {
-  justify-content: space-between;
-}
-
-.menu-lang-options {
-  display: inline-flex;
-  gap: 4px;
-}
-
-.lang-opt {
-  background: none;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  color: var(--ink-dim);
-  font-size: 11.5px;
-  padding: 2px 8px;
-  cursor: pointer;
-}
-
-.lang-opt:hover {
-  color: #f1f5ff;
-  border-color: var(--glass-border);
-}
-
-/* ---- side panels (health, retrieval settings) ---- */
-
-.side-panel {
-  position: absolute;
-  top: 64px;
-  right: 16px;
-  bottom: 20px;
-  width: 380px;
-  max-width: calc(100vw - 32px);
-  display: flex;
-  flex-direction: column;
-  border-radius: 14px;
-  border: 1px solid var(--glass-border);
-  background: rgba(11, 21, 48, 0.92);
-  backdrop-filter: blur(12px);
-  z-index: 35;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
-}
-
-.panel-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--glass-border);
-}
-
-.panel-title {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-  flex: 1;
-}
-
 .icon-btn {
   background: none;
   border: none;
@@ -387,87 +349,6 @@ body {
 
 .icon-btn:hover {
   color: #f1f5ff;
-}
-
-.health-list {
-  overflow: auto;
-  padding: 8px 12px 14px;
-}
-
-.health-row {
-  padding: 8px 6px;
-  border-bottom: 1px solid rgba(90, 110, 160, 0.16);
-}
-
-.health-row-title {
-  display: block;
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: none;
-  padding: 0 0 4px;
-  color: #e6edf9;
-  font-family: var(--sans);
-  font-size: 12.5px;
-  cursor: pointer;
-}
-
-.health-row-title:hover {
-  color: var(--accent);
-}
-
-.health-row-issues {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.issue-chip {
-  padding: 1px 7px;
-  border-radius: 999px;
-  font-size: 10.5px;
-  border: 1px solid var(--glass-border);
-  color: var(--ink-dim);
-}
-
-.issue-chip.sev-red {
-  color: var(--danger);
-  border-color: rgba(248, 113, 113, 0.5);
-}
-
-.issue-chip.sev-amber {
-  color: var(--warn);
-  border-color: rgba(251, 191, 36, 0.5);
-}
-
-/* ---- time-lapse bar ---- */
-
-.timelapse-bar {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: 18px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 14px;
-  border-radius: 12px;
-  border: 1px solid var(--glass-border);
-  background: var(--glass);
-  backdrop-filter: blur(8px);
-  z-index: 35;
-  min-width: 380px;
-}
-
-.timelapse-bar input[type="range"] {
-  flex: 1;
-  accent-color: var(--accent);
-}
-
-.timelapse-readout {
-  color: var(--ink-dim);
-  font-size: 11.5px;
-  white-space: nowrap;
 }
 
 /* ---- drawer (§6.5) ---- */
@@ -704,143 +585,6 @@ body {
   padding: 2px 0;
 }
 
-/* ---- retrieval settings ---- */
-
-.settings-scroll {
-  overflow: auto;
-  padding: 10px 14px 16px;
-}
-
-.settings-notice {
-  margin: 10px 14px 0;
-  padding: 7px 10px;
-  border-radius: 8px;
-  border: 1px solid rgba(251, 191, 36, 0.4);
-  color: var(--warn);
-  font-size: 11.5px;
-}
-
-.field-group {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 7px 0;
-}
-
-.field-label {
-  color: var(--ink-dim);
-  font-size: 11.5px;
-}
-
-.field-input {
-  padding: 7px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--glass-border);
-  background: rgba(8, 15, 36, 0.85);
-  color: var(--ink);
-  font-family: var(--sans);
-  font-size: 12px;
-}
-
-.field-input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-.field-hint {
-  color: var(--ink-faint);
-  font-size: 10.5px;
-}
-
-.settings-warning {
-  margin: 6px 0;
-  padding: 7px 10px;
-  border-radius: 8px;
-  border: 1px solid rgba(251, 191, 36, 0.5);
-  color: var(--warn);
-  font-size: 11.5px;
-}
-
-.settings-readonly-box {
-  margin: 8px 0;
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px dashed var(--glass-border);
-}
-
-.stat-row {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 3px 0;
-  font-size: 11.5px;
-}
-
-.stat-label {
-  color: var(--ink-faint);
-  flex: none;
-}
-
-.stat-value {
-  color: var(--ink-dim);
-  overflow-wrap: anywhere;
-}
-
-.stat-estimate {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.dot-warn {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--warn);
-}
-
-.key-status-badge {
-  padding: 1px 8px;
-  border-radius: 999px;
-  font-size: 10.5px;
-  border: 1px solid var(--glass-border);
-  color: var(--ink-dim);
-}
-
-.key-status-badge.status-found {
-  color: #8fe3b0;
-  border-color: rgba(143, 227, 176, 0.5);
-}
-
-.key-status-badge.status-missing {
-  color: var(--danger);
-  border-color: rgba(248, 113, 113, 0.5);
-}
-
-.settings-feedback {
-  margin: 8px 0;
-  padding: 7px 10px;
-  border-radius: 8px;
-  font-size: 11.5px;
-  overflow-wrap: anywhere;
-}
-
-.settings-feedback.is-error {
-  border: 1px solid rgba(248, 113, 113, 0.5);
-  color: var(--danger);
-}
-
-.settings-feedback.is-ok {
-  border: 1px solid rgba(143, 227, 176, 0.5);
-  color: #8fe3b0;
-}
-
-.settings-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
 /* ---- hover card, toast, notices ---- */
 
 .hover-card {
@@ -998,6 +742,17 @@ body {
 
   .corner-btn {
     padding: 7px 9px;
+  }
+
+  .timelapse-corner {
+    right: 60px;
+    bottom: 12px;
+    padding: 4px 8px 4px 5px;
+    gap: 6px;
+  }
+
+  .timelapse-corner input[type="range"] {
+    width: 82px;
   }
 
   /* Narrow panels shrink galaxy names so labels stay readable without

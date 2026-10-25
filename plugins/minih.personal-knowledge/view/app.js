@@ -1,18 +1,17 @@
 /**
- * Knowledge Universe view bootstrap (design doc §6–§9).
+ * Knowledge Universe view bootstrap (design doc §6–§9, settings-panel.md §5).
  *
  * One laid-out payload feeds both renderers. Default view is 3D; the flat
  * star chart is the reading mode behind the 星图 button and the fallback
  * when WebGL is unavailable. Default chrome is the four corners: title/count
  * or breadcrumb (top left), search (top center), 3D/星图 + Layers (≡) +
- * Settings (⚙) (top right), zoom + and − (bottom right).
+ * Settings (⚙) (top right), time-lapse + zoom + and − (bottom right).
  */
 
 import { applyUniverseLayout } from "./vendor/layout.mjs";
 import {
   STRINGS,
   BRIDGE_TIMEOUT_MS,
-  classifyIssueCode,
   nodeSeverity,
 } from "./strings.js";
 import { invokeBridge, hasBridge } from "./bridge.js";
@@ -20,7 +19,6 @@ import { FIXTURE_GRAPH, FIXTURE_NOTES } from "./fixture.js";
 import { buildModel, computeVisibility, galaxyDisplayName, nodeDisplayName } from "./model.js";
 import { ChartView } from "./chart.js";
 import { ThreeView } from "./three-view.js";
-import { RetrievalSettingsPanel } from "./settings.js";
 import { NoteDrawer, setDrawerFixtures } from "./drawer.js";
 import {
   initialViewMode,
@@ -30,10 +28,12 @@ import {
   VIEW_MODE_STORAGE_KEY,
 } from "./view-mode.js";
 
-const LANGUAGE_STORAGE_KEY = "kg-universe:lang";
+const LEGACY_LANGUAGE_STORAGE_KEY = "kg-universe:lang";
+const TIMELAPSE_STEP_RATIO = 20 / 1000;
 
 const state = {
   lang: null,
+  langPref: "auto",
   payload: null,
   model: null,
   fixtureMode: false,
@@ -51,7 +51,7 @@ const state = {
   },
   filters: { class: "all", stability: "all" },
   healthMode: false,
-  timelapse: { on: false, ratio: 1, playing: false, cutoff: null, timer: null },
+  timelapse: { ratio: 1, playing: false, cutoff: null, min: "", max: "", timer: null },
   focusGalaxyId: null,
   selectedId: null,
   reducedMotion: false,
@@ -82,6 +82,52 @@ function rememberMode(mode) {
     localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode);
   } catch {
     // localStorage can be unavailable; the choice then stays per-session.
+  }
+}
+
+function resolveLanguage(pref) {
+  if (pref === "zh-CN" || pref === "en") return pref;
+  return navigator.language?.startsWith("zh") ? "zh-CN" : "en";
+}
+
+async function syncLanguageFromPrefs({ migrateLegacy = false } = {}) {
+  let pref = state.langPref || "auto";
+  let legacy = null;
+  if (migrateLegacy) {
+    try {
+      legacy = localStorage.getItem(LEGACY_LANGUAGE_STORAGE_KEY);
+      if (legacy !== null) localStorage.removeItem(LEGACY_LANGUAGE_STORAGE_KEY);
+    } catch {
+      legacy = null;
+    }
+  }
+  if (hasBridge()) {
+    try {
+      const res = await invokeBridge("kg.prefs.get", {}, BRIDGE_TIMEOUT_MS);
+      pref = res?.language || "auto";
+      if (
+        migrateLegacy &&
+        (legacy === "zh-CN" || legacy === "en") &&
+        pref === "auto" &&
+        res?.available !== false
+      ) {
+        await invokeBridge("kg.prefs.set", { language: legacy }, BRIDGE_TIMEOUT_MS);
+        pref = legacy;
+      }
+    } catch {
+      if (legacy === "zh-CN" || legacy === "en") pref = legacy;
+    }
+  } else if (legacy === "zh-CN" || legacy === "en") {
+    pref = legacy;
+  }
+  state.langPref = pref;
+  const nextLang = resolveLanguage(pref);
+  const changed = state.lang !== nextLang;
+  state.lang = nextLang;
+  document.documentElement.lang = nextLang;
+  if (changed && state.model) {
+    view.three?.buildGalaxyLabels?.();
+    applyTranslations();
   }
 }
 
@@ -125,7 +171,9 @@ async function loadGraph() {
       payload = structuredClone(FIXTURE_GRAPH);
       applyUniverseLayout(payload);
       $("bridge-error-text").textContent =
-        error?.code === "BRIDGE_TIMEOUT" ? t("bridgeTimeoutError") : t("bridgeCallError", { reason: error?.message || String(error) });
+        error?.code === "BRIDGE_TIMEOUT"
+          ? t("bridgeTimeoutError")
+          : t("bridgeCallError", { reason: error?.message || String(error) });
       banner.classList.remove("is-hidden");
     }
   }
@@ -140,6 +188,7 @@ async function loadGraph() {
   const memoryOk = payload.memory?.status === "ok";
   $("memory-toggle-row").classList.toggle("is-hidden", !memoryOk);
   if (!memoryOk) state.layers.memory = false;
+  initTimelapseBounds();
   refreshVisibility();
   applyTranslations();
 }
@@ -151,7 +200,7 @@ function refreshVisibility() {
   state.visibility = computeVisibility(state.model, {
     layers: state.layers,
     filters: state.filters,
-    timelapseCutoff: state.timelapse.on ? state.timelapse.cutoff : null,
+    timelapseCutoff: state.timelapse.cutoff,
   });
   render();
 }
@@ -172,14 +221,12 @@ function render() {
     view.chart.setState(shared);
   }
   updateHeader();
-  if (state.healthMode) renderHealthPanel();
 }
 
 function updateHeader() {
   const titleEl = $("hud-title");
   const countEl = $("hud-counts");
   if (state.focusGalaxyId) {
-    const galaxy = state.model?.galaxiesById.get(state.focusGalaxyId);
     titleEl.innerHTML = "";
     const crumb = document.createElement("button");
     crumb.className = "crumb-root";
@@ -210,7 +257,7 @@ function ensureThreeView() {
     three.setModel(state.model, t);
     view.three = three;
     return three;
-  } catch (error) {
+  } catch {
     // WebGL context creation can still fail here (§7): chart mode + notice.
     state.webglAvailable = false;
     $("webgl-notice").textContent = t("webglFallback");
@@ -370,114 +417,42 @@ function chooseSearchMatch(node) {
   view.three?.playSearchPulse(node.id, state.reducedMotion);
 }
 
-// ---- health mode ----
+// ---- time-lapse corner control (settings-panel.md §5) ----
 
-function setHealthMode(on) {
-  state.healthMode = Boolean(on);
-  $("health-region").classList.toggle("is-hidden", !state.healthMode);
-  $("menu-health").setAttribute("aria-checked", String(state.healthMode));
-  render();
-}
-
-function renderHealthPanel() {
-  if (!state.model) return;
-  const severity = $("health-severity-filter").value;
-  const list = $("health-list");
-  list.innerHTML = "";
-  if (state.layers.ghosts) {
-    const ghosts = state.payload?.ghosts ?? [];
-    if (ghosts.length > 0) {
-      const head = document.createElement("div");
-      head.className = "health-row sev-muted";
-      head.textContent = `${t("layerGhosts")} · ${ghosts.length}`;
-      list.appendChild(head);
-      for (const ghost of ghosts) {
-        const row = document.createElement("div");
-        row.className = "health-row sev-red";
-        const title = document.createElement("div");
-        title.className = "health-row-title";
-        title.textContent = `${ghost.id} ← ${ghost.referencedBy.length}`;
-        title.title = ghost.referencedBy.join("\n");
-        row.appendChild(title);
-        list.appendChild(row);
-      }
-      const divider = document.createElement("div");
-      divider.className = "menu-divider";
-      list.appendChild(divider);
-    }
-  }
-  const rows = [];
-  for (const node of state.model.nodes) {
-    if (node.kind === "satellite" || !state.visibility.visibleNodes.has(node.id)) continue;
-    const worst = nodeSeverity(node.issues);
-    if (!node.issues?.length || worst === "ok") continue;
-    if (severity !== "all" && worst !== severity) continue;
-    rows.push(node);
-  }
-  rows.sort((a, b) => {
-    const rank = { red: 0, amber: 1, muted: 2 };
-    return (rank[nodeSeverity(a.issues)] ?? 3) - (rank[nodeSeverity(b.issues)] ?? 3) || (a.id < b.id ? -1 : 1);
-  });
-  if (rows.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "empty-note";
-    empty.textContent = t("healthEmpty");
-    list.appendChild(empty);
-    return;
-  }
-  for (const node of rows) {
-    const row = document.createElement("div");
-    row.className = `health-row sev-${nodeSeverity(node.issues)}`;
-    const head = document.createElement("button");
-    head.type = "button";
-    head.className = "health-row-title";
-    head.textContent = node.title || node.id;
-    head.addEventListener("click", () => {
-      enterGalaxy(node.galaxy);
-      selectNode(node);
-    });
-    row.appendChild(head);
-    const chips = document.createElement("div");
-    chips.className = "health-row-issues";
-    for (const code of node.issues) {
-      const chip = document.createElement("span");
-      chip.className = `issue-chip sev-${classifyIssueCode(code)}`;
-      // §9: words in both languages, the code next to them only here.
-      chip.textContent = `${t("issues")[code] ?? code} · ${code}`;
-      chips.appendChild(chip);
-    }
-    row.appendChild(chips);
-    list.appendChild(row);
-  }
-}
-
-// ---- time-lapse ----
-
-function setTimelapse(on) {
-  state.timelapse.on = Boolean(on);
-  $("timelapse-bar").classList.toggle("is-hidden", !state.timelapse.on);
-  $("menu-timelapse").setAttribute("aria-checked", String(state.timelapse.on));
-  if (state.timelapse.on) {
-    const dates = state.model?.nodes.map((node) => node.created).filter(Boolean).sort() ?? [];
-    state.timelapse.min = dates[0] ?? "";
-    state.timelapse.max = dates[dates.length - 1] ?? "";
-    if (state.timelapse.ratio < 1) {
-      updateTimelapseCutoff();
-    } else {
-      state.timelapse.cutoff = null;
-      $("timelapse-readout").textContent = t("timelapseAll");
-    }
+function initTimelapseBounds() {
+  const dates = state.model?.nodes.map((node) => node.created).filter(Boolean).sort() ?? [];
+  state.timelapse.min = dates[0] ?? "";
+  state.timelapse.max = dates[dates.length - 1] ?? "";
+  if (state.timelapse.ratio < 1 && state.timelapse.min && state.timelapse.max) {
+    const span = Date.parse(state.timelapse.max) - Date.parse(state.timelapse.min);
+    const offset = Math.round(span * state.timelapse.ratio);
+    state.timelapse.cutoff = new Date(Date.parse(state.timelapse.min) + offset).toISOString().slice(0, 10);
   } else {
-    stopTimelapsePlayback();
     state.timelapse.cutoff = null;
   }
-  refreshVisibility();
+}
+
+function updateTimelapseButtonLabel() {
+  const btn = $("timelapse-play");
+  if (!btn) return;
+  if (state.reducedMotion) {
+    btn.textContent = t("timelapseStep");
+    btn.title = t("timelapseStep");
+    btn.setAttribute("aria-label", t("timelapseStep"));
+  } else if (state.timelapse.playing) {
+    btn.textContent = "⏸";
+    btn.title = t("timelapsePause");
+    btn.setAttribute("aria-label", t("timelapsePause"));
+  } else {
+    btn.textContent = "▶";
+    btn.title = t("timelapsePlay");
+    btn.setAttribute("aria-label", t("timelapsePlay"));
+  }
 }
 
 function updateTimelapseCutoff() {
   const { min, max, ratio } = state.timelapse;
-  if (!min || !max) return;
-  if (ratio >= 1) {
+  if (!min || !max || ratio >= 1) {
     state.timelapse.cutoff = null;
     $("timelapse-readout").textContent = t("timelapseAll");
   } else {
@@ -489,13 +464,30 @@ function updateTimelapseCutoff() {
   refreshVisibility();
 }
 
+function stepTimelapseOnce() {
+  stopTimelapsePlayback();
+  const nextRatio =
+    state.timelapse.ratio >= 1
+      ? TIMELAPSE_STEP_RATIO
+      : Math.min(1, state.timelapse.ratio + TIMELAPSE_STEP_RATIO);
+  state.timelapse.ratio = nextRatio;
+  $("timelapse-slider").value = String(Math.round(nextRatio * 1000));
+  updateTimelapseCutoff();
+}
+
 function startTimelapsePlayback() {
-  if (!state.timelapse.on) setTimelapse(true);
+  if (state.reducedMotion) {
+    stepTimelapseOnce();
+    return;
+  }
+  if (state.timelapse.ratio >= 1) {
+    state.timelapse.ratio = 0;
+  }
   state.timelapse.playing = true;
-  $("timelapse-play").textContent = "⏸";
+  updateTimelapseButtonLabel();
   const step = () => {
     if (!state.timelapse.playing) return;
-    state.timelapse.ratio = Math.min(1, state.timelapse.ratio + 0.002);
+    state.timelapse.ratio = Math.min(1, state.timelapse.ratio + 0.004);
     $("timelapse-slider").value = String(Math.round(state.timelapse.ratio * 1000));
     updateTimelapseCutoff();
     if (state.timelapse.ratio >= 1) {
@@ -510,17 +502,14 @@ function startTimelapsePlayback() {
 function stopTimelapsePlayback() {
   state.timelapse.playing = false;
   clearTimeout(state.timelapse.timer);
-  $("timelapse-play").textContent = "▶";
+  updateTimelapseButtonLabel();
 }
 
-// ---- menus ----
+// ---- menus & settings panel ----
 
 function closeMenus() {
-  for (const id of ["layers-menu", "settings-menu"]) {
-    $(id).classList.add("is-hidden");
-  }
+  $("layers-menu").classList.add("is-hidden");
   $("btn-layers").setAttribute("aria-expanded", "false");
-  $("btn-settings-menu").setAttribute("aria-expanded", "false");
 }
 
 function toggleMenu(id, buttonId) {
@@ -529,6 +518,19 @@ function toggleMenu(id, buttonId) {
   closeMenus();
   menu.classList.toggle("is-hidden", !show);
   $(buttonId).setAttribute("aria-expanded", String(show));
+}
+
+async function openSettingsPanel() {
+  closeMenus();
+  if (!hasBridge()) {
+    showToast(t("openSettingsFailed", { reason: t("fixtureBadge") }), true);
+    return;
+  }
+  try {
+    await invokeBridge("kg.openSettings", {}, BRIDGE_TIMEOUT_MS);
+  } catch (error) {
+    showToast(t("openSettingsFailed", { reason: error?.message || String(error) }), true);
+  }
 }
 
 function populateFilterOptions() {
@@ -569,6 +571,7 @@ function applyTranslations() {
   $("btn-mode-toggle").textContent = state.mode === MODE_3D ? t("modeChart") : t("mode3d");
   $("label-layers").textContent = t("layersBtn");
   $("label-settings-menu").textContent = t("settingsBtn");
+  $("btn-settings-menu").title = t("settingsBtn");
   $("btn-zoom-in").title = t("zoomIn");
   $("btn-zoom-out").title = t("zoomOut");
   $("layers-heading").textContent = t("layersHeading");
@@ -579,23 +582,10 @@ function applyTranslations() {
   $("label-layer-ghosts").textContent = t("layerGhosts");
   $("label-layer-archived").textContent = t("layerArchived");
   $("label-layer-memory").textContent = t("layerMemory");
+  $("label-layer-health").textContent = t("layerHealth");
   $("label-filter-class").textContent = t("filterClass");
   $("label-filter-stability").textContent = t("filterStability");
-  $("settings-menu-heading").textContent = t("settingsMenuHeading");
-  $("menu-health-text").textContent = t("menuHealth");
-  $("menu-timelapse-text").textContent = t("menuTimelapse");
-  $("menu-retrieval-text").textContent = t("menuRetrieval");
-  $("menu-language-text").textContent = t("menuLanguage");
-  $("opt-lang-auto").textContent = t("languageAuto");
-  $("health-heading").textContent = t("healthHeading");
-  $("health-close").title = t("healthClose");
-  $("health-close").setAttribute("aria-label", t("healthClose"));
-  for (const [value, key] of [["all", "healthFilterAll"], ["red", "healthFilterRed"], ["amber", "healthFilterAmber"], ["muted", "healthFilterMuted"]]) {
-    const option = $("health-sev-" + value);
-    if (option) option.textContent = t(key);
-  }
-  $("timelapse-play").textContent = state.timelapse.playing ? "⏸" : "▶";
-  $("timelapse-exit").textContent = t("timelapseExit");
+  updateTimelapseButtonLabel();
   $("timelapse-readout").textContent = state.timelapse.cutoff
     ? t("timelapseCutoff", { date: state.timelapse.cutoff })
     : t("timelapseAll");
@@ -604,30 +594,36 @@ function applyTranslations() {
   $("fixture-badge").textContent = t("fixtureBadge");
   populateFilterOptions();
   view.drawer?.applyTranslations?.();
-  view.settings?.applyTranslations();
   updateHeader();
   render();
 }
 
 // ---- boot ----
 
-const view = { chart: null, three: null, drawer: null, settings: null };
+const view = { chart: null, three: null, drawer: null };
 
 async function boot() {
   state.reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
   window.matchMedia?.("(prefers-reduced-motion: reduce)")?.addEventListener?.("change", (event) => {
     state.reducedMotion = event.matches;
+    if (event.matches && state.timelapse.playing) {
+      stopTimelapsePlayback();
+    } else {
+      updateTimelapseButtonLabel();
+    }
     if (view.three) view.three.reduced = event.matches;
     render();
   });
 
-  let storedLang = null;
-  try {
-    storedLang = localStorage.getItem(LANGUAGE_STORAGE_KEY);
-  } catch {
-    storedLang = null;
-  }
-  state.lang = storedLang === "zh-CN" || storedLang === "en" ? storedLang : (navigator.language?.startsWith("zh") ? "zh-CN" : "en");
+  state.lang = resolveLanguage("auto");
+  await syncLanguageFromPrefs({ migrateLegacy: true });
+
+  window.addEventListener("focus", () => {
+    void syncLanguageFromPrefs();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) void syncLanguageFromPrefs();
+  });
 
   state.webglAvailable = detectWebGL();
   const decision = initialViewMode({ webglAvailable: state.webglAvailable, storedMode: storedMode() });
@@ -654,7 +650,6 @@ async function boot() {
     if (state.focusGalaxyId !== node.galaxy) enterGalaxy(node.galaxy);
     selectNode(node);
   };
-  view.settings = new RetrievalSettingsPanel({ t, showToast });
 
   bindUi();
   await loadGraph();
@@ -668,7 +663,9 @@ function bindUi() {
     setMode(state.mode === MODE_3D ? MODE_CHART : MODE_3D);
   });
   $("btn-layers").addEventListener("click", () => toggleMenu("layers-menu", "btn-layers"));
-  $("btn-settings-menu").addEventListener("click", () => toggleMenu("settings-menu", "btn-settings-menu"));
+  $("btn-settings-menu").addEventListener("click", () => {
+    void openSettingsPanel();
+  });
   document.addEventListener("click", (event) => {
     if (!event.target.closest(".menu-popover") && !event.target.closest(".corner-btn")) closeMenus();
     if (!event.target.closest(".search-box")) {
@@ -690,6 +687,11 @@ function bindUi() {
       refreshVisibility();
     });
   }
+  $("layer-health").addEventListener("change", (event) => {
+    state.healthMode = Boolean(event.target.checked);
+    render();
+  });
+
   $("filter-class").addEventListener("change", (event) => {
     state.filters.class = event.target.value;
     refreshVisibility();
@@ -699,35 +701,14 @@ function bindUi() {
     refreshVisibility();
   });
 
-  $("menu-health").addEventListener("click", () => {
-    closeMenus();
-    setHealthMode(!state.healthMode);
-  });
-  $("menu-timelapse").addEventListener("click", () => {
-    closeMenus();
-    setTimelapse(!state.timelapse.on);
-  });
-  $("menu-retrieval").addEventListener("click", () => {
-    closeMenus();
-    view.settings.open();
-  });
-  $("opt-lang-auto").addEventListener("click", () => {
-    try {
-      localStorage.removeItem(LANGUAGE_STORAGE_KEY);
-    } catch {}
-    state.lang = navigator.language?.startsWith("zh") ? "zh-CN" : "en";
-    applyTranslations();
-  });
-  $("opt-lang-zh").addEventListener("click", () => setLanguage("zh-CN"));
-  $("opt-lang-en").addEventListener("click", () => setLanguage("en"));
-
   $("btn-zoom-in").addEventListener("click", () => zoom(1.3));
   $("btn-zoom-out").addEventListener("click", () => zoom(1 / 1.3));
 
-  $("health-close").addEventListener("click", () => setHealthMode(false));
-  $("health-severity-filter").addEventListener("change", () => renderHealthPanel());
-
   $("timelapse-play").addEventListener("click", () => {
+    if (state.reducedMotion) {
+      stepTimelapseOnce();
+      return;
+    }
     if (state.timelapse.playing) stopTimelapsePlayback();
     else startTimelapsePlayback();
   });
@@ -736,7 +717,6 @@ function bindUi() {
     state.timelapse.ratio = Number(event.target.value) / 1000;
     updateTimelapseCutoff();
   });
-  $("timelapse-exit").addEventListener("click", () => setTimelapse(false));
 
   const searchInput = $("search-input");
   searchInput.addEventListener("input", (event) => runSearch(event.target.value));
@@ -768,9 +748,7 @@ function bindUi() {
       searchInput.focus();
       searchInput.select();
     } else if (event.key === "Escape") {
-      if (view.settings?.isOpen()) view.settings.close();
-      else if ($("health-region") && !$("health-region").classList.contains("is-hidden")) setHealthMode(false);
-      else if (view.drawer?.isOpen()) {
+      if (view.drawer?.isOpen()) {
         state.selectedId = null;
         view.drawer.close();
         render();
@@ -780,21 +758,13 @@ function bindUi() {
   });
 }
 
-function setLanguage(lang) {
-  state.lang = lang;
-  try {
-    localStorage.setItem(LANGUAGE_STORAGE_KEY, lang);
-  } catch {}
-  applyTranslations();
-}
-
 function zoom(factor) {
   if (state.mode === MODE_3D) view.three?.zoomBy(factor);
   else view.chart?.zoomBy(factor);
 }
 
 // Console/diagnostics hook: lets users and host tooling inspect the live
-// view state (mode, layers, visibility) without touching behavior.
-window.__kgUniverse = { state, view };
+// view state (mode, layers, visibility, nodeSeverity) without touching behavior.
+window.__kgUniverse = { state, view, nodeSeverity, syncLanguageFromPrefs };
 
 boot();
