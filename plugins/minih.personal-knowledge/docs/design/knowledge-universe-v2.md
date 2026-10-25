@@ -373,7 +373,8 @@ Codes appear only inside health mode, next to the words.
 
 ## 13. Release
 
-Ship as the next patch of the line that does not declare `memory.read`. The
-memory work (0.3.0, ADR 0001 §11) rebases on it. Memory satellites in the star
+Shipped as 0.3.1 on the 0.3.0 line (the user's Desktop gained `memory.read`
+support before this release, so the manifest keeps declaring it; ADR 0001
+§11 ships in the same line rather than rebasing). Memory satellites in the star
 chart use the galaxy hue, the four-point sparkle symbol, and sit just outside
 the event ring.
