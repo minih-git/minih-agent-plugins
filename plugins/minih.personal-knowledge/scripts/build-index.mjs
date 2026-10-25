@@ -4,9 +4,9 @@
  *
  *   node scripts/build-index.mjs
  *
- * Embeds every chunk from redacted text through the loopback embedding server.
- * Requires a reachable Ollama (`embedding.enabled` in the repo-map); refuses
- * non-loopback base URLs at load.
+ * Embeds every chunk of redacted text through the configured embedding
+ * provider (ADR 0001 §6.1): a local Ollama by default, or a remote
+ * openai-compatible endpoint with `allowRemote: true` and https.
  */
 import path from "node:path";
 import process from "node:process";

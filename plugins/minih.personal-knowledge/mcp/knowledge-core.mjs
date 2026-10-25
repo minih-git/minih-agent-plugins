@@ -29,6 +29,7 @@ import { expandWithGraph, reciprocalRankFusion, rerank, retrievalState } from ".
 import { appendToSectionSpan, locateSection, replaceSectionSpan } from "../lib/sections.mjs";
 import { VaultIndex } from "../lib/vault-index.mjs";
 import { VectorIndex } from "../lib/vector-index.mjs";
+import { EMBED_BATCH } from "../lib/embeddings.mjs";
 
 const SEARCH_EXTENSIONS = new Set([".md", ".base"]);
 const WRITE_EXTENSION = ".md";
@@ -170,17 +171,46 @@ export class KnowledgeService {
     this.backgroundRefreshed = false;
     if (this.embedding?.settings.enabled) {
       // The stored identity (provider + baseUrl + model + dims) decides whether
-      // the vectors on disk can still be used (§6.1 reload rules).
-      const dims = this.vectors.meta?.dims ?? null;
-      await this.vectors.load({
-        identity: this.#vectorIdentity(dims),
-        dims: dims ?? 0,
-      });
+      // the vectors on disk can still be used (§6.1 reload rules). Read the
+      // DISK meta — a fresh VectorIndex has none, and loading with a guessed
+      // dims (0) made every reload fail, so the next save shrank the index.
+      this.diskIndexMeta = await this.vectors.readMeta();
+      this.vectorsLoadedFromDisk = false;
+      if (this.#diskIdentityMatches()) {
+        const loaded = await this.vectors.load({
+          identity: this.diskIndexMeta.identity,
+          dims: this.diskIndexMeta.dims,
+        });
+        this.vectorsLoadedFromDisk = loaded;
+      }
       // Refresh changed chunks in the background; a tool call spends at most
       // 3 seconds waiting for it before answering (§6).
       this.ensureVectors({ budgetMs: 3000 }).catch(() => {});
     }
     return this;
+  }
+
+  /**
+   * Whether the on-disk index was built by the current provider+base+model
+   * (the dims suffix may legitimately differ from what an unprimed client
+   * would guess). `this.diskIndexMeta` must be read first.
+   */
+  #diskIdentityMatches() {
+    const meta = this.diskIndexMeta;
+    if (!meta || !Number.isInteger(meta.dims) || meta.dims <= 0) return false;
+    const prefix = this.embedding?.identityPrefix?.() ?? "";
+    const diskPrefix = String(meta.identity ?? "").split("|").slice(0, 3).join("|");
+    return prefix !== "" && prefix.split("|").slice(0, 3).join("|") === diskPrefix;
+  }
+
+  /**
+   * Record a vector-channel failure. `INDEX_LOAD_FAILED` (a refused shrink
+   * over an unloadable same-identity index) is sticky for this process: a
+   * later transient embed error must not mask the refusal.
+   */
+  #setVectorReason(code) {
+    if (this.vectorReason === "INDEX_LOAD_FAILED") return;
+    this.vectorReason = code;
   }
 
   /** Identity string stored in meta.json; a change invalidates the index. */
@@ -372,9 +402,31 @@ export class KnowledgeService {
         : null;
       return;
     }
-    if (this.ensureVectorsPromise) return this.ensureVectorsPromise;
-    this.ensureVectorsPromise = this.#ensureVectors(options).finally(() => {
+    const budgetMs = options.budgetMs ?? 3000;
+    const force = options.force === true;
+    if (this.ensureVectorsPromise) {
+      // A weaker request joins the in-flight run. A stronger one (force, or a
+      // larger budget — the CLI asks for an unbounded pass) waits for the
+      // weaker slice to finish and then runs with its own parameters, so the
+      // CLI's infinite budget can no longer be swallowed by the constructor's
+      // 3-second kick.
+      const inFlightBudget = this.ensureVectorsInFlightBudgetMs ?? 3000;
+      const inFlightForce = this.ensureVectorsInFlightForce === true;
+      if (!force && budgetMs <= inFlightBudget && !inFlightForce) {
+        return this.ensureVectorsPromise;
+      }
+      try {
+        await this.ensureVectorsPromise;
+      } catch {
+        // The in-flight run already recorded its own reason.
+      }
+    }
+    this.ensureVectorsInFlightBudgetMs = budgetMs;
+    this.ensureVectorsInFlightForce = force;
+    this.ensureVectorsPromise = this.#ensureVectors({ budgetMs, force }).finally(() => {
       this.ensureVectorsPromise = null;
+      this.ensureVectorsInFlightBudgetMs = null;
+      this.ensureVectorsInFlightForce = null;
     });
     return this.ensureVectorsPromise;
   }
@@ -416,26 +468,34 @@ export class KnowledgeService {
     try {
       await this.embedding.probe();
     } catch (error) {
-      this.vectorReason = error.code ?? "OLLAMA_UNREACHABLE";
+      this.#setVectorReason(error.code ?? "OLLAMA_UNREACHABLE");
       return;
     }
     let embeddedNew = false;
     let sawAuthFailure = false;
-    for (const item of missing) {
+    let embedError = null;
+    // Batched requests: EMBED_BATCH texts per call. Successes from earlier
+    // batches are kept and saved; the budget is checked between batches.
+    for (let start = 0; start < missing.length; start += EMBED_BATCH) {
       if (this.now().getTime() > deadline) break;
+      const batch = missing.slice(start, start + EMBED_BATCH);
       try {
-        const [vector] = await this.embedding.embed([item.text]);
-        if (!dims) dims = vector.length;
-        vectorMap.set(item.row.sha, vector);
-        embeddedNew = true;
+        const vectors = await this.embedding.embed(batch.map((item) => item.text));
+        vectors.forEach((vector, index) => {
+          const item = batch[index];
+          if (!dims) dims = vector.length;
+          vectorMap.set(item.row.sha, vector);
+          embeddedNew = true;
+        });
       } catch (error) {
-        this.vectorReason = error.code ?? "EMBED_FAILED";
+        embedError = error;
+        this.#setVectorReason(error.code ?? "EMBED_FAILED");
         if (error?.code === "EMBEDDING_AUTH_FAILED") {
           // Re-resolve the key once after a rejected key (§6.1); the value
           // never leaves the client.
           sawAuthFailure = true;
         }
-        return;
+        break;
       }
     }
     if (sawAuthFailure) {
@@ -455,6 +515,21 @@ export class KnowledgeService {
       vectors.push(vector);
     }
     if (!dims) return;
+    // Shrink protection: when the disk holds an index of OURS that this
+    // process failed to load, never replace it with fewer rows — that would
+    // destroy a complete index over a transient failure (§6.1). Only an
+    // explicit rebuild (force) or a genuine identity change may shrink.
+    const diskMeta = this.diskIndexMeta;
+    if (
+      !force &&
+      diskMeta &&
+      !this.vectorsLoadedFromDisk &&
+      this.#diskIdentityMatches() &&
+      rows.length < diskMeta.count
+    ) {
+      this.vectorReason = "INDEX_LOAD_FAILED";
+      return;
+    }
     const flat = new Float32Array(rows.length * dims);
     vectors.forEach((vector, i) => flat.set(vector, i * dims));
     const saved = await this.vectors.save({
@@ -464,7 +539,9 @@ export class KnowledgeService {
       dims,
     });
     if (saved) {
-      this.vectorReason = this.pendingChunkCount > 0 ? "pending" : null;
+      this.vectorReason =
+        embedError?.code ?? (this.pendingChunkCount > 0 ? "pending" : null);
+      if (embedError && this.pendingChunkCount === 0) this.vectorReason = embedError.code ?? "EMBED_FAILED";
     }
   }
 

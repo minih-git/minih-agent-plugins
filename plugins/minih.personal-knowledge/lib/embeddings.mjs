@@ -21,7 +21,7 @@ import { EMBEDDING_DEFAULTS } from "./embedding-defaults.mjs";
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
 const API_KEY_ENV_PATTERN = /^[A-Z_][A-Z0-9_]{0,63}$/;
-const EMBED_BATCH = 32;
+export const EMBED_BATCH = 32;
 const OLLAMA_TIMEOUT_MS = 30_000;
 const PROBE_TIMEOUT_MS = 500;
 const UNREACHABLE_CACHE_MS = 60_000;
@@ -244,7 +244,9 @@ export class EmbeddingClient {
       throw transportError("EMBEDDING_RATE_LIMITED", `the endpoint answered 429 (rate limited)`);
     }
     if (!response.ok) {
-      throw transportError("EMBED_FAILED", `the endpoint answered ${response.status}: ${await shortResponseText(response)}`);
+      const error = transportError("EMBED_FAILED", `the endpoint answered ${response.status}: ${await shortResponseText(response)}`);
+      error.status = response.status;
+      throw error;
     }
     return response.json();
   }
@@ -275,13 +277,38 @@ export class EmbeddingClient {
     const vectors = [];
     for (let i = 0; i < texts.length; i += EMBED_BATCH) {
       const batch = texts.slice(i, i + EMBED_BATCH);
-      const payload =
-        this.settings.provider === "ollama"
-          ? await this.#post("/api/embed", { model: this.settings.model, input: batch }, timeoutMs)
-          : await this.#post("/embeddings", { model: this.settings.model, input: batch }, timeoutMs);
-      vectors.push(...this.#extractVectors(payload, batch.length));
+      vectors.push(...(await this.#embedBatch(batch, timeoutMs)));
     }
     return vectors;
+  }
+
+  /**
+   * Embed one batch. Some gateways cap the per-request input size and answer
+   * 400 for a full batch; on that rejection the batch is retried in halves
+   * down to single texts, so one oversized request degrades throughput
+   * instead of failing the whole run.
+   */
+  async #embedBatch(batch, timeoutMs) {
+    const post = () =>
+      this.settings.provider === "ollama"
+        ? this.#post("/api/embed", { model: this.settings.model, input: batch }, timeoutMs)
+        : this.#post("/embeddings", { model: this.settings.model, input: batch }, timeoutMs);
+    let payload;
+    try {
+      payload = await post();
+    } catch (error) {
+      const status = error?.status;
+      if (batch.length > 1 && (status === 400 || status === 413)) {
+        const middle = Math.floor(batch.length / 2);
+        const [head, tail] = await Promise.all([
+          this.#embedBatch(batch.slice(0, middle), timeoutMs),
+          this.#embedBatch(batch.slice(middle), timeoutMs),
+        ]);
+        return [...head, ...tail];
+      }
+      throw error;
+    }
+    return this.#extractVectors(payload, batch.length);
   }
 
   #extractVectors(payload, expectedCount) {

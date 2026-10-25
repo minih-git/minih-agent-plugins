@@ -27,6 +27,15 @@ export class VectorIndex {
     this.meta = null;
   }
 
+  /** The stored meta.json, or null when absent/unparsable. */
+  async readMeta() {
+    try {
+      return JSON.parse(await readFile(path.join(this.directory, "meta.json"), "utf8"));
+    } catch {
+      return null;
+    }
+  }
+
   async load({ identity, dims }) {
     let meta;
     let rows;
