@@ -4,8 +4,8 @@
   "catalog_id": null,
   "name": "Minih-Agent-Desktop Plugins",
   "homepage": "https://github.com/minih-git/minih-agent-plugins",
-  "updated_at": "2026-10-25T02:29:11Z",
-  "generated_at": "2026-10-25T02:29:11Z",
+  "updated_at": "2026-10-25T04:58:20Z",
+  "generated_at": "2026-10-25T04:58:20Z",
   "policy_version": null,
   "artifact_base_url": "https://raw.githubusercontent.com/minih-git/minih-agent-plugins/main",
   "plugins": [
@@ -170,11 +170,11 @@
       },
       "versions": [
         {
-          "version": "0.3.1",
-          "publishedAt": "2026-10-25T02:29:11Z",
-          "shasum": "8f483abdd7086fb182aca649457b960c26bf4f03653d7b1e9bb83d129c065d86",
-          "url": "packages/minih.personal-knowledge-0.3.1.piplug",
-          "sizeBytes": 2821582,
+          "version": "0.3.2",
+          "publishedAt": "2026-10-25T04:58:20Z",
+          "shasum": "8d53a641c92230aa6bc617932273627c6d98d8a00eb19176ba3660480f760d03",
+          "url": "packages/minih.personal-knowledge-0.3.2.piplug",
+          "sizeBytes": 2836284,
           "permissions": [
             "agent.prompt.inject",
             "mcp.server.local",
