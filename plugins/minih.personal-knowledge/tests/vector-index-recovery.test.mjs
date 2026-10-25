@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { EmbeddingClient } from "../lib/embeddings.mjs";
 import { isolatedHome } from "./helpers/home.mjs";
 // Keep every fixture away from the real ~/.personal-knowledge (see helpers/home.mjs).
 await isolatedHome();
@@ -99,9 +100,9 @@ async function readMeta(indexDir) {
   return JSON.parse(await readFile(path.join(indexDir, "meta.json"), "utf8"));
 }
 
-async function makeService(vault) {
+async function makeService(vault, now) {
   const { createKnowledgeService } = await import("../mcp/knowledge-core.mjs");
-  return createKnowledgeService({ pluginRoot: PLUGIN_ROOT, vaultPath: vault, config: {} });
+  return createKnowledgeService({ pluginRoot: PLUGIN_ROOT, vaultPath: vault, config: {}, now });
 }
 
 test("a finished index reloads without a single embed request", async () => {
@@ -178,6 +179,133 @@ test("embedding runs in EMBED_BATCH batches and keeps successes before a failure
     assert.ok(service.pendingChunkCount > 0, "the tail batches stay pending");
     assert.equal(service.vectorReason, "EMBED_FAILED", "the failing batch must be observable");
   } finally {
+    fake.restore();
+  }
+});
+
+test("hot-enabling the channel reuses the on-disk index instead of shrinking it", async () => {
+  const vault = await fixtureVault({ notes: 4, chunksPerNote: 18 });
+  const indexDir = await freshIndexDir();
+  const settingsFile = process.env.PERSONAL_KNOWLEDGE_EMBEDDING_CONFIG;
+  const writeSettings = async (enabled, bumpMs) => {
+    await writeFile(
+      settingsFile,
+      `${JSON.stringify(
+        {
+          enabled,
+          provider: "ollama",
+          baseUrl: "http://127.0.0.1:9",
+          model: "fake-embedding",
+          allowRemote: false,
+          apiKeyEnv: "",
+          exclude: [],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    if (bumpMs) {
+      // Future mtime defeats the 1 s settings re-read throttle without sleep.
+      const t = new Date(Date.now() + bumpMs);
+      await utimes(settingsFile, t, t);
+    }
+  };
+
+  const fake = await installFakeEmbeddingClient();
+  const { VectorIndex } = await import("../lib/vector-index.mjs");
+  const originalLoad = VectorIndex.prototype.load;
+  try {
+    // 1. Full build with vectors on.
+    await writeSettings(true);
+    const builder = await makeService(vault);
+    await builder.ensureVectors({ budgetMs: 60_000, force: true });
+    const n = builder.vectors.chunks.length;
+    assert.ok(n > 64, `fixture must exceed two batches, got ${n}`);
+
+    // 2. A long-lived process starts with vectors OFF (the recovery state).
+    //    The injected clock defeats the 1 s settings re-read throttle.
+    let clockMs = Date.now();
+    await writeSettings(false);
+    const hot = await makeService(vault, () => new Date(clockMs));
+    assert.equal(hot.embedding, null);
+
+    // 3. The user flips enabled back on; the next refresh reuses the disk.
+    fake.handle.calls = 0;
+    clockMs += 5_000;
+    await writeSettings(true);
+    await hot.ensureVectors({ budgetMs: 60_000, force: false });
+    assert.equal(fake.handle.calls, 0, `hot enable must not embed (old code made ${fake.handle.calls} calls)`);
+    assert.equal(hot.vectors.chunks.length, n, "the full index must load on hot enable");
+    assert.equal(hot.pendingChunkCount, 0);
+    assert.equal((await readMeta(indexDir)).count, n, "disk count must not change on hot enable");
+  } finally {
+    fake.restore();
+  }
+});
+
+test("a small budget after a failed hot-enable load must not shrink the index", async () => {
+  const vault = await fixtureVault({ notes: 4, chunksPerNote: 18 });
+  const indexDir = await freshIndexDir();
+  const settingsFile = process.env.PERSONAL_KNOWLEDGE_EMBEDDING_CONFIG;
+  const writeSettings = async (enabled, bumpMs) => {
+    await writeFile(
+      settingsFile,
+      `${JSON.stringify(
+        {
+          enabled,
+          provider: "ollama",
+          baseUrl: "http://127.0.0.1:9",
+          model: "fake-embedding",
+          allowRemote: false,
+          apiKeyEnv: "",
+          exclude: [],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    if (bumpMs) {
+      const t = new Date(Date.now() + bumpMs);
+      await utimes(settingsFile, t, t);
+    }
+  };
+
+  const fake = await installFakeEmbeddingClient({ delayMs: 120 });
+  const { VectorIndex } = await import("../lib/vector-index.mjs");
+  const originalLoad = VectorIndex.prototype.load;
+  try {
+    await writeSettings(true);
+    const builder = await makeService(vault);
+    await builder.ensureVectors({ budgetMs: 60_000, force: true });
+    const n = builder.vectors.chunks.length;
+    assert.ok(n > 64, `fixture must exceed two batches, got ${n}`);
+
+    // The load itself fails on hot enable (I/O hiccup); the budget is small
+    // enough that the pass holds only a strict subset of N. The fake advances
+    // the injected clock so the between-batches budget check actually cuts.
+    const clock = { ms: Date.now() };
+    await writeSettings(false);
+    const hot = await makeService(vault, () => new Date(clock.ms));
+    VectorIndex.prototype.load = async () => false;
+    fake.handle.calls = 0;
+    const realEmbed = EmbeddingClient.prototype.embed;
+    EmbeddingClient.prototype.embed = async function embed(texts) {
+      const vectors = await realEmbed.call(this, texts);
+      clock.ms += 120;
+      return vectors;
+    };
+    clock.ms += 5_000;
+    await writeSettings(true);
+    try {
+      await hot.ensureVectors({ budgetMs: 150, force: false });
+    } finally {
+      EmbeddingClient.prototype.embed = realEmbed;
+    }
+    const meta = await readMeta(indexDir);
+    assert.equal(meta.count, n, `disk count must not shrink (old code wrote ${meta.count} of ${n})`);
+    assert.equal(hot.vectorReason, "INDEX_LOAD_FAILED", "the refused save must be observable");
+  } finally {
+    VectorIndex.prototype.load = originalLoad;
     fake.restore();
   }
 });

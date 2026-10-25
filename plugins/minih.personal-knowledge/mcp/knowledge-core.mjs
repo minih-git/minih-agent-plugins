@@ -170,19 +170,7 @@ export class KnowledgeService {
     this.vectorReason = null;
     this.backgroundRefreshed = false;
     if (this.embedding?.settings.enabled) {
-      // The stored identity (provider + baseUrl + model + dims) decides whether
-      // the vectors on disk can still be used (§6.1 reload rules). Read the
-      // DISK meta — a fresh VectorIndex has none, and loading with a guessed
-      // dims (0) made every reload fail, so the next save shrank the index.
-      this.diskIndexMeta = await this.vectors.readMeta();
-      this.vectorsLoadedFromDisk = false;
-      if (this.#diskIdentityMatches()) {
-        const loaded = await this.vectors.load({
-          identity: this.diskIndexMeta.identity,
-          dims: this.diskIndexMeta.dims,
-        });
-        this.vectorsLoadedFromDisk = loaded;
-      }
+      await this.#loadVectorsFromDisk();
       // Refresh changed chunks in the background; a tool call spends at most
       // 3 seconds waiting for it before answering (§6).
       this.ensureVectors({ budgetMs: 3000 }).catch(() => {});
@@ -191,12 +179,31 @@ export class KnowledgeService {
   }
 
   /**
-   * Whether the on-disk index was built by the current provider+base+model
-   * (the dims suffix may legitimately differ from what an unprimed client
-   * would guess). `this.diskIndexMeta` must be read first.
+   * Re-read the DISK meta and load the index when it belongs to the current
+   * provider+base+model. Called from the constructor and on every embedding
+   * client (re)creation — a hot enable (off → on), a provider change, and a
+   * switch back must all reuse the on-disk index instead of treating every
+   * chunk as missing. A fresh VectorIndex has no meta, and loading with a
+   * guessed dims (0) made every reload fail, so the next save shrank it.
    */
-  #diskIdentityMatches() {
-    const meta = this.diskIndexMeta;
+  async #loadVectorsFromDisk() {
+    this.diskIndexMeta = await this.vectors.readMeta();
+    this.vectorsLoadedFromDisk = false;
+    if (this.#diskIdentityMatches(this.diskIndexMeta)) {
+      this.vectorsLoadedFromDisk = await this.vectors.load({
+        identity: this.diskIndexMeta.identity,
+        dims: this.diskIndexMeta.dims,
+      });
+    }
+    return this.vectorsLoadedFromDisk;
+  }
+
+  /**
+   * Whether the given on-disk meta was built by the current provider+base+
+   * model (the dims suffix may legitimately differ from what an unprimed
+   * client would guess).
+   */
+  #diskIdentityMatches(meta) {
     if (!meta || !Number.isInteger(meta.dims) || meta.dims <= 0) return false;
     const prefix = this.embedding?.identityPrefix?.() ?? "";
     const diskPrefix = String(meta.identity ?? "").split("|").slice(0, 3).join("|");
@@ -260,6 +267,11 @@ export class KnowledgeService {
       this.vectors.vectors = null;
       this.vectors.meta = null;
     }
+    // A new client means the channel just turned on (hot enable), the provider
+    // changed, or it switched back. Re-read the disk index either way: without
+    // this, a hot enable saw an empty index, embedded a budget-sized subset,
+    // and saved it over the full one.
+    if (this.vectors) await this.#loadVectorsFromDisk();
   }
 
   async root() {
@@ -519,12 +531,11 @@ export class KnowledgeService {
     // process failed to load, never replace it with fewer rows — that would
     // destroy a complete index over a transient failure (§6.1). Only an
     // explicit rebuild (force) or a genuine identity change may shrink.
-    const diskMeta = this.diskIndexMeta;
+    const diskMeta = await this.vectors.readMeta();
     if (
       !force &&
       diskMeta &&
-      !this.vectorsLoadedFromDisk &&
-      this.#diskIdentityMatches() &&
+      this.#diskIdentityMatches(diskMeta) &&
       rows.length < diskMeta.count
     ) {
       this.vectorReason = "INDEX_LOAD_FAILED";
