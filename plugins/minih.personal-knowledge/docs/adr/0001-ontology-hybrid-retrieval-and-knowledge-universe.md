@@ -254,7 +254,7 @@ The user chose a reviewed, batched migration.
    `~/.personal-knowledge/migrations/<stamp>/plan.json` and `plan.md`. It never
    writes to the vault. For each note the plan lists the proposed `type`,
    `status`, `outcome`, and `stability` changes, `project` backfills implied by
-   the folder (for example a note under `01 Projects/Hungraim AIT/` with no
+   the folder (for example a note under `01 Projects/Example Project/` with no
    `project`), and the rule that produced each change. Notes that need a human
    decision are marked `review`.
 2. The plan also lists:
