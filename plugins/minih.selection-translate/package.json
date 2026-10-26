@@ -1,0 +1,9 @@
+{
+  "name": "@minih-plugin/minih.selection-translate",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Selection Translate: translate any selected text into Chinese with your own model.",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  }
+}
