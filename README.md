@@ -35,12 +35,14 @@ https://raw.githubusercontent.com/minih-git/minih-agent-plugins/main/catalog.jso
 
 Three of them were built by other people and are redistributed here unmodified,
 keeping their own `LICENSE` and notice files inside their directories.
-`minih.terminal` is authored in this repository.
+`minih.terminal`, `minih.personal-knowledge` and `minih.selection-translate`
+are authored in this repository.
 
 | Plugin | Version | Author | License | Upstream |
 | --- | --- | --- | --- | --- |
 | `minih.terminal` (`Terminal`) | 0.1.4 | minih-git | MIT | this repository |
-| `minih.personal-knowledge` (`Personal Knowledge`) | 0.1.2 | minih-git | MIT | this repository |
+| `minih.personal-knowledge` (`Personal Knowledge`) | 0.4.0 | minih-git | MIT | this repository |
+| `minih.selection-translate` (`Selection Translate`) | 0.1.0 | minih-git | MIT | this repository |
 | `cn.star.computer-use` (`Computer Use`) | 0.4.0 | TheFlareStar | MPL-2.0 | not published by the author |
 | `local.remote-tools` (`Remote SSH Tools`) | 0.1.0 | jiege6-66 | MIT | `github.com/jiege6-66/pi-desktop-remote-tools` |
 | `pi.file-manager` (`File Manager`) | 0.9.0 | Tioit-Wang | not declared by the author | not published by the author |

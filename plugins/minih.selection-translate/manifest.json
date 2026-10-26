@@ -20,6 +20,7 @@
   "categories": ["productivity"],
   "license": "MIT",
   "repository": "https://github.com/minih-git/minih-agent-plugins",
+  "safetyNotes": "Adds one renderer module (renderer.extension), which is why it holds the high-risk permission: that module runs inside the app window with the app's own React, so it can read the window's selection. It only reads it — no host DOM is modified, no transcript is written — and it sends nothing but the selected text, to this plugin's own process, which turns it into exactly one agent.complete request (agent.complete) on the configured model and keeps it in memory until the card collects the answer. models.list is read to fill the model dropdown; the one setting it writes is `model`, through pi.plugin.setSettings — the same key the app's plugin settings sheet edits. Copying a translation uses the window clipboard and, if that is refused, pi.clipboard.writeText (clipboard.write). No file access, no network of its own, no session or message writes, and nothing is stored on disk except that one setting: the selected text never leaves the model call.",
   "main": "main.js",
   "renderer": "renderer/index.mjs",
   "rendererActions": ["plugin.call", "composer.insertText"],
