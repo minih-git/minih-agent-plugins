@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.0
+
+Choose the language, and choose the model from a list.
+
+- A new `翻译语种` setting picks the target language — Simplified Chinese by
+  default, plus Traditional Chinese, English, 日本語, 한국어, Français, Deutsch,
+  Español, Русский and Português. The card carries the same dropdown and
+  re-translates the passage in the language just picked.
+- The model setting is now a real dropdown in the plugin settings sheet: the
+  host fills it from the live ready-model list, so nobody has to type a
+  `providerId/modelId` any more. Empty still means the app's default model.
+  This needs Minih-Agent-Desktop 1.1.0 or later.
+- The prompt names the requested language and the "already in that language"
+  case follows it; an unknown language in a settings file falls back to
+  Simplified Chinese instead of failing.
+
 ## 0.1.0
 
 First release: translate whatever you select.

@@ -164,7 +164,9 @@ export const STYLE = `
 }
 .pist-btn--primary:hover { background: var(--ds-accent-hover); color: var(--ds-bg-primary); }
 .pist-select {
-  max-width: 150px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 132px;
   height: 24px;
   padding: 0 4px;
   border: 1px solid var(--ds-border-default);

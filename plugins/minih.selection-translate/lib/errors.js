@@ -21,6 +21,7 @@ const HINTS = {
   UNKNOWN_MODEL: "这个模型已经不在模型列表里了",
   UNKNOWN_JOB: "这次翻译已经过期，请重新选中再译",
   EMPTY: "选中的内容里没有可翻译的文字",
+  UNKNOWN_LANGUAGE: "这个语种不在支持的列表里",
   FAILED: "翻译没有完成，请重试",
 };
 

@@ -4,8 +4,8 @@
   "catalog_id": null,
   "name": "Minih-Agent-Desktop Plugins",
   "homepage": "https://github.com/minih-git/minih-agent-plugins",
-  "updated_at": "2026-10-26T12:39:20Z",
-  "generated_at": "2026-10-26T12:39:20Z",
+  "updated_at": "2026-10-26T13:09:56Z",
+  "generated_at": "2026-10-26T13:09:56Z",
   "policy_version": null,
   "artifact_base_url": "https://raw.githubusercontent.com/minih-git/minih-agent-plugins/main",
   "plugins": [
@@ -191,7 +191,7 @@
     {
       "id": "minih.selection-translate",
       "name": "选中翻译",
-      "description": "把选中的文字翻成中文：在任意位置选中一段英文（对话里的回复、思考过程、面板里的段落都行），选区下方会出现「译」按钮，点一下就用你自己的模型翻成简体中文，结果显示在紧贴原文的卡片里，可以复制、可以直接插进输入框，也可以在卡片里换一个模型重译。翻译用哪个模型由插件设置决定：留空就用宿主的默认模型，也可以在卡片的模型下拉里直接选，选过的会被记住。",
+      "description": "把选中的文字翻成中文（也可以翻成别的语种）：在任意位置选中一段英文（对话里的回复、思考过程、面板里的段落都行），选区下方会出现「译」按钮，点一下就用你自己的模型翻译，结果显示在紧贴原文的卡片里，可以复制、可以直接插进输入框，也可以在卡片里换模型或换语种重译。翻译用哪个模型、翻成哪种语言都由插件设置决定：模型留空就用宿主的默认模型，语种默认简体中文；卡片里的两个下拉写的是同一份设置，选过的会被记住。",
       "author": "minih-git",
       "icon_url": null,
       "categories": [
@@ -202,26 +202,26 @@
       "publisher_id": "minih-git",
       "homepage": null,
       "repository": "https://github.com/minih-git/minih-agent-plugins",
-      "safety_notes": "Adds one renderer module (renderer.extension), which is why it holds the high-risk permission: that module runs inside the app window with the app's own React, so it can read the window's selection. It only reads it — no host DOM is modified, no transcript is written — and it sends nothing but the selected text, to this plugin's own process, which turns it into exactly one agent.complete request (agent.complete) on the configured model and keeps it in memory until the card collects the answer. models.list is read to fill the model dropdown; the one setting it writes is `model`, through pi.plugin.setSettings — the same key the app's plugin settings sheet edits. Copying a translation uses the window clipboard and, if that is refused, pi.clipboard.writeText (clipboard.write). No file access, no network of its own, no session or message writes, and nothing is stored on disk except that one setting: the selected text never leaves the model call.",
+      "safety_notes": "Adds one renderer module (renderer.extension), which is why it holds the high-risk permission: that module runs inside the app window with the app's own React, so it can read the window's selection. It only reads it — no host DOM is modified, no transcript is written — and it sends nothing but the selected text, to this plugin's own process, which turns it into exactly one agent.complete request (agent.complete) on the configured model and keeps it in memory until the card collects the answer. models.list is read to fill the model dropdown; the only settings it writes are `model` and `language`, through pi.plugin.setSettings — the same keys the app's plugin settings sheet edits. Copying a translation uses the window clipboard and, if that is refused, pi.clipboard.writeText (clipboard.write). No file access, no network of its own, no session or message writes, and nothing is stored on disk except those two settings: the selected text never leaves the model call.",
       "i18n": {
         "en": {
           "name": "Selection Translate",
-          "description": "Translate whatever you select into Chinese: select a paragraph anywhere in the app — a reply, a thinking block, a panel — and a small button appears under the selection. One click translates it with your own model and shows the result in a card next to the original, where it can be copied, inserted straight into the composer, or re-translated on another model. The model is a plugin setting: leave it empty to use the app's default model, or pick one from the card's dropdown, which remembers the choice.",
-          "safetyNotes": "Adds one renderer module (renderer.extension), which is why it holds the high-risk permission: that module runs inside the app window with the app's own React, so it can read the window's selection. It only reads it — no host DOM is modified, no transcript is written — and it sends nothing but the selected text, to this plugin's own process, which turns it into exactly one agent.complete request (agent.complete) on the configured model and keeps it in memory until the card collects the answer. models.list is read to fill the model dropdown; the one setting it writes is `model`, through pi.plugin.setSettings — the same key the app's plugin settings sheet edits. Copying a translation uses the window clipboard and, if that is refused, pi.clipboard.writeText (clipboard.write). No file access, no network of its own, no session or message writes, and nothing is stored on disk except that one setting: the selected text never leaves the model call."
+          "description": "Translate whatever you select into Chinese — or into another language: select a paragraph anywhere in the app, and a small button appears under the selection. One click translates it with your own model and shows the result in a card next to the original, where it can be copied, inserted straight into the composer, or re-translated on another model or in another language. The model and the target language are plugin settings: an empty model means the app's default, the language defaults to Simplified Chinese, and the card's two dropdowns write the same settings so a choice is remembered.",
+          "safetyNotes": "Adds one renderer module (renderer.extension), which is why it holds the high-risk permission: that module runs inside the app window with the app's own React, so it can read the window's selection. It only reads it — no host DOM is modified, no transcript is written — and it sends nothing but the selected text, to this plugin's own process, which turns it into exactly one agent.complete request (agent.complete) on the configured model and keeps it in memory until the card collects the answer. models.list is read to fill the model dropdown; the only settings it writes are `model` and `language`, through pi.plugin.setSettings — the same keys the app's plugin settings sheet edits. Copying a translation uses the window clipboard and, if that is refused, pi.clipboard.writeText (clipboard.write). No file access, no network of its own, no session or message writes, and nothing is stored on disk except those two settings: the selected text never leaves the model call."
         },
         "zh-CN": {
           "name": "选中翻译",
-          "description": "把选中的文字翻成中文：在任意位置选中一段英文（对话里的回复、思考过程、面板里的段落都行），选区下方会出现「译」按钮，点一下就用你自己的模型翻成简体中文，结果显示在紧贴原文的卡片里，可以复制、可以直接插进输入框，也可以在卡片里换一个模型重译。翻译用哪个模型由插件设置决定：留空就用宿主的默认模型，也可以在卡片的模型下拉里直接选，选过的会被记住。",
-          "safetyNotes": "本插件带来一个 renderer 模块（renderer.extension，属于高风险权限）：它在应用窗口里用宿主自己的 React 运行，因此能读到窗口的选区。它只读选区——不改宿主 DOM、不写会话记录——并且只把选中的文本交给本插件自己的进程，由后者在配置的模型上发出恰好一次 agent.complete 请求，结果留在内存里等卡片来取。models.list 只用于填充卡片里的模型下拉；本插件唯一写入的设置是 model（通过 pi.plugin.setSettings），也就是宿主插件设置面板里同名的那个键。复制译文先用窗口剪贴板，被拒时走 pi.clipboard.writeText（clipboard.write）。不读写文件、不自己联网、不改会话与消息；除了这一个设置以外不落盘，选中的文本除了那次模型调用之外不会被保存。"
+          "description": "把选中的文字翻成中文（也可以翻成别的语种）：在任意位置选中一段英文（对话里的回复、思考过程、面板里的段落都行），选区下方会出现「译」按钮，点一下就用你自己的模型翻译，结果显示在紧贴原文的卡片里，可以复制、可以直接插进输入框，也可以在卡片里换模型或换语种重译。翻译用哪个模型、翻成哪种语言都由插件设置决定：模型留空就用宿主的默认模型，语种默认简体中文；卡片里的两个下拉写的是同一份设置，选过的会被记住。",
+          "safetyNotes": "本插件带来一个 renderer 模块（renderer.extension，属于高风险权限）：它在应用窗口里用宿主自己的 React 运行，因此能读到窗口的选区。它只读选区——不改宿主 DOM、不写会话记录——并且只把选中的文本交给本插件自己的进程，由后者在配置的模型上发出恰好一次 agent.complete 请求，结果留在内存里等卡片来取。models.list 只用于填充卡片里的模型下拉；本插件写入的设置只有 model 与 language（通过 pi.plugin.setSettings），也就是宿主插件设置面板里同名的两个键。复制译文先用窗口剪贴板，被拒时走 pi.clipboard.writeText（clipboard.write）。不读写文件、不自己联网、不改会话与消息；除了这两个设置以外不落盘，选中的文本除了那次模型调用之外不会被保存。"
         }
       },
       "versions": [
         {
-          "version": "0.1.0",
-          "publishedAt": "2026-10-26T12:39:20Z",
-          "shasum": "fa0a09d9420852b597fafea10da1025bfe98bdce697a4c72a65cdbc79b38ba8c",
-          "url": "packages/minih.selection-translate-0.1.0.piplug",
-          "sizeBytes": 84768,
+          "version": "0.2.0",
+          "publishedAt": "2026-10-26T13:09:56Z",
+          "shasum": "3884e3326a568790ac666a36d85553c5bb2456e83d91166678dd3366cbbe2e7d",
+          "url": "packages/minih.selection-translate-0.2.0.piplug",
+          "sizeBytes": 96023,
           "permissions": [
             "renderer.extension",
             "agent.complete",
@@ -229,7 +229,7 @@
             "clipboard.write"
           ],
           "yanked": false,
-          "minMinihAgent": ">=1.0.0"
+          "minMinihAgent": ">=1.1.0"
         }
       ]
     },

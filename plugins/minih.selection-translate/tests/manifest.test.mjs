@@ -57,11 +57,32 @@ test("the permissions are exactly what the code uses", () => {
 
 test("settings are declarative and valid for the host", () => {
   const settings = manifest.contributes.settings;
-  assert.equal(settings.length, 1);
-  const [model] = settings;
+  assert.equal(settings.length, 2);
+  const [model, language] = settings;
+
+  // The model field's options come from the host's live list, so the manifest
+  // must not declare its own (plugin-sdk refuses that).
   assert.equal(model.key, "model");
-  assert.equal(model.type, "string");
-  assert.match(model.key, /^[a-zA-Z][a-zA-Z0-9._-]{0,63}$/);
+  assert.equal(model.type, "model");
+  assert.equal(model.enum, undefined);
+  assert.equal(model.default, "");
+
+  assert.equal(language.key, "language");
+  assert.equal(language.type, "select");
+  assert.equal(language.default, "zh-CN");
+
+  for (const setting of settings) {
+    assert.match(setting.key, /^[a-zA-Z][a-zA-Z0-9._-]{0,63}$/);
+  }
+});
+
+test("the language enum and the code's language list cannot drift apart", () => {
+  const { LANGUAGES } = require("../lib/languages.js");
+  const declared = manifest.contributes.settings.find((setting) => setting.key === "language").enum;
+  assert.deepEqual(
+    declared,
+    LANGUAGES.map(({ code, label }) => ({ label, value: code })),
+  );
 });
 
 test("the marketplace-facing text is present in both languages", () => {

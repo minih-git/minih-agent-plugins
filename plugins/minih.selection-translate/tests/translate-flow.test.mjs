@@ -149,6 +149,8 @@ test("the dropdown answers the live list and the current choice", async () => {
   assert.equal(answer.resolved, "openai/gpt-5");
   assert.deepEqual(answer.options.map((option) => option.key), ["minimax/m2", "openai/gpt-5"]);
   assert.equal(answer.options[0].isDefault, true);
+  assert.equal(answer.language, "zh-CN");
+  assert.equal(answer.languages.length, 10);
 });
 
 test("choosing a model writes the setting; an unknown one is refused", async () => {
@@ -167,6 +169,39 @@ test("copy goes to the host clipboard, and empty text is refused", async () => {
   assert.deepEqual(await call("copy", { text: "你好" }), { ok: true });
   assert.deepEqual(state.copied, ["你好"]);
   assert.equal((await call("copy", { text: "" })).code, "EMPTY");
+});
+
+test("the configured language is the one the model is asked for", async () => {
+  const { call, state } = await plugin({ settings: { language: "ja" } });
+  const started = await call("translate", { text: "Hello there." });
+  assert.equal(started.target, "ja");
+  assert.equal(started.targetLabel, "日本語");
+  await settle();
+  assert.match(state.completed[0].system, /into Japanese/);
+});
+
+test("an unknown language in the settings file falls back to Simplified Chinese", async () => {
+  const { call, state } = await plugin({ settings: { language: "klingon" } });
+  const started = await call("translate", { text: "Hello there." });
+  assert.equal(started.target, "zh-CN");
+  await settle();
+  assert.match(state.completed[0].system, /Simplified Chinese/);
+});
+
+test("the card can switch the language, and the same setting is written", async () => {
+  const { call, state } = await plugin();
+  const options = await call("options", {});
+  assert.equal(options.language, "zh-CN");
+  assert.equal(options.languages.length, 10);
+  assert.deepEqual(options.languages[0], { code: "zh-CN", label: "简体中文" });
+
+  assert.deepEqual(await call("setLanguage", { language: "de" }), { ok: true, language: "de" });
+  assert.deepEqual(state.writes, [{ language: "de" }]);
+
+  const refused = await call("setLanguage", { language: "klingon" });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.code, "UNKNOWN_LANGUAGE");
+  assert.equal(state.writes.length, 1);
 });
 
 test("an undeclared method throws instead of answering", async () => {

@@ -270,12 +270,14 @@ function Translator({ pi }) {
             options: answer.options ?? [],
             configured: answer.configured ?? "",
             resolvedLabel: answer.resolvedLabel ?? "",
+            languages: answer.languages ?? [],
+            language: answer.language ?? "",
           });
         } else {
-          setConfig({ options: [], configured: "", resolvedLabel: "" });
+          setConfig({ options: [], configured: "", resolvedLabel: "", languages: [], language: "" });
         }
       } catch {
-        if (live) setConfig({ options: [], configured: "", resolvedLabel: "" });
+        if (live) setConfig({ options: [], configured: "", resolvedLabel: "", languages: [], language: "" });
       }
     })();
     return () => {
@@ -340,6 +342,25 @@ function Translator({ pi }) {
     [pi, source, startTranslate],
   );
 
+  const changeLanguage = useCallback(
+    async (code) => {
+      try {
+        const answer = await pi.dispatch("plugin.call", { method: "setLanguage", args: { language: code } });
+        if (!answer?.ok) {
+          setNotice(answer?.message ?? "切换语种失败");
+          return;
+        }
+        setConfig((previous) => (previous ? { ...previous, language: code } : previous));
+        // The same passage, in the language just picked: that is the whole
+        // point of switching mid-card.
+        if (source) await startTranslate(source);
+      } catch (error) {
+        setNotice(dispatchMessage(error));
+      }
+    },
+    [pi, source, startTranslate],
+  );
+
   const copyText = useCallback(
     async (text) => {
       try {
@@ -393,7 +414,22 @@ function Translator({ pi }) {
         )
       : null;
 
-  const card = job ? renderCard({ job, config, source, notice, placement, cardRef, close, copyText, insertText, changeModel, onRetry: () => void startTranslate(source) }) : null;
+  const card = job
+    ? renderCard({
+        job,
+        config,
+        source,
+        notice,
+        placement,
+        cardRef,
+        close,
+        copyText,
+        insertText,
+        changeModel,
+        changeLanguage,
+        onRetry: () => void startTranslate(source),
+      })
+    : null;
 
   return h("div", { "data-pi-translate-ui": "1" }, pill, card);
 }

@@ -17,7 +17,7 @@ export function durationText(ms) {
  * `job`: `{ phase: "running" | "done" | "error", text?, message?, detail?, modelLabel?, ms? }`
  * `config`: `{ options, configured, resolvedLabel }` or `null`.
  */
-export function renderCard({ job, config, source, notice, placement, cardRef, close, copyText, insertText, changeModel, onRetry }) {
+export function renderCard({ job, config, source, notice, placement, cardRef, close, copyText, insertText, changeModel, changeLanguage, onRetry }) {
   const modelLabel = job.modelLabel || config?.resolvedLabel || "";
   const timing = job.phase === "done" ? durationText(job.ms) : "";
   const summary = [job.phase === "running" ? "翻译中" : "", modelLabel, timing].filter(Boolean).join(" · ");
@@ -56,6 +56,25 @@ export function renderCard({ job, config, source, notice, placement, cardRef, cl
           )
         : h("div", { className: "pist-card__body" }, job.text, original);
 
+  // The target language is the knob a reader reaches for more often than the
+  // model, so it comes first; both write a plugin setting and re-run the text.
+  const languageSelect =
+    config && config.languages?.length
+      ? h(
+          "select",
+          {
+            className: "pist-select",
+            value: config.language ?? "",
+            title: "翻译语种",
+            "aria-label": "翻译语种",
+            onChange: (event) => void changeLanguage(event.target.value),
+          },
+          config.languages.map((language) =>
+            h("option", { key: language.code, value: language.code }, language.label),
+          ),
+        )
+      : null;
+
   // An empty list means the host could not be asked right now; the current
   // model still ran, so the card keeps working without a dropdown.
   const select =
@@ -77,6 +96,7 @@ export function renderCard({ job, config, source, notice, placement, cardRef, cl
   const foot = h(
     "div",
     { className: "pist-card__foot" },
+    languageSelect,
     select,
     h("span", { className: "pist-card__spacer" }),
     job.phase === "running" ? h("button", { type: "button", className: "pist-btn", onClick: close }, "取消") : null,

@@ -27,6 +27,7 @@
 const { describeFailure } = require("./lib/errors.js");
 const { JobStore } = require("./lib/jobs.js");
 const { isSelectableModel, modelOptions, resolveModel } = require("./lib/models.js");
+const { DEFAULT_LANGUAGE, LANGUAGES, isLanguage, languageByCode } = require("./lib/languages.js");
 const { buildTranslateRequest, normalizeText } = require("./lib/prompt.js");
 
 /** The model list is asked once per half minute, not once per poll. */
@@ -56,10 +57,10 @@ function labelOf(model) {
 }
 
 /** Run one completion and settle the job; a cancelled job keeps its state. */
-async function runCompletion(jobId, text, model) {
+async function runCompletion(jobId, text, model, language) {
   const startedAt = Date.now();
   try {
-    const { system, messages } = buildTranslateRequest(text);
+    const { system, messages } = buildTranslateRequest(text, language);
     const result = await pi.agent.complete({ modelKey: model.key, system, messages });
     const answer = typeof result?.text === "string" ? result.text.trim() : "";
     if (!answer) {
@@ -95,15 +96,18 @@ async function translate(args) {
   const settings = await readSettings();
   const { model, note } = resolveModel(models, settings?.model);
   if (!model) return { ok: false, code: "NO_MODEL", ...describeFailure("NO_MODEL") };
+  const language = languageByCode(settings?.language);
 
-  const jobId = jobs.start({ modelKey: model.key, modelLabel: labelOf(model) });
+  const jobId = jobs.start({ modelKey: model.key, modelLabel: labelOf(model), target: language.code });
   // Deliberately not awaited: the renderer's call must answer inside 2s.
-  void runCompletion(jobId, normalized.text, model);
+  void runCompletion(jobId, normalized.text, model, language.code);
   return {
     ok: true,
     jobId,
     modelKey: model.key,
     modelLabel: labelOf(model),
+    target: language.code,
+    targetLabel: language.label,
     note,
     truncated: normalized.truncated === true,
   };
@@ -132,7 +136,10 @@ function cancel(args) {
   return { ok: jobs.cancel(String(args?.jobId ?? "")) };
 }
 
-/** The dropdown: live models, the configured key, and what a request would use. */
+/**
+ * The two dropdowns: the live models with the configured key and what a request
+ * would use, plus the languages with the configured one.
+ */
 async function options() {
   let models;
   try {
@@ -150,6 +157,8 @@ async function options() {
     resolved: model?.key ?? null,
     resolvedLabel: labelOf(model),
     note,
+    languages: LANGUAGES.map(({ code, label }) => ({ code, label })),
+    language: languageByCode(settings?.language).code,
   };
 }
 
@@ -170,6 +179,16 @@ async function setModel(args) {
   return { ok: true, model: key };
 }
 
+/** The card's language dropdown writes the same key the settings sheet edits. */
+async function setLanguage(args) {
+  const code = typeof args?.language === "string" ? args.language.trim() : "";
+  if (!isLanguage(code)) {
+    return { ok: false, code: "UNKNOWN_LANGUAGE", ...describeFailure("UNKNOWN_LANGUAGE") };
+  }
+  await pi.plugin.setSettings({ language: code });
+  return { ok: true, language: code };
+}
+
 async function copy(args) {
   const text = typeof args?.text === "string" ? args.text : "";
   if (!text) return { ok: false, code: "EMPTY", ...describeFailure("EMPTY") };
@@ -178,7 +197,7 @@ async function copy(args) {
 }
 
 /** Every `manifest.rendererCallMethods` entry, and nothing else. */
-const rendererMethods = { translate, poll, cancel, options, setModel, copy };
+const rendererMethods = { translate, poll, cancel, options, setModel, setLanguage, copy };
 
 async function onRendererCall(method, args) {
   const handler = Object.prototype.hasOwnProperty.call(rendererMethods, method)

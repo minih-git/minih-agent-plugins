@@ -16,36 +16,41 @@ English, and the part you actually want to read is three paragraphs of it.
 | Click it | The card opens next to the text and translates with the configured model |
 | Read | The translation keeps the original Markdown shape; the original is one click away under `原文` |
 | Use it | `复制` copies it, `插入输入框` puts it at the composer caret |
-| Change model | The card's dropdown re-translates the same text on another model, and remembers the choice |
+| Change model or language | The card's two dropdowns re-translate the same text on another model or in another language, and remember both choices |
 
 What it deliberately does not do: it never writes to the transcript, never
 creates a session, never touches a file, and never sends anything anywhere
 except the selected text in one model request.
 
-## Where the model comes from
+## Where the model and the language come from
 
-`contributes.settings` declares one setting:
+`contributes.settings` declares two settings:
 
 ```json
-{ "key": "model", "type": "string", "default": "" }
+{ "key": "model", "type": "model", "default": "" }
+{ "key": "language", "type": "select", "default": "zh-CN", "enum": [ … 10 languages … ] }
 ```
 
-- Empty (the default) means the app's current default model — the plugin works
-  before it is configured at all.
-- `providerId/modelId`, e.g. `openai/gpt-5`, pins one model.
-- The card's dropdown writes the same key through `pi.plugin.setSettings`, so
-  the choice made in the card is the setting the app's plugin settings sheet
-  shows. A declarative setting cannot be filled from the live model list, which
-  is why the dropdown lives in the card.
-- A configured model that no longer exists is not an error: the host default
-  takes over and the card says which model ran.
+- `model` is the host's `model` setting type (app 1.1.0 and later): the settings
+  sheet fills its dropdown from the live ready-model list, and empty means the
+  app's current default model — so the plugin works before it is configured at
+  all. A model that has since been removed falls back to the default, and the
+  card says which model ran.
+- `language` is a plain `select`: the ten languages in `lib/languages.js`, with
+  Simplified Chinese first because that is what the plugin is for. The list is
+  declared twice — once in the manifest for the settings sheet, once in code for
+  the prompt — and a test fails if the two drift apart.
+- The card's two dropdowns write the same two keys through
+  `pi.plugin.setSettings`, so a choice made mid-card is the setting the app's
+  plugin settings sheet shows.
 
 ## How it is built
 
 ```text
-manifest.json                 renderer entry, whitelists, one setting
-main.js                       plugin process: jobs, model resolution, one agent.complete per request
-lib/prompt.js                 the request text (pure)
+manifest.json                 renderer entry, whitelists, two settings
+main.js                       plugin process: jobs, model + language resolution, one agent.complete per request
+lib/prompt.js                 the request text, for one target language (pure)
+lib/languages.js              the languages a request can ask for (pure)
 lib/jobs.js                   job store: running → done/error/cancelled (pure)
 lib/models.js                 which model a request runs on (pure)
 lib/errors.js                 coded host errors → reader-facing Chinese (pure)
@@ -96,6 +101,9 @@ No filesystem, no network of its own, no session read or write.
   terminal and the plugin's own card are ignored.
 
 ## Install
+
+Requires Minih-Agent-Desktop 1.1.0 or later: the model dropdown in the settings
+sheet is the host's `model` setting type, which arrived with that release.
 
 From a checkout of this repository, with a Minih-Agent-Desktop checkout next to
 it:
