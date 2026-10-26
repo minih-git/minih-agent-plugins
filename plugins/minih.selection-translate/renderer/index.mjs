@@ -17,7 +17,7 @@
  */
 import { createElement as h, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { anchorOfRange, placeFloating, readSelectionSnapshot } from "./selection.mjs";
+import { anchorOfRange, isTranslateShortcut, placeFloating, readSelectionSnapshot, TRANSLATE_SHORTCUT_LABEL } from "./selection.mjs";
 import { renderCard } from "./card.mjs";
 import { STYLE } from "./styles.mjs";
 
@@ -157,6 +157,27 @@ function Translator({ pi }) {
     [pi],
   );
 
+  /**
+   * Start one translation from a selection snapshot — the pill's click and the
+   * Option/Alt+E shortcut share this, so both anchor the card the same way.
+   */
+  const beginTranslation = useCallback(
+    (snapshot) => {
+      if (!snapshot?.text) return;
+      rangeRef.current = snapshot.range ?? rangeRef.current;
+      // The thread may have scrolled since the selection was read: anchor the
+      // card to where the text is now, not to where it was.
+      setAnchor(anchorOfRange(rangeRef.current) ?? snapshot.anchor);
+      setTarget(null);
+      void startTranslate(snapshot.text);
+    },
+    [startTranslate],
+  );
+
+  const translateSelection = useCallback(() => {
+    if (target) beginTranslation(target);
+  }, [target, beginTranslation]);
+
   // The selection observer. It runs for the life of the load and only ever
   // reads: a press anywhere clears the pill (so a drag does not leave a stale
   // one behind), and the pill comes back once the gesture settled.
@@ -182,6 +203,19 @@ function Translator({ pi }) {
       cancelAnimationFrame(frame);
       frame = 0;
     };
+    const onKeyDown = (event) => {
+      if (!isTranslateShortcut(event)) return;
+      // Inside the card the keyboard belongs to its own dropdowns and buttons.
+      if (cardRef.current?.contains(event.target)) return;
+      // Read the selection at the moment of the press instead of trusting a
+      // pill that may have gone stale, and only act when there is prose to
+      // translate — otherwise the keystroke stays untouched.
+      const snapshot = readSelectionSnapshot(window);
+      if (!snapshot) return;
+      event.preventDefault();
+      cancelFrame();
+      beginTranslation(snapshot);
+    };
     const onPointerDown = (event) => {
       const node = event.target;
       if (pillRef.current?.contains(node) || cardRef.current?.contains(node)) return;
@@ -195,6 +229,7 @@ function Translator({ pi }) {
       schedule();
     };
     document.addEventListener("selectionchange", schedule);
+    window.addEventListener("keydown", onKeyDown, true);
     window.addEventListener("pointerdown", onPointerDown, true);
     window.addEventListener("pointerup", onPointerUp, true);
     window.addEventListener("pointercancel", onPointerUp, true);
@@ -203,13 +238,14 @@ function Translator({ pi }) {
     return () => {
       cancelFrame();
       document.removeEventListener("selectionchange", schedule);
+      window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("pointerup", onPointerUp, true);
       window.removeEventListener("pointercancel", onPointerUp, true);
       window.removeEventListener("keyup", schedule);
       window.removeEventListener("resize", schedule);
     };
-  }, []);
+  }, [beginTranslation]);
 
   // The pill and the card both stay with the text they belong to: the thread
   // scrolls under them, the live selection may already be gone, and the cloned
@@ -312,17 +348,6 @@ function Translator({ pi }) {
     return () => clearTimeout(timer);
   }, [notice]);
 
-  const translateSelection = useCallback(() => {
-    const snapshot = target;
-    if (!snapshot) return;
-    rangeRef.current = snapshot.range ?? rangeRef.current;
-    // The thread may have scrolled since the pill appeared: anchor the card to
-    // where the text is now, not to where it was.
-    setAnchor(anchorOfRange(rangeRef.current) ?? snapshot.anchor);
-    setTarget(null);
-    void startTranslate(snapshot.text);
-  }, [target, startTranslate]);
-
   const changeModel = useCallback(
     async (key) => {
       try {
@@ -401,8 +426,8 @@ function Translator({ pi }) {
             ref: pillRef,
             type: "button",
             className: "pist-pill",
-            title: "翻译成中文",
-            "aria-label": "翻译成中文",
+            title: `翻译选中的文字 · ${TRANSLATE_SHORTCUT_LABEL}`,
+            "aria-label": "翻译选中的文字",
             style: placement ? { top: placement.top, left: placement.left } : { top: 0, left: 0, visibility: "hidden" },
             // Keeping the selection alive through the press is what lets the
             // text be read from the selection itself.

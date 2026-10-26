@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.0
+
+A keyboard shortcut, so the pill is optional.
+
+- Select text and press `Option+E` (macOS) or `Alt+E` (Windows, Linux): the
+  translation starts without a click. The check is on the physical E key with
+  Alt held, which is what makes it work on macOS — there Option+E is a dead key
+  and arrives as `key: "Dead"` — and on non-Latin layouts.
+- It only fires when there is prose selected outside a field, an editor, the
+  terminal or the card itself, so it never takes a keystroke meant for the
+  composer or an input method; holding the key down translates once.
+- The pill's tooltip now names the shortcut, and its label no longer says
+  "中文" only — the target language is a setting now.
+
 ## 0.2.0
 
 Choose the language, and choose the model from a list.

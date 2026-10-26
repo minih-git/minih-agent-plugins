@@ -91,6 +91,28 @@ function elementOf(node) {
   return node.parentElement ?? node.parentNode ?? null;
 }
 
+/**
+ * The shortcut that translates the current selection: Option+E on macOS, Alt+E
+ * on Windows and Linux — the same physical key, which is why `code` decides and
+ * `key` does not. On macOS Option+E is a *dead* key (it starts an accent), so
+ * the event arrives with `key: "Dead"`; matching on `key` would never fire.
+ *
+ * Nothing happens when another modifier is held, when the key is auto-repeating,
+ * or while an input method is composing — the three ways this would otherwise
+ * steal a keystroke meant for something else.
+ */
+export const TRANSLATE_SHORTCUT_KEY = "KeyE";
+export const TRANSLATE_SHORTCUT_LABEL = "Option/Alt+E";
+
+export function isTranslateShortcut(event) {
+  if (!event || typeof event !== "object") return false;
+  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
+  if (event.repeat === true || event.isComposing === true) return false;
+  if (typeof event.code === "string" && event.code) return event.code === TRANSLATE_SHORTCUT_KEY;
+  // A synthetic event may carry no `code` at all; the letter is the fallback.
+  return typeof event.key === "string" && event.key.toLowerCase() === "e";
+}
+
 /** True inside a field, an editor, the terminal, or this plugin's own card. */
 export function isBlockedElement(element) {
   if (!element || typeof element.closest !== "function") return true;

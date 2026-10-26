@@ -6,6 +6,7 @@ import {
   anchorOfRange,
   anchorOfRect,
   isBlockedElement,
+  isTranslateShortcut,
   normalizeSelectedText,
   placeFloating,
   readSelectionSnapshot,
@@ -66,6 +67,30 @@ test("an anchor is a plain rect, and a broken one is nothing", () => {
   });
   assert.equal(anchorOfRect(null), null);
   assert.equal(anchorOfRect({ top: Number.NaN, left: 0 }), null);
+});
+
+test("the shortcut is Option+E or Alt+E on the physical key", () => {
+  const press = (over = {}) => ({ altKey: true, code: "KeyE", key: "e", ...over });
+  assert.equal(isTranslateShortcut(press()), true);
+  // macOS turns Option+E into a dead key: `key` is "Dead", `code` still is not.
+  assert.equal(isTranslateShortcut(press({ key: "Dead" })), true);
+  // A synthetic event without `code` still works through the letter.
+  assert.equal(isTranslateShortcut({ altKey: true, key: "E" }), true);
+  assert.equal(isTranslateShortcut({ altKey: true, key: "e" }), true);
+});
+
+test("every other press is left alone", () => {
+  assert.equal(isTranslateShortcut({ code: "KeyE", key: "e" }), false, "no Alt");
+  assert.equal(isTranslateShortcut({ altKey: true, ctrlKey: true, code: "KeyE" }), false);
+  assert.equal(isTranslateShortcut({ altKey: true, metaKey: true, code: "KeyE" }), false);
+  assert.equal(isTranslateShortcut({ altKey: true, shiftKey: true, code: "KeyE" }), false);
+  assert.equal(isTranslateShortcut({ altKey: true, code: "KeyQ", key: "q" }), false);
+  // Holding the key down translates once, not on every repeat.
+  assert.equal(isTranslateShortcut({ altKey: true, code: "KeyE", repeat: true }), false);
+  // An IME owns the keystroke while it is composing.
+  assert.equal(isTranslateShortcut({ altKey: true, code: "KeyE", isComposing: true }), false);
+  assert.equal(isTranslateShortcut(null), false);
+  assert.equal(isTranslateShortcut(undefined), false);
 });
 
 test("the pill goes below the selection when there is room", () => {

@@ -14,6 +14,7 @@ English, and the part you actually want to read is three paragraphs of it.
 | --- | --- |
 | Select text | A `译` pill appears under the selection — in a reply, a thinking block, a panel, wherever prose is selectable |
 | Click it | The card opens next to the text and translates with the configured model |
+| Or press a shortcut | `Option+E` on macOS, `Alt+E` on Windows and Linux, with the text selected — no click needed |
 | Read | The translation keeps the original Markdown shape; the original is one click away under `原文` |
 | Use it | `复制` copies it, `插入输入框` puts it at the composer caret |
 | Change model or language | The card's two dropdowns re-translate the same text on another model or in another language, and remember both choices |
@@ -99,6 +100,12 @@ No filesystem, no network of its own, no session read or write.
   "一分钟内的翻译次数太多了".
 - Selections inside form fields, editors (the composer, CodeMirror views), the
   terminal and the plugin's own card are ignored.
+- The shortcut matches the physical E key with Alt/Option held, so it works on
+  a non-Latin layout too — and on macOS, where Option+E is a dead key, listening
+  for the key itself would never fire. It acts only while the app window has
+  focus and only when there is a selection to translate; it is not configurable
+  yet (a system-wide or rebindable shortcut needs a host bridge from a plugin
+  command into its renderer module, which this plugin does not have).
 
 ## Install
 
