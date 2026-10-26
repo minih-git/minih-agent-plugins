@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Everything this page needs ships inside the plugin: no remote script,
+         style, or font, and no inline script. The Router is reached only by the
+         plugin process, never by this page. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'"
+    />
+    <title>Router</title>
+    <link rel="stylesheet" href="./console.css" />
+  </head>
+  <body>
+    <main id="panel" data-state="loading" aria-busy="true">
+      <div id="status-row">
+        <span id="status-dot" aria-hidden="true"></span>
+        <span id="status-text" role="status"></span>
+      </div>
+
+      <section id="identity" hidden>
+        <div id="identity-head">
+          <span id="role-badge"></span>
+          <h1 id="key-name"></h1>
+        </div>
+        <p id="key-hint" dir="ltr"></p>
+      </section>
+
+      <dl id="facts" hidden>
+        <div class="fact">
+          <dt id="fact-host-label"></dt>
+          <dd id="fact-host" dir="ltr"></dd>
+        </div>
+        <div class="fact">
+          <dt id="fact-status-label"></dt>
+          <dd id="fact-status"></dd>
+        </div>
+        <div class="fact" id="fact-rpm-row">
+          <dt id="fact-rpm-label"></dt>
+          <dd id="fact-rpm"></dd>
+        </div>
+        <div class="fact" id="fact-expiry-row">
+          <dt id="fact-expiry-label"></dt>
+          <dd id="fact-expiry"></dd>
+        </div>
+      </dl>
+
+      <p id="hint"></p>
+
+      <div id="actions">
+        <button id="open" class="primary" type="button" hidden></button>
+        <button id="refresh" type="button"></button>
+      </div>
+    </main>
+
+    <script src="./console.js" type="module"></script>
+  </body>
+</html>

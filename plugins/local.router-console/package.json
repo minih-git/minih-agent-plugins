@@ -1,0 +1,9 @@
+{
+  "name": "@minih-plugin/local.router-console",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Sidebar panel for a Minih Router: reports which identity the saved credential has and opens the page that identity is allowed on.",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  }
+}
