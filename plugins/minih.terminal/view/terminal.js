@@ -575,6 +575,39 @@
     );
   }
 
+  /**
+   * Fit the visible terminal to its box and tell the PTY, but only when the size
+   * actually changed: a resize event that leaves the grid alone should not cost
+   * an IPC round trip.
+   */
+  function fitActiveTab() {
+    const tab = activeTab();
+    if (!tab || tab.disposed || tab.pane.hidden) return;
+    const { cols, rows } = tab.term;
+    tab.fit.fit();
+    if (tab.term.cols !== cols || tab.term.rows !== rows) pushSize(tab);
+  }
+
+  /**
+   * Refit once the box has settled.
+   *
+   * FitAddon measures the pane's computed height, and inside a ResizeObserver
+   * callback that can still be the height from before the resize: fitting there
+   * left a shrunk view holding the taller terminal's rows, so the last lines sat
+   * outside the pane until some later resize corrected it. The fit therefore runs
+   * on the next frame, and once more after that for the case where the first pass
+   * still measured the old box.
+   */
+  let fitFrame = 0;
+  function scheduleFit() {
+    if (fitFrame) cancelAnimationFrame(fitFrame);
+    fitFrame = requestAnimationFrame(() => {
+      fitFrame = 0;
+      fitActiveTab();
+      requestAnimationFrame(fitActiveTab);
+    });
+  }
+
   // --- search -----------------------------------------------------------
 
   function openSearch() {
@@ -693,19 +726,9 @@
 
     // Window resize, and any layout change of the pane box, refits and tells the
     // PTY, so a TUI redraws at the size it is actually rendered at.
-    const observer = new ResizeObserver(() => {
-      const tab = activeTab();
-      if (!tab || tab.disposed || tab.pane.hidden) return;
-      tab.fit.fit();
-      pushSize(tab);
-    });
+    const observer = new ResizeObserver(scheduleFit);
     observer.observe(elements.panes);
-    window.addEventListener("resize", () => {
-      const tab = activeTab();
-      if (!tab || tab.disposed) return;
-      tab.fit.fit();
-      pushSize(tab);
-    });
+    window.addEventListener("resize", scheduleFit);
   }
 
   /**

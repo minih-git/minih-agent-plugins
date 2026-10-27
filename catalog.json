@@ -4,8 +4,8 @@
   "catalog_id": null,
   "name": "Minih-Agent-Desktop Plugins",
   "homepage": "https://github.com/minih-git/minih-agent-plugins",
-  "updated_at": "2026-10-27T08:43:56Z",
-  "generated_at": "2026-10-27T08:43:56Z",
+  "updated_at": "2026-10-27T09:01:03Z",
+  "generated_at": "2026-10-27T09:01:03Z",
   "policy_version": null,
   "artifact_base_url": "https://raw.githubusercontent.com/minih-git/minih-agent-plugins/main",
   "plugins": [
@@ -262,11 +262,11 @@
       },
       "versions": [
         {
-          "version": "0.1.5",
-          "publishedAt": "2026-10-27T08:43:56Z",
-          "shasum": "2781db3479bbb5c9c6a565421c1a440106b4117e9e5b0065edec10c6b02415b9",
-          "url": "packages/minih.terminal-0.1.5.piplug",
-          "sizeBytes": 4739112,
+          "version": "0.1.6",
+          "publishedAt": "2026-10-27T08:53:30Z",
+          "shasum": "f5f1d147540dbc3a1c8df99769060b38bc0b82ef7c5d38b3cc1080e586947117",
+          "url": "packages/minih.terminal-0.1.6.piplug",
+          "sizeBytes": 4741459,
           "permissions": [
             "clipboard.read",
             "ui.view",

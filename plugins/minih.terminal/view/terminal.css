@@ -304,6 +304,12 @@ select {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
+  /* A terminal that has not refit yet must not bleed over the status line. */
+  overflow: hidden;
+  /* xterm's FitAddon sizes itself from this element's CSS height, padding
+     included, so the terminal's safe area has to shrink the box rather than pad
+     it: padding here would simply be overflowed by the last row. */
+  margin-bottom: 14px;
 }
 
 .pane {

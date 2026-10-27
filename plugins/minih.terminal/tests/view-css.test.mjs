@@ -42,3 +42,16 @@ test("the terminal theme only uses colors xterm can parse", () => {
     assert.match(value, /^(#[0-9a-f]{3,8}|rgba?\([^)]*\)|hsla?\([^)]*\))$/i, value);
   }
 });
+
+test("the terminal keeps a bottom safe area the fit addon cannot overflow", () => {
+  const panes = /#panes\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+  const gap = Number(/margin-bottom:\s*(\d+)px/.exec(panes)?.[1] ?? "0");
+  assert.ok(gap >= 12, `#panes needs a bottom safe area, found ${gap}px`);
+  // xterm's FitAddon sizes its rows from the pane's CSS height, padding included,
+  // so padding there is simply overflowed by the last row; the gap has to come
+  // from the box itself.
+  const pane = /\.pane\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+  const parts = /padding:\s*(\d+)px (\d+)px (\d+)px (\d+)px/.exec(pane);
+  assert.ok(parts, "expected a four-value padding shorthand on .pane");
+  assert.equal(parts[1], parts[3], ".pane must not make the safe area out of padding");
+});

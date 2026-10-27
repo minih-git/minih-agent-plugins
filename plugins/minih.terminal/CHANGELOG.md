@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.6
+
+- The last terminal line no longer sits against the bottom edge: the terminal
+  keeps a 14px safe area below its rows. The gap comes from the pane's box, not
+  from its padding, because xterm sizes its rows from that box including padding
+  and would overflow a padded pane.
+
 ## 0.1.5
 
 - Selecting text is visible again in the light theme. The terminal theme handed
