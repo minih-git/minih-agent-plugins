@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.5
+
+- Selecting text is visible again in the light theme. The terminal theme handed
+  xterm a `color-mix(...)` value for the selection; xterm parses its own colors
+  and cannot read CSS functions, so it degraded to opaque white — white on a
+  white background, i.e. no highlight at all. The palettes now use plain rgba,
+  and a test keeps the terminal theme to values xterm can parse.
+
 ## 0.1.4
 
 - Pasting with Cmd+V inserted the text twice. The page answered the keystroke and

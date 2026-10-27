@@ -19,7 +19,10 @@
   --term-bg: #141414;
   --term-fg: #e6e6e6;
   --term-cursor: #ffffff;
-  --term-selection: color-mix(in oklab, #ffffff 24%, transparent);
+  /* xterm parses colors itself and cannot read CSS functions, so this stays a
+     plain rgba value: `color-mix(...)` here degraded to opaque white, which made
+     the selection invisible on a white background. */
+  --term-selection: rgba(255, 255, 255, 0.24);
 }
 
 :root[data-base="light"] {
@@ -35,7 +38,7 @@
   --term-bg: #ffffff;
   --term-fg: #1a1c1f;
   --term-cursor: #1a1c1f;
-  --term-selection: color-mix(in oklab, #1a1c1f 20%, transparent);
+  --term-selection: rgba(26, 28, 31, 0.2);
 }
 
 * {
