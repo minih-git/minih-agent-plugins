@@ -17,7 +17,7 @@ export function durationText(ms) {
  * `job`: `{ phase: "running" | "done" | "error", text?, message?, detail?, modelLabel?, ms? }`
  * `config`: `{ options, configured, resolvedLabel }` or `null`.
  */
-export function renderCard({ job, config, source, notice, placement, cardRef, close, copyText, insertText, changeModel, changeLanguage, onRetry }) {
+export function renderCard({ job, config, source, notice, placement, cardRef, close, copyText, insertText, changeModel, changeLanguage, onRetry, elapsed = 0 }) {
   const modelLabel = job.modelLabel || config?.resolvedLabel || "";
   const timing = job.phase === "done" ? durationText(job.ms) : "";
   const summary = [job.phase === "running" ? "翻译中" : "", modelLabel, timing].filter(Boolean).join(" · ");
@@ -42,7 +42,9 @@ export function renderCard({ job, config, source, notice, placement, cardRef, cl
           "div",
           { className: "pist-card__body pist-card__body--message" },
           h("span", { className: "pist-dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")),
-          h("span", null, " 翻译中…"),
+          // A slow model used to look like a dead card; the count makes the
+          // wait legible without inventing a progress bar.
+          h("span", null, elapsed > 0 ? ` 翻译中… ${elapsed}s` : " 翻译中…"),
         )
       : job.phase === "error"
         ? h(

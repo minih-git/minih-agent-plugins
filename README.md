@@ -42,7 +42,7 @@ are authored in this repository.
 | --- | --- | --- | --- | --- |
 | `minih.terminal` (`Terminal`) | 0.1.6 | minih-git | MIT | this repository |
 | `minih.personal-knowledge` (`Personal Knowledge`) | 0.4.0 | minih-git | MIT | this repository |
-| `minih.selection-translate` (`Selection Translate`) | 0.3.0 | minih-git | MIT | this repository |
+| `minih.selection-translate` (`Selection Translate`) | 0.3.1 | minih-git | MIT | this repository |
 | `cn.star.computer-use` (`Computer Use`) | 0.4.0 | TheFlareStar | MPL-2.0 | not published by the author |
 | `local.remote-tools` (`Remote SSH Tools`) | 0.1.0 | jiege6-66 | MIT | `github.com/jiege6-66/pi-desktop-remote-tools` |
 | `pi.file-manager` (`File Manager`) | 0.9.0 | Tioit-Wang | not declared by the author | not published by the author |

@@ -63,6 +63,9 @@ test("a selection becomes one completion, and the poll answers it", async () => 
   assert.equal(state.completed[0].modelKey, "minimax/m2");
   assert.match(state.completed[0].system, /Simplified Chinese/);
   assert.ok(state.completed[0].messages[0].content.includes("Thinking models answer in English."));
+  // Translation is transcription: the request must not ask for thinking, which
+  // is what made a slow reasoning model look like a dead card.
+  assert.equal(state.completed[0].thinkingLevel, "off");
 });
 
 test("the configured model is the one a request runs on", async () => {

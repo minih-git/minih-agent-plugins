@@ -60,6 +60,8 @@ function Translator({ pi }) {
   const [config, setConfig] = useState(null);
   const [source, setSource] = useState("");
   const [notice, setNotice] = useState("");
+  const [elapsed, setElapsed] = useState(0);
+  const startedAtRef = useRef(0);
 
   const pillRef = useRef(null);
   const cardRef = useRef(null);
@@ -85,6 +87,8 @@ function Translator({ pi }) {
   const startTranslate = useCallback(
     async (text) => {
       const generation = ++generationRef.current;
+      startedAtRef.current = Date.now();
+      setElapsed(0);
       jobIdRef.current = null;
       setSource(text);
       setNotice("");
@@ -348,6 +352,16 @@ function Translator({ pi }) {
     return () => clearTimeout(timer);
   }, [notice]);
 
+  // A running card counts seconds: a slow model used to look like a dead one.
+  const running = job?.phase === "running";
+  useEffect(() => {
+    if (!running) return;
+    const timer = setInterval(() => {
+      setElapsed(Math.max(0, Math.floor((Date.now() - startedAtRef.current) / 1000)));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [running]);
+
   const changeModel = useCallback(
     async (key) => {
       try {
@@ -452,6 +466,7 @@ function Translator({ pi }) {
         insertText,
         changeModel,
         changeLanguage,
+        elapsed,
         onRetry: () => void startTranslate(source),
       })
     : null;

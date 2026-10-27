@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.1
+
+Translations come back faster, and a slow model no longer looks frozen.
+
+- The request no longer asks for thinking. Translation is transcription, and on
+  a reasoning model the thinking time was most of the wait: the host aborts a
+  plugin completion after 90 seconds, which is exactly what a slow reasoning
+  model ran into. The host clamps the level to what the model supports.
+- While it runs, the card counts the seconds it has been waiting, so a slow
+  model reads as slow instead of dead.
+
 ## 0.3.0
 
 A keyboard shortcut, so the pill is optional.

@@ -96,6 +96,10 @@ No filesystem, no network of its own, no session read or write.
 
 - One request carries at most 8000 characters; a longer selection is translated
   up to that point and the card says so.
+- The host gives a plugin completion 90 seconds before it aborts it. Translation
+  asks for no thinking (the host clamps that to what the model supports), but a
+  very slow reasoning model can still reach that ceiling — the card then says
+  so and offers a retry, and switching to a faster model in the card is the fix.
 - The host allows 8 plugin completions per minute; past that the card answers
   "一分钟内的翻译次数太多了".
 - Selections inside form fields, editors (the composer, CodeMirror views), the

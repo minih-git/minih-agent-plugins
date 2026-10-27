@@ -4,8 +4,8 @@
   "catalog_id": null,
   "name": "Minih-Agent-Desktop Plugins",
   "homepage": "https://github.com/minih-git/minih-agent-plugins",
-  "updated_at": "2026-10-27T09:01:03Z",
-  "generated_at": "2026-10-27T09:01:03Z",
+  "updated_at": "2026-10-27T09:54:30Z",
+  "generated_at": "2026-10-27T09:54:30Z",
   "policy_version": null,
   "artifact_base_url": "https://raw.githubusercontent.com/minih-git/minih-agent-plugins/main",
   "plugins": [
@@ -217,11 +217,11 @@
       },
       "versions": [
         {
-          "version": "0.3.0",
-          "publishedAt": "2026-10-26T15:24:43Z",
-          "shasum": "e3f456bb68ae1624a874fa0a4736564c8618c9b1d2009a23960d740cdef48997",
-          "url": "packages/minih.selection-translate-0.3.0.piplug",
-          "sizeBytes": 101209,
+          "version": "0.3.1",
+          "publishedAt": "2026-10-27T09:54:30Z",
+          "shasum": "905e22a5c99cb835b4258f3c625dc1e971f3d10066e18d86eee8990809e5dd11",
+          "url": "packages/minih.selection-translate-0.3.1.piplug",
+          "sizeBytes": 103330,
           "permissions": [
             "renderer.extension",
             "agent.complete",

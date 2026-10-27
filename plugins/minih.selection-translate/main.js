@@ -61,7 +61,17 @@ async function runCompletion(jobId, text, model, language) {
   const startedAt = Date.now();
   try {
     const { system, messages } = buildTranslateRequest(text, language);
-    const result = await pi.agent.complete({ modelKey: model.key, system, messages });
+    const result = await pi.agent.complete({
+      modelKey: model.key,
+      system,
+      messages,
+      // Translation is transcription, not reasoning: asking for thinking buys
+      // nothing and costs the most time on exactly the slow models a reader
+      // would otherwise wait on. The host clamps this to what the model
+      // supports, so a model without an "off" level still answers on its
+      // lowest one.
+      thinkingLevel: "off",
+    });
     const answer = typeof result?.text === "string" ? result.text.trim() : "";
     if (!answer) {
       jobs.settle(jobId, { state: "error", code: "EMPTY_ANSWER", ...describeFailure("EMPTY_ANSWER") });
