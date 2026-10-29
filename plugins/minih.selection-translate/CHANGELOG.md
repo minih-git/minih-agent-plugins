@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.2
+
+The 「译」 mark is readable again.
+
+- Both the mark on the selection pill and the one in the card header drew the
+  accent colour on the soft accent fill: 2.59:1 in the light theme and 2.19:1
+  in the dark one, below the 3:1 floor, so the character read as a smudge.
+  They are now a solid accent chip with the page ink on top — 17:1 in both
+  themes, the same combination the card's primary button already used.
+
 ## 0.3.1
 
 Translations come back faster, and a slow model no longer looks frozen.

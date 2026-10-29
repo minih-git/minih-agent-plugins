@@ -37,8 +37,10 @@ export const STYLE = `
   width: 16px;
   height: 16px;
   border-radius: 5px;
-  background: var(--ds-accent-soft, var(--ds-accent));
-  color: var(--ds-accent);
+  /* Solid accent with the page ink on top. Accent text on a soft accent fill sat
+     at 2.2–2.6:1 in both themes, so the character all but vanished. */
+  background: var(--ds-accent);
+  color: var(--ds-bg-primary);
   font-size: 10px;
   font-weight: 600;
 }
@@ -70,8 +72,9 @@ export const STYLE = `
   width: 18px;
   height: 18px;
   border-radius: 5px;
-  background: var(--ds-accent-soft, var(--ds-accent));
-  color: var(--ds-accent);
+  /* Same chip as the pill: solid accent, page ink on top. */
+  background: var(--ds-accent);
+  color: var(--ds-bg-primary);
   font-size: 11px;
   font-weight: 600;
   flex: none;
