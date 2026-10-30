@@ -80,7 +80,7 @@ function compareVersions(left, right) {
  * else's release. Everything else keeps the `community` default, because this
  * catalog re-publishes their bytes unchanged.
  */
-const FIRST_PARTY = new Set(["minih.terminal", "minih.personal-knowledge", "minih.selection-translate"]);
+const FIRST_PARTY = new Set(["minih.terminal", "minih.personal-knowledge", "minih.selection-translate", "minih.lcu"]);
 
 const PROVENANCE = {
   "local.remote-tools": {
@@ -125,7 +125,7 @@ async function main() {
       permissions: manifest.permissions ?? [],
       yanked: false,
     };
-    const minHost = engines.piDesktop ?? engines.minihAgentDesktop;
+    const minHost = engines.minihAgent ?? engines.piDesktop ?? engines.minihAgentDesktop;
     if (minHost) version.minMinihAgent = minHost;
     const provenance = PROVENANCE[manifest.id];
     if (provenance) {

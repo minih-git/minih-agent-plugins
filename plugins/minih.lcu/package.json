@@ -1,0 +1,19 @@
+{
+  "name": "@minih-plugin/minih.lcu",
+  "version": "0.1.2",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "LCU computer-use plugin for Minih-Agent-Desktop.",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test --test-concurrency=1 tests/*.test.mjs",
+    "verify:host": "node scripts/verify-host.mjs",
+    "verify:discovery": "node scripts/verify-discovery.mjs",
+    "verify:marketplace": "node scripts/verify-marketplace.mjs"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "esbuild": "0.25.12"
+  }
+}
