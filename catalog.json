@@ -4,8 +4,8 @@
   "catalog_id": null,
   "name": "Minih-Agent-Desktop Plugins",
   "homepage": "https://github.com/minih-git/minih-agent-plugins",
-  "updated_at": "2026-10-29T06:54:10Z",
-  "generated_at": "2026-10-29T06:54:10Z",
+  "updated_at": "2026-10-30T11:26:16Z",
+  "generated_at": "2026-10-30T11:26:16Z",
   "policy_version": null,
   "artifact_base_url": "https://raw.githubusercontent.com/minih-git/minih-agent-plugins/main",
   "plugins": [
@@ -140,6 +140,53 @@
           ],
           "yanked": false,
           "minMinihAgent": ">=0.20.0"
+        }
+      ]
+    },
+    {
+      "id": "minih.lcu",
+      "name": "LCU Computer Use",
+      "description": "Connect Minih sessions to a locally installed LCU runtime through its Pi adapter.",
+      "author": "minih-git",
+      "icon_url": null,
+      "categories": [],
+      "verified": true,
+      "trust": "verified",
+      "publisher_id": "minih-git",
+      "homepage": null,
+      "repository": "https://github.com/minih-git/minih-agent-plugins",
+      "safety_notes": null,
+      "i18n": {
+        "en": {
+          "name": "LCU Computer Use",
+          "description": "Use the locally installed LCU runtime for desktop automation in Minih sessions.",
+          "safetyNotes": "Apple Silicon macOS only. Runs trusted code inside the agent and starts the local LCU process. Requires the official ChatGPT app and OS permissions; this plugin installs neither dependency. Desktop screenshots can reach the selected model. Original app/site approval remains required: Always allow invokes LCU owner authentication and saves a shared app grant; session approval stays temporary. Revoke access with lcu apps revoke. Marketplace packages use SHA-256 integrity checks, not a publisher signature."
+        },
+        "zh-CN": {
+          "name": "LCU 桌面控制",
+          "description": "在 Minih 会话中通过本机已安装的 LCU 运行时操作桌面。",
+          "safetyNotes": "仅支持 Apple Silicon macOS。在 Agent 进程内运行受信代码并启动本机 LCU，需要自行安装官方 ChatGPT 应用和 LCU，并授予系统权限。桌面截图可能发送给所选模型。保留应用及站点授权：Always allow 会调用 LCU 的本人认证并保存共享应用授权；本会话允许仅临时生效。可通过 lcu apps revoke 撤销。市场包有 SHA-256 完整性校验，尚无发布者数字签名。"
+        }
+      },
+      "versions": [
+        {
+          "version": "0.1.2",
+          "publishedAt": "2026-10-30T11:26:16Z",
+          "shasum": "5e701a1aa71c30d0ed81a06ece4b53e480b13195d807993b4b98e1257ecbb6dd",
+          "url": "packages/minih.lcu-0.1.2.piplug",
+          "sizeBytes": 1011887,
+          "permissions": [
+            "agent.extension"
+          ],
+          "yanked": false,
+          "minMinihAgent": ">=1.1.3",
+          "provenance": {
+            "sourceRepository": "https://github.com/minih-git/minih-agent-plugins",
+            "sourceRef": "70631173d91e24f0fce04f6b28c11d0006c1b831",
+            "sourceCommit": "70631173d91e24f0fce04f6b28c11d0006c1b831",
+            "builder": "esbuild@0.25.12 / pi-plugin@1.1.3",
+            "sourcePath": "plugins/minih.lcu"
+          }
         }
       ]
     },

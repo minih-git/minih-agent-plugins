@@ -80,13 +80,19 @@ function compareVersions(left, right) {
  * else's release. Everything else keeps the `community` default, because this
  * catalog re-publishes their bytes unchanged.
  */
-const FIRST_PARTY = new Set(["minih.terminal", "minih.personal-knowledge", "minih.selection-translate"]);
+const FIRST_PARTY = new Set(["minih.terminal", "minih.personal-knowledge", "minih.selection-translate", "minih.lcu"]);
 
 const PROVENANCE = {
   "local.remote-tools": {
     sourceRepository: "https://github.com/jiege6-66/pi-desktop-remote-tools",
     sourceRef: "v0.1.0",
     builder: "repack@minih-agent-plugins",
+  },
+  "minih.lcu": {
+    sourceRepository: "https://github.com/minih-git/minih-agent-plugins",
+    sourceRef: "70631173d91e24f0fce04f6b28c11d0006c1b831",
+    sourceCommit: "70631173d91e24f0fce04f6b28c11d0006c1b831",
+    builder: "esbuild@0.25.12 / pi-plugin@1.1.3",
   },
 };
 
@@ -125,7 +131,7 @@ async function main() {
       permissions: manifest.permissions ?? [],
       yanked: false,
     };
-    const minHost = engines.piDesktop ?? engines.minihAgentDesktop;
+    const minHost = engines.minihAgent ?? engines.piDesktop ?? engines.minihAgentDesktop;
     if (minHost) version.minMinihAgent = minHost;
     const provenance = PROVENANCE[manifest.id];
     if (provenance) {

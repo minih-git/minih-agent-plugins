@@ -1,0 +1,16 @@
+{
+  "repository": "https://github.com/amontlabs/lcu",
+  "commit": "7fbf748f69dacc8c8d2a634a45f7d3df14866908",
+  "archiveSha256": "589fa6ca7ce20e14b17eacb2cf7834e279514467e780c84c9f5c7121552c908e",
+  "files": {
+    "LICENSE": "7fff04d38b9a70f51822eb46ad6ee390ef505932f36429a5be54ec78c212581c",
+    "adapters/audio-files.mjs": "2aa96870140013996dce1c7f66c4b514d3ecfbd45ad0084b79ad093101a8a963",
+    "adapters/client.mjs": "a30980c4d8ecd8d6301bace380b75054ce399775fff2c0a457c96fc01137c923",
+    "adapters/diagnostics.mjs": "f4df3accf9f1e2f6824f72c74964d45d8e6165ff8091809e7ef892261ffa6aca",
+    "adapters/host-guard.mjs": "5b8360ae81517ae15277d564fff32b4195e350becba0880b6e98c8d84ddc01bc",
+    "adapters/pi/index.ts": "ac027d30c5db347b3b536059c6db633894b54c7268cbe02b7c34574aa068d2d5",
+    "lcu/check_record.mjs": "2a558944604e1ec98438b6b38e911d152ef073a63c3f27ce220636e4b2f4783d",
+    "lcu/fsutil.mjs": "6245f175a167e27b87185972718b169b000c03b2e2d9eded30c50ad1b77b8dec",
+    "lcu/lock.mjs": "f7825f06fe56693e32e926cc5d25eaf7044c7a2e4d1fd2f3ecdf6be15951a260"
+  }
+}

@@ -35,14 +35,15 @@ https://raw.githubusercontent.com/minih-git/minih-agent-plugins/main/catalog.jso
 
 Three of them were built by other people and are redistributed here unmodified,
 keeping their own `LICENSE` and notice files inside their directories.
-`minih.terminal`, `minih.personal-knowledge` and `minih.selection-translate`
-are authored in this repository.
+`minih.terminal`, `minih.personal-knowledge`, `minih.selection-translate` and
+`minih.lcu` are authored in this repository.
 
 | Plugin | Version | Author | License | Upstream |
 | --- | --- | --- | --- | --- |
 | `minih.terminal` (`Terminal`) | 0.1.6 | minih-git | MIT | this repository |
 | `minih.personal-knowledge` (`Personal Knowledge`) | 0.4.0 | minih-git | MIT | this repository |
 | `minih.selection-translate` (`Selection Translate`) | 0.3.2 | minih-git | MIT | this repository |
+| `minih.lcu` (`LCU Computer Use`) | 0.1.2 | minih-git | MIT | adapts `amontlabs/lcu` |
 | `cn.star.computer-use` (`Computer Use`) | 0.4.0 | TheFlareStar | MPL-2.0 | not published by the author |
 | `local.remote-tools` (`Remote SSH Tools`) | 0.1.0 | jiege6-66 | MIT | `github.com/jiege6-66/pi-desktop-remote-tools` |
 | `pi.file-manager` (`File Manager`) | 0.9.0 | Tioit-Wang | not declared by the author | not published by the author |
@@ -53,6 +54,12 @@ repository cannot make on someone else's behalf. A plugin authored here is the
 project's own, so the generator marks it `verified` — `FIRST_PARTY` in
 `scripts/build-catalog.mjs` is the list, and adding an id to it is a deliberate
 act, not a side effect of publishing.
+
+`minih.lcu` needs Minih 1.1.3+ on Apple Silicon macOS and a separately installed
+official ChatGPT app plus LCU runtime. Its `agent.extension` grant is trusted
+in-agent code, not a sandbox: review the install permission card and app/site
+consent. The catalog's authorship badge is not a publisher signature; package
+integrity remains checked by SHA-256. See its plugin README for prerequisites.
 
 ## Adding or updating a plugin
 
