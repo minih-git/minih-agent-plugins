@@ -88,6 +88,12 @@ const PROVENANCE = {
     sourceRef: "v0.1.0",
     builder: "repack@minih-agent-plugins",
   },
+  "minih.lcu": {
+    sourceRepository: "https://github.com/minih-git/minih-agent-plugins",
+    sourceRef: "70631173d91e24f0fce04f6b28c11d0006c1b831",
+    sourceCommit: "70631173d91e24f0fce04f6b28c11d0006c1b831",
+    builder: "esbuild@0.25.12 / pi-plugin@1.1.3",
+  },
 };
 
 async function main() {
