@@ -17,6 +17,7 @@ const result = await build({
   entryPoints: ['src/extension.mjs'],
   outfile: 'agent/index.mjs',
   bundle: true,
+  preserveSymlinks: true,
   platform: 'node',
   format: 'esm',
   target: 'node22',
