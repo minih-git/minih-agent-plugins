@@ -28,9 +28,9 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Filled in by whoever publishes: the repository this catalog is served from. */
-const ARTIFACT_BASE_URL = "https://raw.githubusercontent.com/minih-git/minih-agent-plugins/main";
+const ARTIFACT_BASE_URL = "https://gitea.hungraim.com/minih/minih-agent-plugins/raw/branch/main";
 const CATALOG_NAME = "Minih-Agent-Desktop Plugins";
-const CATALOG_HOMEPAGE = "https://github.com/minih-git/minih-agent-plugins";
+const CATALOG_HOMEPAGE = "https://gitea.hungraim.com/minih/minih-agent-plugins";
 const PUBLISHER_ID = "minih-git";
 
 async function readJson(path, fallback) {

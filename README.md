@@ -28,7 +28,7 @@ anything.
 The client reads this catalog at:
 
 ```text
-https://raw.githubusercontent.com/minih-git/minih-agent-plugins/main/catalog.json
+https://gitea.hungraim.com/minih/minih-agent-plugins/raw/branch/main/catalog.json
 ```
 
 ## Plugins published here
@@ -91,7 +91,10 @@ integrity remains checked by SHA-256. See its plugin README for prerequisites.
    (run from a Minih-Agent-Desktop checkout, or call
    `node scripts/check-marketplace-catalog.mjs` there directly).
 
-5. Commit the package, the plugin directory, the catalog, and `releases.json`
+5. Publish to the public Gitea repository at
+   `https://gitea.hungraim.com/minih/minih-agent-plugins`. The catalog and
+   packages must be accessible without signing in; never embed a token in a URL.
+   Commit the package, the plugin directory, the catalog, and `releases.json`
    in one commit, then push. Bytes and the digest describing them land in the
    same commit, so changing published bytes means rewriting history rather
    than re-uploading a file — which is why branch protection matters here.

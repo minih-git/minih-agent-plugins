@@ -3,11 +3,11 @@
   "provider_id": "official",
   "catalog_id": null,
   "name": "Minih-Agent-Desktop Plugins",
-  "homepage": "https://github.com/minih-git/minih-agent-plugins",
-  "updated_at": "2026-10-30T11:26:16Z",
-  "generated_at": "2026-10-30T11:26:16Z",
+  "homepage": "https://gitea.hungraim.com/minih/minih-agent-plugins",
+  "updated_at": "2026-10-31T01:31:10Z",
+  "generated_at": "2026-10-31T01:31:10Z",
   "policy_version": null,
-  "artifact_base_url": "https://raw.githubusercontent.com/minih-git/minih-agent-plugins/main",
+  "artifact_base_url": "https://gitea.hungraim.com/minih/minih-agent-plugins/raw/branch/main",
   "plugins": [
     {
       "id": "cn.star.computer-use",
