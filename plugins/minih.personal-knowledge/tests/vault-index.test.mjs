@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -164,7 +165,7 @@ Replaced body.
   assert.doesNotMatch(raw, /The gateway talks to the agent host\./);
 });
 
-test("appendToSection lands before the next heading with one blank line", async () => {
+test("appendToSection appends to the final section with one blank line", async () => {
   const { vault, service } = await fixture();
   const before = await service.read({ note: "01 Projects/Project - Demo.md" });
   await service.write({
@@ -180,6 +181,40 @@ test("appendToSection lands before the next heading with one blank line", async 
   const after = await service.read({ note: before.path });
   assert.equal(after.metadata.title, "Project - Demo");
   assert.notEqual(after.sha256, before.sha256);
+});
+
+test("appendToSection preserves subsequent sections through preview and persisted write", async () => {
+  const { vault, service } = await fixture();
+  const before = await service.read({ note: "01 Projects/Project - Demo.md" });
+  const absolute = path.join(vault, before.path);
+  const original = await readFile(absolute, "utf8");
+  const expected = original.replace(
+    "The gateway talks to the agent host.\n",
+    "The gateway talks to the agent host.\n\nNew architecture line.\n",
+  );
+  const expectedHash = createHash("sha256").update(expected, "utf8").digest("hex");
+  const request = {
+    path: before.path,
+    content: "New architecture line.",
+    section: "Architecture",
+    operation: "appendToSection",
+    expectedSha256: before.sha256,
+  };
+
+  const preview = await service.write(request);
+  assert.equal(preview.dryRun, true);
+  assert.equal(await readFile(absolute, "utf8"), original);
+  assert.equal(preview.backupPath, null);
+  assert.equal(preview.afterSha256, expectedHash);
+
+  const applied = await service.write({ ...request, dryRun: false });
+  assert.equal(applied.action, "update");
+  assert.equal(applied.afterSha256, expectedHash);
+  assert.equal(await readFile(absolute, "utf8"), expected);
+  assert.equal(await readFile(path.join(vault, applied.backupPath), "utf8"), original);
+  const after = await service.read({ note: before.path });
+  assert.equal(after.content, expected);
+  assert.equal(after.sha256, expectedHash);
 });
 
 test("section addressing reports not-found and ambiguous headings", async () => {

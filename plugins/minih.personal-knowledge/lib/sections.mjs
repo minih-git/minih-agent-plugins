@@ -217,5 +217,5 @@ export function appendToSectionSpan(content, startLine, endLine, extra) {
   const separator = hasBody && addition.trim() !== "" ? "\n" : "";
   const head = lines.slice(0, bodyEnd);
   const tail = lines.slice(bodyEnd, insertAt);
-  return head.concat([separator, addition], tail).join("");
+  return head.concat([separator, addition], tail, lines.slice(endLine)).join("");
 }

@@ -40,7 +40,7 @@ keeping its own `LICENSE` and notice files inside its directory.
 
 | Plugin | Version | Author | License | Upstream |
 | --- | --- | --- | --- | --- |
-| `minih.personal-knowledge` (`Personal Knowledge`) | 0.4.0 | minih-git | MIT | this repository |
+| `minih.personal-knowledge` (`Personal Knowledge`) | 0.4.1 | minih-git | MIT | this repository |
 | `minih.selection-translate` (`Selection Translate`) | 0.3.2 | minih-git | MIT | this repository |
 | `minih.cache-keepwarm` (`Cache keep-warm`) | 0.1.0 | minih-git | MIT | this repository |
 | `pi.file-manager` (`File Manager`) | 0.9.0 | Tioit-Wang | not declared by the author | not published by the author |
