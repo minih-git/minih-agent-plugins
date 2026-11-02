@@ -7,26 +7,28 @@
  *
  * The host draws the composer toolbar and hands this component only its side and
  * the session id, so everything else comes from the plugin process over
- * `plugin.call`. The answer is a finished line of text in the app's language, so
- * this file has no copy of its own and cannot disagree with the schedule.
+ * `plugin.call`. That answer is a finished line of text in the app's language,
+ * so this file has no copy of its own and cannot disagree with the schedule.
+ *
+ * What it must not do is lie: when the plugin process cannot answer (still
+ * loading, disabled, crashed, restarting after an update) the control says it is
+ * unavailable and puts the reason in its tooltip, instead of showing a switch
+ * that claims a state nobody knows. It keeps polling, so it comes back by itself
+ * as soon as the process answers again.
  *
  * It runs in the host's own window with the host's React and the host's `--ds-*`
  * tokens. A throw here is contained by the host slot boundary and costs the
  * control, never the composer.
  */
-import { createElement as h, useCallback, useEffect, useState } from "react";
+import { createElement as h, useEffect, useRef, useState } from "react";
+
+import { controlView, createReader } from "./control-state.mjs";
 
 /** The running load's `pi`; the host hands a fresh one per load. */
 let host = null;
 
-/**
- * How often the control re-reads its status.
- *
- * The slot contract has no push channel, so this is a poll: five seconds is
- * invisible to a user watching a "next 15:20" line, and cheap enough that a
- * hundred open windows would still be trivial for the plugin process.
- */
-const REFRESH_MS = 5000;
+/** The app language, for the one label this side owns. */
+const LANGUAGE = typeof navigator === "undefined" ? "en" : navigator.language;
 
 const CSS = `
 .kw-control {
@@ -57,73 +59,59 @@ const CSS = `
 `;
 
 function KeepWarmControl({ sessionId }) {
-  const [status, setStatus] = useState(null);
-  const [failed, setFailed] = useState(false);
-
-  const read = useCallback(async () => {
-    if (!host || !sessionId) return;
-    try {
-      const next = await host.dispatch("plugin.call", {
-        method: "status",
-        args: { sessionId },
-      });
-      setStatus(next ?? null);
-      setFailed(false);
-    } catch {
-      // A plugin process that is not running (disabled, crashed, restarting) is
-      // a control that cannot answer; showing a stale switch would be a lie.
-      setFailed(true);
-    }
-  }, [sessionId]);
+  const [view, setView] = useState(() => controlView({ language: LANGUAGE }));
+  const reader = useRef(null);
 
   useEffect(() => {
-    if (!sessionId) {
-      setStatus(null);
+    if (!sessionId || !host) {
+      // No session (the composer on home) or no plugin API: the control cannot
+      // speak for anything, so it says so rather than guessing.
+      setView(controlView({ language: LANGUAGE }));
       return undefined;
     }
-    void read();
-    const timer = setInterval(() => void read(), REFRESH_MS);
-    return () => clearInterval(timer);
-  }, [read, sessionId]);
+    const next = createReader({
+      call: () => host.dispatch("plugin.call", { method: "status", args: { sessionId } }),
+      onChange: (change) => setView(controlView({ ...change, language: LANGUAGE })),
+    });
+    reader.current = next;
+    next.start();
+    return () => {
+      next.stop();
+      if (reader.current === next) reader.current = null;
+    };
+  }, [sessionId]);
 
   if (!sessionId) return null;
 
   const toggle = async () => {
-    if (!host) return;
+    if (!host || view.disabled) return;
     try {
-      const next = await host.dispatch("plugin.call", {
+      const status = await host.dispatch("plugin.call", {
         method: "toggle",
-        args: { sessionId, enabled: !status?.enabled },
+        args: { sessionId, enabled: !view.dataOn },
       });
-      setStatus(next ?? null);
-      setFailed(false);
-    } catch {
-      setFailed(true);
+      setView(controlView({ status: status ?? null, language: LANGUAGE }));
+    } catch (error) {
+      setView(controlView({ error, language: LANGUAGE }));
     }
+    // A toggle that failed for a passing reason (the process restarting) gets a
+    // fresh read instead of waiting out the interval.
+    void reader.current?.refreshNow();
   };
 
-  if (failed) {
-    return h(
-      "button",
-      { type: "button", className: "kw-control", disabled: true },
-      h("span", { className: "kw-dot" }),
-      "—",
-    );
-  }
-
-  const label = status?.label ?? "…";
   return h(
     "button",
     {
       type: "button",
       className: "kw-control",
-      "data-on": status?.enabled === true ? "true" : "false",
-      "data-stopped": status?.stopped ? "true" : "false",
-      title: status?.enabled ? "Stop keeping this cache warm" : "Keep this session's prompt cache warm",
+      "data-on": view.dataOn ? "true" : "false",
+      "data-stopped": view.dataStopped ? "true" : "false",
+      title: view.title,
+      disabled: view.disabled,
       onClick: toggle,
     },
     h("span", { className: "kw-dot" }),
-    label,
+    view.label,
   );
 }
 
