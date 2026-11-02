@@ -80,7 +80,7 @@ function compareVersions(left, right) {
  * else's release. Everything else keeps the `community` default, because this
  * catalog re-publishes their bytes unchanged.
  */
-const FIRST_PARTY = new Set(["minih.terminal", "minih.personal-knowledge", "minih.selection-translate", "minih.lcu"]);
+const FIRST_PARTY = new Set(["minih.terminal", "minih.personal-knowledge", "minih.selection-translate", "minih.lcu", "minih.cache-keepwarm"]);
 
 const PROVENANCE = {
   "local.remote-tools": {
