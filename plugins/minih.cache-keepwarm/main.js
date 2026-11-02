@@ -37,12 +37,25 @@ const STATE_FILE = "sessions.json";
 /** A timer that fires this late after its due time is treated as expired. */
 const MAX_LATE_MS = 60 * 1000;
 
-/** `pi` for the current load; the host hands a fresh one per load. */
+/**
+ * `pi` for the current load.
+ *
+ * The host builds the API, puts it on `globalThis.pi`, and then calls
+ * `onLoad()` **with no argument** (`apps/desktop/electron/main/plugin-host-process.mjs`,
+ * `handleInit`; the SDK types it as `onLoad?: () => Promise<void> | void`).
+ * Reading a parameter here would leave this null in the real app, which is how
+ * 0.1.0 shipped a control that only ever said "unavailable".
+ */
 let host = null;
 let state = { sessions: {} };
 /** sessionId -> { timer, dueAt } */
 const timers = new Map();
-let unsubscribers = [];
+/**
+ * The host events this load subscribed to, kept as the exact pairs to remove:
+ * `pi.events.on` returns `void` (SDK `PluginHostApi.events`), so storing its
+ * return value would keep `undefined` and leave every listener registered.
+ */
+let subscriptions = [];
 let locale = "en";
 let writing = Promise.resolve();
 /**
@@ -318,6 +331,9 @@ function statusOf(id) {
     enabled: current.enabled,
     stopped: current.stopped ? current.stopped.key : null,
     label: labelOf(current, settings, entry ? entry.dueAt : due),
+    // The control draws this as its tooltip, so the copy stays in one place and
+    // follows the app language.
+    title: current.enabled ? text().toggleOff : text().toggleOn,
   };
 }
 
@@ -364,9 +380,16 @@ async function refreshLocale() {
   }
 }
 
-async function onLoad(pi) {
-  host = pi;
-  hostSupportsKeepWarm = typeof pi?.session?.keepWarm === "function";
+async function onLoad() {
+  host = globalThis.pi ?? null;
+  if (!host) {
+    // A load with no host API is a broken load, not an old app: fail it, so the
+    // host records a load failure instead of a plugin that silently never works.
+    const error = new Error("plugin host API is missing (globalThis.pi)");
+    error.code = "PLUGIN_INVALID";
+    throw error;
+  }
+  hostSupportsKeepWarm = typeof host.session?.keepWarm === "function";
   await refreshLocale();
   await loadState();
   if (!hostSupportsKeepWarm) {
@@ -375,31 +398,35 @@ async function onLoad(pi) {
     return;
   }
   const settings = await readSettings();
-  unsubscribers = [
-    pi.events.on("session:turnEnded", (payload) => {
-      const id = String(payload?.sessionId ?? "");
-      if (!id) return;
-      void (async () => {
-        const current = session(id);
-        update(id, keepwarm.applyTurnEnded(current, Date.now()));
-        if (current.enabled) schedule(id, keepwarm.normalizeSettings(settingsCache));
-      })();
-    }),
+  subscriptions = [
+    {
+      event: "session:turnEnded",
+      handler: (payload) => {
+        const id = String(payload?.sessionId ?? "");
+        if (!id) return;
+        void (async () => {
+          const current = session(id);
+          update(id, keepwarm.applyTurnEnded(current, Date.now()));
+          if (current.enabled) schedule(id, keepwarm.normalizeSettings(settingsCache));
+        })();
+      },
+    },
   ];
+  for (const { event, handler } of subscriptions) host.events.on(event, handler);
   for (const id of Object.keys(state.sessions)) {
     if (session(id).enabled) await startSession(id, settings);
   }
 }
 
 async function onUnload() {
-  for (const unsubscribe of unsubscribers) {
+  for (const { event, handler } of subscriptions) {
     try {
-      await unsubscribe();
+      host?.events?.off(event, handler);
     } catch {
       // A subscription that is already gone needs no cleanup.
     }
   }
-  unsubscribers = [];
+  subscriptions = [];
   for (const id of [...timers.keys()]) clearTimer(id);
   await writing;
   host = null;

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "minih.cache-keepwarm",
   "name": "Cache keep-warm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Keep one session's prompt cache alive while you are away: about every 50 minutes of silence the app re-sends that session's last prompt without adding anything to the conversation, so returning to it does not pay for the whole context again. The composer shows the next time, today's spend and the reason it stopped.",
   "author": "minih-git",
   "categories": [

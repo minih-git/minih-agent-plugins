@@ -21,7 +21,20 @@ const SESSION = "session-1";
 
 function freshMain() {
   delete require.cache[MAIN];
+  delete globalThis.pi;
   return require(MAIN);
+}
+
+/**
+ * Load the plugin the way the host does: it builds the API, puts it on
+ * `globalThis.pi`, and calls `onLoad()` with no argument
+ * (`apps/desktop/electron/main/plugin-host-process.mjs`, `handleInit`). Passing
+ * `pi` as an argument is what the 0.1.0 tests did, and why they missed a plugin
+ * that never worked in the real app.
+ */
+async function loadLikeHost(plugin, fake) {
+  globalThis.pi = fake.pi;
+  await plugin.onLoad();
 }
 
 function fakeHost({
@@ -116,7 +129,7 @@ test("switching a session on arms the schedule and sends one request per interva
     fake.cleanup();
     t.mock.timers.reset();
   });
-  await plugin.onLoad(fake.pi);
+  await loadLikeHost(plugin, fake);
   await plugin.onRendererCall("toggle", { sessionId: SESSION, enabled: true });
   await settle();
   assert.equal(fake.state.keepWarm.length, 0, "nothing is sent at the moment of the switch");
@@ -140,7 +153,7 @@ test("a real turn re-times the next request", async (t) => {
     fake.cleanup();
     t.mock.timers.reset();
   });
-  await plugin.onLoad(fake.pi);
+  await loadLikeHost(plugin, fake);
   await plugin.onRendererCall("toggle", { sessionId: SESSION, enabled: true });
   await settle();
 
@@ -164,7 +177,7 @@ test("a timer that fires long after its moment does not spend", async (t) => {
     fake.cleanup();
     t.mock.timers.reset();
   });
-  await plugin.onLoad(fake.pi);
+  await loadLikeHost(plugin, fake);
   await plugin.onRendererCall("toggle", { sessionId: SESSION, enabled: true });
   await settle();
 
@@ -185,7 +198,7 @@ test("the ceiling stops the schedule and says why", async (t) => {
     fake.cleanup();
     t.mock.timers.reset();
   });
-  await plugin.onLoad(fake.pi);
+  await loadLikeHost(plugin, fake);
   await plugin.onRendererCall("toggle", { sessionId: SESSION, enabled: true });
   await settle();
   for (let round = 1; round <= 3; round++) await advance(t, 50 * MINUTE);
@@ -204,7 +217,7 @@ test("a session the host refuses is shown, not retried", async (t) => {
     fake.cleanup();
     t.mock.timers.reset();
   });
-  await plugin.onLoad(fake.pi);
+  await loadLikeHost(plugin, fake);
   await plugin.onRendererCall("toggle", { sessionId: SESSION, enabled: true });
   await settle();
   await advance(t, 50 * MINUTE);
@@ -224,7 +237,7 @@ test("a real turn does not revive a session whose model the user excluded", asyn
     fake.cleanup();
     t.mock.timers.reset();
   });
-  await plugin.onLoad(fake.pi);
+  await loadLikeHost(plugin, fake);
   await plugin.onRendererCall("toggle", { sessionId: SESSION, enabled: true });
   await settle();
   await advance(t, 50 * MINUTE);
@@ -249,7 +262,7 @@ test("a real turn does not buy more spend on a day that hit its ceiling", async 
     fake.cleanup();
     t.mock.timers.reset();
   });
-  await plugin.onLoad(fake.pi);
+  await loadLikeHost(plugin, fake);
   await plugin.onRendererCall("toggle", { sessionId: SESSION, enabled: true });
   await settle();
   await advance(t, 50 * MINUTE);
@@ -291,7 +304,7 @@ test("an app without the keep-warm API shows a version message, not a broken plu
   });
   // The plugin has to load: `engines.minihAgent` is not compared by the host, so
   // an older app hands over a `pi` without the method.
-  await plugin.onLoad(fake.pi);
+  await loadLikeHost(plugin, fake);
   const status = await plugin.onRendererCall("status", { sessionId: SESSION });
   assert.equal(status.enabled, false);
   assert.match(status.label, /已停止：应用版本过旧/);
@@ -310,7 +323,7 @@ test("unloading clears every timer", async (t) => {
     fake.cleanup();
     t.mock.timers.reset();
   });
-  await plugin.onLoad(fake.pi);
+  await loadLikeHost(plugin, fake);
   await plugin.onRendererCall("toggle", { sessionId: SESSION, enabled: true });
   await settle();
   await plugin.onUnload();
@@ -326,7 +339,7 @@ test("a session outside the model scope stops after the answer that names it", a
     fake.cleanup();
     t.mock.timers.reset();
   });
-  await plugin.onLoad(fake.pi);
+  await loadLikeHost(plugin, fake);
   await plugin.onRendererCall("toggle", { sessionId: SESSION, enabled: true });
   await settle();
   // Stepping exactly to the due time is what a live timer does; a single large
