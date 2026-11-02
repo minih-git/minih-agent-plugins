@@ -4,8 +4,8 @@
   "catalog_id": null,
   "name": "Minih-Agent-Desktop Plugins",
   "homepage": "https://gitea.hungraim.com/minih/minih-agent-plugins",
-  "updated_at": "2026-10-31T01:31:10Z",
-  "generated_at": "2026-10-31T01:31:10Z",
+  "updated_at": "2026-11-02T05:24:57Z",
+  "generated_at": "2026-11-02T05:24:57Z",
   "policy_version": null,
   "artifact_base_url": "https://gitea.hungraim.com/minih/minih-agent-plugins/raw/branch/main",
   "plugins": [
@@ -140,6 +140,51 @@
           ],
           "yanked": false,
           "minMinihAgent": ">=0.20.0"
+        }
+      ]
+    },
+    {
+      "id": "minih.cache-keepwarm",
+      "name": "Cache keep-warm",
+      "description": "Keep one session's prompt cache alive while you are away: about every 50 minutes of silence the app re-sends that session's last prompt without adding anything to the conversation, so returning to it does not pay for the whole context again. The composer shows the next time, today's spend and the reason it stopped.",
+      "author": "minih-git",
+      "icon_url": null,
+      "categories": [
+        "productivity"
+      ],
+      "verified": true,
+      "trust": "verified",
+      "publisher_id": "minih-git",
+      "homepage": null,
+      "repository": "https://github.com/minih-git/minih-agent-plugins",
+      "safety_notes": "Spends your money in the background. For each session you switch on, the app sends a real provider request about every 50 minutes while that session is idle: it replays the exact prompt of the session's last real request plus the words \"Reply with OK.\", reads the usage the provider reports, and stops as soon as that usage arrives. On Anthropic that is before the model answers; on the OpenAI protocols usage only arrives at the end, so the request is read to the end and pays for one short answer to \"Reply with OK.\" Either way nothing is added to the conversation, no tool runs, and no message is written to the session, so the only trace is the spend the plugin shows in the composer and the app's own usage history. The host decides whether a request may be sent and refuses with a reason when the session is busy, the model or prompt changed, the cache is already too old, or the context is too small; the request uses the same model, thinking level and headers as a real turn. The plugin stops on its own after four consecutive requests without a real turn, at one US dollar a day per session, or as soon as a request comes back mostly from a rewritten prefix instead of the cache; all three limits are settings. The plugin holds no permission to read sessions or your messages: the only session facts it receives are the host's own answer — whether it warmed the session, what that cost, and which model it ran, which is how the model scope you chose is applied. Nothing it holds is sent anywhere else, and it keeps only a small per-session record: the switch, the last turn's end, the streak, today's spend, the model it was told about, and the stop reason.",
+      "i18n": {
+        "en": {
+          "name": "Cache keep-warm",
+          "description": "Keep one session's prompt cache alive while you are away: about every 50 minutes of silence the app re-sends that session's last prompt without adding anything to the conversation, so returning to it does not pay for the whole context again. The composer shows the next time, today's spend and the reason it stopped.",
+          "safetyNotes": "Spends your money in the background. For each session you switch on, the app sends a real provider request about every 50 minutes while that session is idle: it replays the exact prompt of the session's last real request plus the words \"Reply with OK.\", reads the usage the provider reports, and stops as soon as that usage arrives. On Anthropic that is before the model answers; on the OpenAI protocols usage only arrives at the end, so the request is read to the end and pays for one short answer to \"Reply with OK.\" Either way nothing is added to the conversation, no tool runs, and no message is written to the session, so the only trace is the spend the plugin shows in the composer and the app's own usage history. The host decides whether a request may be sent and refuses with a reason when the session is busy, the model or prompt changed, the cache is already too old, or the context is too small; the request uses the same model, thinking level and headers as a real turn. The plugin stops on its own after four consecutive requests without a real turn, at one US dollar a day per session, or as soon as a request comes back mostly from a rewritten prefix instead of the cache; all three limits are settings. The plugin holds no permission to read sessions or your messages: the only session facts it receives are the host's own answer — whether it warmed the session, what that cost, and which model it ran, which is how the model scope you chose is applied. Nothing it holds is sent anywhere else, and it keeps only a small per-session record: the switch, the last turn's end, the streak, today's spend, the model it was told about, and the stop reason.",
+          "note": "Requires an app version with session keep-warm (>=1.2.0)."
+        },
+        "zh-CN": {
+          "name": "缓存保活",
+          "description": "在你离开时为一个会话的 prompt 缓存续命：空闲大约 50 分钟后，应用会重发该会话最后一次真实请求的内容，但不在对话里增加任何东西，从而让回到会话时不必重新支付整段上下文。输入区显示下次时间、今日花费，以及停止的原因。",
+          "safetyNotes": "会在后台花你的钱。对每个你打开的会话，应用在该会话空闲时大约每 50 分钟发一次真实的模型请求：重放这个会话最后一次真实请求的完全相同的内容，再追加一句「Reply with OK.」，读到服务商返回的用量就立刻停下。Anthropic 上这是模型开口之前；OpenAI 两种协议只在结束时报用量，所以会把请求读到结束，只为「Reply with OK.」这一句的思考与回答多付一点。无论哪种，对话里不会多出任何内容，不执行工具，也不往会话里写消息，所以唯一的痕迹就是插件在输入区显示的花费和应用自己的用量记录。是否允许发请求由宿主决定：会话正忙、模型或提示词变过、缓存已经过期、上下文太短时都会拒绝并给出原因；请求使用的模型、思考强度和请求头与真实轮次完全一致。插件会在以下情况自动停止：连续 4 次保活期间没有任何真实对话、每个会话每天 1 美元、或者某次保活读到的缓存占比过低（说明缓存已被重写）；这三项上限都是设置项。插件没有读取会话或消息的权限：它只从宿主自己的回答里拿到会话事实——是否保活成功、花了多少、跑的是哪个模型——你选择的模型范围就是这样生效的。它保存的东西不会发往任何其他地方，而且只有很小的每会话记录：开关、上一次对话结束时间、连续次数、今日花费、宿主告知的模型，以及停止原因。",
+          "note": "需要支持「会话缓存保活」的应用版本（>=1.2.0）。"
+        }
+      },
+      "versions": [
+        {
+          "version": "0.1.0",
+          "publishedAt": "2026-11-02T03:53:22Z",
+          "shasum": "f0479c0e87c3b9e642fb3f0039d4bd3d417e91ec86dd7aaceab8b73fed57d773",
+          "url": "packages/minih.cache-keepwarm-0.1.0.piplug",
+          "sizeBytes": 70802,
+          "permissions": [
+            "session.keepWarm",
+            "renderer.extension"
+          ],
+          "yanked": false,
+          "minMinihAgent": ">=1.2.0"
         }
       ]
     },
