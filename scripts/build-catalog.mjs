@@ -83,11 +83,6 @@ function compareVersions(left, right) {
 const FIRST_PARTY = new Set(["minih.terminal", "minih.personal-knowledge", "minih.selection-translate", "minih.lcu", "minih.cache-keepwarm"]);
 
 const PROVENANCE = {
-  "local.remote-tools": {
-    sourceRepository: "https://github.com/jiege6-66/pi-desktop-remote-tools",
-    sourceRef: "v0.1.0",
-    builder: "repack@minih-agent-plugins",
-  },
   "minih.lcu": {
     sourceRepository: "https://github.com/minih-git/minih-agent-plugins",
     sourceRef: "70631173d91e24f0fce04f6b28c11d0006c1b831",
