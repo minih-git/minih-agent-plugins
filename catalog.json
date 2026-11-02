@@ -4,8 +4,8 @@
   "catalog_id": null,
   "name": "Minih-Agent-Desktop Plugins",
   "homepage": "https://gitea.hungraim.com/minih/minih-agent-plugins",
-  "updated_at": "2026-11-02T05:24:57Z",
-  "generated_at": "2026-11-02T05:24:57Z",
+  "updated_at": "2026-11-02T05:51:10Z",
+  "generated_at": "2026-11-02T05:51:10Z",
   "policy_version": null,
   "artifact_base_url": "https://gitea.hungraim.com/minih/minih-agent-plugins/raw/branch/main",
   "plugins": [
@@ -174,11 +174,11 @@
       },
       "versions": [
         {
-          "version": "0.1.0",
-          "publishedAt": "2026-11-02T03:53:22Z",
-          "shasum": "f0479c0e87c3b9e642fb3f0039d4bd3d417e91ec86dd7aaceab8b73fed57d773",
-          "url": "packages/minih.cache-keepwarm-0.1.0.piplug",
-          "sizeBytes": 70802,
+          "version": "0.1.1",
+          "publishedAt": "2026-11-02T05:51:10Z",
+          "shasum": "cb0e7d4c5a48b44847e37032137bf3266e0a3c3de5856150ffd28b92103ec383",
+          "url": "packages/minih.cache-keepwarm-0.1.1.piplug",
+          "sizeBytes": 85373,
           "permissions": [
             "session.keepWarm",
             "renderer.extension"
