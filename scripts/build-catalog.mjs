@@ -80,16 +80,9 @@ function compareVersions(left, right) {
  * else's release. Everything else keeps the `community` default, because this
  * catalog re-publishes their bytes unchanged.
  */
-const FIRST_PARTY = new Set(["minih.terminal", "minih.personal-knowledge", "minih.selection-translate", "minih.lcu", "minih.cache-keepwarm"]);
+const FIRST_PARTY = new Set(["minih.personal-knowledge", "minih.selection-translate", "minih.cache-keepwarm"]);
 
-const PROVENANCE = {
-  "minih.lcu": {
-    sourceRepository: "https://github.com/minih-git/minih-agent-plugins",
-    sourceRef: "70631173d91e24f0fce04f6b28c11d0006c1b831",
-    sourceCommit: "70631173d91e24f0fce04f6b28c11d0006c1b831",
-    builder: "esbuild@0.25.12 / pi-plugin@1.1.3",
-  },
-};
+const PROVENANCE = {};
 
 async function main() {
   const pluginRoot = join(root, "plugins");

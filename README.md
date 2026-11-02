@@ -33,17 +33,15 @@ https://gitea.hungraim.com/minih/minih-agent-plugins/raw/branch/main/catalog.jso
 
 ## Plugins published here
 
-Two of them were built by other people and are redistributed here unmodified,
-keeping their own `LICENSE` and notice files inside their directories.
-`minih.terminal`, `minih.personal-knowledge`, `minih.selection-translate`,
-`minih.lcu` and `minih.cache-keepwarm` are authored in this repository.
+One of them was built by someone else and is redistributed here unmodified,
+keeping its own `LICENSE` and notice files inside its directory.
+`minih.personal-knowledge`, `minih.selection-translate` and
+`minih.cache-keepwarm` are authored in this repository.
 
 | Plugin | Version | Author | License | Upstream |
 | --- | --- | --- | --- | --- |
-| `minih.terminal` (`Terminal`) | 0.1.6 | minih-git | MIT | this repository |
 | `minih.personal-knowledge` (`Personal Knowledge`) | 0.4.0 | minih-git | MIT | this repository |
 | `minih.selection-translate` (`Selection Translate`) | 0.3.2 | minih-git | MIT | this repository |
-| `minih.lcu` (`LCU Computer Use`) | 0.1.2 | minih-git | MIT | adapts `amontlabs/lcu` |
 | `minih.cache-keepwarm` (`Cache keep-warm`) | 0.1.0 | minih-git | MIT | this repository |
 | `pi.file-manager` (`File Manager`) | 0.9.0 | Tioit-Wang | not declared by the author | not published by the author |
 
@@ -54,11 +52,8 @@ project's own, so the generator marks it `verified` — `FIRST_PARTY` in
 `scripts/build-catalog.mjs` is the list, and adding an id to it is a deliberate
 act, not a side effect of publishing.
 
-`minih.lcu` needs Minih 1.1.3+ on Apple Silicon macOS and a separately installed
-official ChatGPT app plus LCU runtime. Its `agent.extension` grant is trusted
-in-agent code, not a sandbox: review the install permission card and app/site
-consent. The catalog's authorship badge is not a publisher signature; package
-integrity remains checked by SHA-256. See its plugin README for prerequisites.
+The catalog's authorship badge is not a publisher signature; package
+integrity remains checked by SHA-256.
 
 ## Adding or updating a plugin
 
