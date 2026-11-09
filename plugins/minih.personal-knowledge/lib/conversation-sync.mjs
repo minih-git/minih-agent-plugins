@@ -119,6 +119,7 @@ export class ConversationSyncer {
     redact = redactSensitiveContent,
     statePath = syncStatePath(),
     device = defaultDeviceName(),
+    deviceProvider = null,
     now = () => new Date(),
     intervalMs = SYNC_INTERVAL_MS,
     timezoneOffsetMinutes = null,
@@ -131,6 +132,8 @@ export class ConversationSyncer {
     this.redact = redact;
     this.statePath = statePath;
     this.device = device;
+    this.deviceProvider = deviceProvider;
+    this.previousDevices = [];
     this.now = now;
     this.intervalMs = intervalMs;
     this.timezoneOffsetMinutes = timezoneOffsetMinutes;
@@ -143,6 +146,7 @@ export class ConversationSyncer {
   }
 
   /** Startup pass plus the five-minute timer. Calling twice is a no-op. */
+  /** `device` is resolved lazily, so a name changed in the panel applies. */
   start() {
     if (!this.stopped) return this;
     this.stopped = false;
@@ -171,7 +175,31 @@ export class ConversationSyncer {
   }
 
   status() {
-    return { ...this.lastStatus, device: this.device, running: Boolean(this.running) };
+    return { ...this.lastStatus, device: this.currentDevice(), running: Boolean(this.running) };
+  }
+
+  /** The device name this pass writes under; a provider keeps it current. */
+  currentDevice() {
+    const provided = typeof this.deviceProvider === "function" ? this.deviceProvider() : null;
+    if (typeof provided === "string" && provided.trim() && provided.trim() !== this.device) {
+      // The panel allows renaming the device. Files already written keep the
+      // old name, so the old name stays an owned device (deletions still work).
+      this.previousDevices = [...new Set([...(this.previousDevices ?? []), this.device])];
+      this.device = provided.trim();
+    }
+    return this.device;
+  }
+
+  /** Names this computer has written under; only these are ours to change. */
+  ownedDevices() {
+    const current = this.currentDevice();
+    return [current, ...(this.previousDevices ?? [])];
+  }
+
+  /** Whether a file's `device` belongs to this computer. */
+  owns(device) {
+    const value = String(device ?? "");
+    return value === "" || this.ownedDevices().includes(value);
   }
 
   /** One serialized pass; concurrent callers share the in-flight run. */
@@ -195,6 +223,8 @@ export class ConversationSyncer {
   }
 
   async #pass(reason) {
+    // One device name for the whole pass.
+    this.currentDevice();
     const state = await readSyncState(this.statePath);
     const summaries = new Map(Object.entries(pruneSummaries(state.summaries)));
     let cursor = typeof state.cursor === "string" ? state.cursor : null;
@@ -322,7 +352,7 @@ export class ConversationSyncer {
     if (!previous || revisionChanged || renameDue || transcriptMissing || rawChanged) {
       const frontmatter = summaryFrontmatter({
         change,
-        device: this.device,
+        device: this.currentDevice(),
         transcriptLinks: rawPaths,
         summaryRevision: revision,
         coveredSeq,
@@ -332,7 +362,7 @@ export class ConversationSyncer {
         this.vaultRoot,
         summaryPath,
         `${frontmatter}\n${this.redact(body)}`,
-        { device: this.device },
+        { device: this.ownedDevices() },
       );
       if (written.reason === "OTHER_DEVICE") {
         return { status: "skipped", day, summaryPath, state: previous ?? emptyState(change, summaryPath, day) };
@@ -341,7 +371,7 @@ export class ConversationSyncer {
       if (renameDue && previous?.summaryPath) {
         // The conversation was renamed: the old note is this computer's, so it
         // moves with the new one.
-        await deleteConversationFile(this.vaultRoot, previous.summaryPath, { device: this.device });
+        await deleteConversationFile(this.vaultRoot, previous.summaryPath, { device: this.ownedDevices() });
       }
     }
 
@@ -384,7 +414,8 @@ export class ConversationSyncer {
 
   /** L3: one file, or several parts once a session passes 512 KiB. */
   async #writeRaw(change, turns) {
-    const header = (part, partCount) => `${rawFrontmatter({ change, device: this.device, part, partCount })}\n`;
+    const header = (part, partCount) =>
+      `${rawFrontmatter({ change, device: this.currentDevice(), part, partCount })}\n`;
     const title = `# ${change.title || "Conversation"}\n\n`;
     const chunks =
       turns.length === 0
@@ -405,7 +436,7 @@ export class ConversationSyncer {
       const relative = rawPathFor(change, { config: this.config, part });
       paths.push(relative);
       const content = `${header(part, pieces.length)}${title}${this.redact(pieces[index])}`;
-      const written = await writeConversationFile(this.vaultRoot, relative, content, { device: this.device });
+      const written = await writeConversationFile(this.vaultRoot, relative, content, { device: this.ownedDevices() });
       if (written.reason === "OTHER_DEVICE") throw new Error(`REFUSED_OTHER_DEVICE: ${relative}`);
     }
     // Parts that a shorter transcript no longer needs (a regenerate that
@@ -413,7 +444,7 @@ export class ConversationSyncer {
     if (paths.length > 0) {
       for (let part = paths.length + 1; part <= 9; part += 1) {
         const stale = rawPathFor(change, { config: this.config, part });
-        const result = await deleteConversationFile(this.vaultRoot, stale, { device: this.device });
+        const result = await deleteConversationFile(this.vaultRoot, stale, { device: this.ownedDevices() });
         if (result.reason === "MISSING") break;
       }
     }
@@ -436,7 +467,7 @@ export class ConversationSyncer {
     }
     const folders = new Set();
     for (const relative of candidates) {
-      await deleteConversationFile(this.vaultRoot, relative, { device: this.device });
+      await deleteConversationFile(this.vaultRoot, relative, { device: this.ownedDevices() });
       folders.add(path.posix.dirname(relative));
     }
     for (const folder of [...folders].sort((a, b) => b.length - a.length)) {
@@ -471,9 +502,9 @@ export class ConversationSyncer {
           }),
         );
       }
-      const relative = dailyPathFor(day, this.device);
-      const content = dailyNote({ day, device: this.device, rows, language: this.locale });
-      const result = await writeConversationFile(this.vaultRoot, relative, this.redact(content), { device: this.device });
+      const relative = dailyPathFor(day, this.currentDevice());
+      const content = dailyNote({ day, device: this.currentDevice(), rows, language: this.locale });
+      const result = await writeConversationFile(this.vaultRoot, relative, this.redact(content), { device: this.ownedDevices() });
       if (result.written) written.push(relative);
     }
     return written;

@@ -67,6 +67,7 @@
     "memory.read",
     "conversation.read",
     "agent.complete",
+    "models.list",
     "ui.panel"
   ],
   "engines": {

@@ -137,12 +137,42 @@ default, at most one attempt per week (a failed attempt counts, so a broken
 model cannot loop), and **it never edits `08 Standards/个人画像.md`** — merging
 is the user's action.
 
+### 8. Settings panel and the weekly check
+
+Two panel sections close the loop (`docs/design/settings-panel.md` §2):
+
+- **Conversation archive** (`kg.conversations.status | sync | device`): whether
+  the host switch is on, this computer's device name, the last sync time, what
+  the last pass wrote and removed, and the last error *code* — never content.
+  "Sync now" runs one pass and refreshes the section. The device name is
+  editable and stored in `~/.personal-knowledge/conversation-settings.json`
+  (never in the vault); a rename only affects files written afterwards, and the
+  syncer keeps the old name as one of its own, so deleting a renamed session
+  still works.
+- **Profile candidates** (`kg.profile.status | set | run | models.list`):
+  switch, model, last run, the next allowed run while the weekly limit holds,
+  the last error code, and the latest candidate with a copy-link action.
+  `kg.profile.set` accepts exactly `enabled` and `modelKey`; anything else is
+  refused by name, because a silently ignored key would look saved. "Generate
+  now" is a manual action and ignores the weekly limit, but stays disabled
+  without the switch and a model.
+
+The weekly check is a six-hour timer in `ProfileCandidateScheduler`, started by
+`onLoad` and cleared by `onUnload`. Every path — the startup check, the timer,
+a direct call — obeys `candidateDue`: switch on, model chosen, a week since the
+last attempt (a failure counts), and not read-only. Nothing runs while the
+plugin is stopped, so a late timer cannot outlive an unload.
+
+`models.list` (read-only catalog of the user's configured models) is the one
+additional permission; without the host API the panel falls back to typing
+`providerId/modelId` by hand.
+
 ## Consequences
 
-- The plugin now requests two more permissions: `conversation.read` (the feed)
-  and `agent.complete` (profile candidates). The second one only ever runs when
-  the user turns the feature on and names a model, but it is shown at install
-  time.
+- The plugin now requests three more permissions: `conversation.read` (the
+  feed), `agent.complete` (profile candidates) and `models.list` (the model
+  list in the panel). The second one only ever runs when the user turns the
+  feature on and names a model, but it is shown at install time.
 - `engines.minihAgent` / `piDesktop` move to `>=1.0.0`, the first Desktop
   release whose changelog carries `conversation.read`. The 1.0.0 entry was
   unreleased when this ADR was written.

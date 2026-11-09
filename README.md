@@ -48,10 +48,12 @@ keeping its own `LICENSE` and notice files inside its directory.
 `minih.personal-knowledge` 0.5.0 adds the conversation archive (ADR 0002 in
 its `docs/adr/`): it archives Desktop conversations into `09 Conversations/`
 inside the vault, adds `conversation_search` and `conversation_read`, and asks
-for two more permissions — `conversation.read` and `agent.complete`. It needs a
-Desktop release that publishes `conversation.read` (`engines.minihAgent` is
-`>=1.0.0`), so it is committed here but not packaged or added to
-`catalog.json` yet.
+for three more permissions — `conversation.read`, `agent.complete` and
+`models.list`. Its settings panel gains two sections: the archive status with
+"sync now" and an editable device name, and the weekly profile candidates with
+a model picker. It needs a Desktop release that publishes `conversation.read`
+(`engines.minihAgent` is `>=1.0.0`), so it is committed here but not packaged
+or added to `catalog.json` yet.
 
 The redistributed ones are listed with `trust: "community"` and
 `verified: false`: the `verified` badge is a claim about a publisher this

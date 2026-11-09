@@ -25,7 +25,8 @@ const { createHash } = require("node:crypto");
 const path = require("node:path");
 
 const { createReadOnlyState } = require("./lib/read-only.mjs");
-const { createConfigStore, createPrefsStore } = require("./lib/panel.mjs");
+const { createConfigStore, createPrefsStore, createConversationSettingsStore } = require("./lib/panel.mjs");
+const { defaultDeviceName } = require("./lib/conversation-sync.mjs");
 
 const pluginRoot = __dirname;
 const manifest = require("./manifest.json");
@@ -51,16 +52,23 @@ const CHANNELS = new Set([
   "kg.conversations.status",
   "kg.conversations.sync",
   "kg.profile.status",
+  "kg.profile.set",
   "kg.profile.run",
+  "kg.conversations.device",
+  "kg.models.list",
   "kg.openSettings",
 ]);
 
 const MAX_PREVIEW_CHARS = 8000;
+/** The only editable profile-candidate fields (`kg.profile.set`). */
+const PROFILE_VALUES = new Set(["enabled", "modelKey"]);
 const USER_CENTER_ID = "memory:user-center";
 
 let state = null;
 let panelStores = null;
 let conversationSyncer = null;
+let profileScheduler = null;
+let syncDevices = null; // { store, name } — the device name the syncer writes under
 let indexRun = null; // { controller, done, total, mode, error }
 let lastIndexRun = null; // survives unload so status can still report
 
@@ -69,9 +77,21 @@ function panelStoresFor() {
     panelStores = {
       config: createConfigStore({ env: process.env, pluginRoot }),
       prefs: createPrefsStore({ dataPath: globalThis.pi?.plugin?.getDataPath?.() ?? null }),
+      devices: createConversationSettingsStore({ env: process.env }),
     };
   }
   return panelStores;
+}
+
+/**
+ * The name this computer archives under. A rename in the panel is stored in
+ * `~/.personal-knowledge/conversation-settings.json`; until one exists the
+ * host name is used, so the first pass has a stable value.
+ */
+async function currentDeviceName() {
+  const store = panelStoresFor().devices;
+  const stored = await store.get();
+  return stored.deviceName || defaultDeviceName();
 }
 
 /** The KnowledgeService for panel channels (vector index, notes count). */
@@ -630,6 +650,62 @@ async function settingsTest(payload) {
 }
 
 /**
+ * Rename this computer for the archive (`kg.conversations.device`). The name is
+ * stored locally and only affects notes written from now on: files already on
+ * disk keep the name they were written under and stay this computer's.
+ */
+async function setDeviceName(deviceName) {
+  const stored = await panelStoresFor().devices.setDeviceName(deviceName);
+  if (syncDevices) syncDevices.name = stored.deviceName;
+  return { saved: true, deviceName: stored.deviceName };
+}
+
+
+
+/**
+ * `kg.profile.set`: the only two editable profile-candidate fields. Anything
+ * else is refused by name rather than ignored, so a typo cannot look saved.
+ */
+async function setProfileSettings(values) {
+  if (values === null || typeof values !== "object" || Array.isArray(values)) {
+    throw refusal("kg.profile.set accepts { values: { enabled?, modelKey? } }");
+  }
+  const unknown = Object.keys(values).filter((key) => !PROFILE_VALUES.has(key));
+  if (unknown.length > 0) {
+    throw refusal(`kg.profile.set accepts only enabled and modelKey; refused: ${unknown.join(", ")}`);
+  }
+  const { profileSettingsPath, readProfileSettings } = await import("./lib/profile-candidates.mjs");
+  const filePath = profileSettingsPath();
+  const current = await readProfileSettings(filePath);
+  const next = { ...current };
+  if ("enabled" in values) {
+    if (typeof values.enabled !== "boolean") throw refusal("enabled must be a boolean");
+    next.enabled = values.enabled;
+  }
+  if ("modelKey" in values) {
+    if (values.modelKey !== null && typeof values.modelKey !== "string") {
+      throw refusal("modelKey must be a string or null");
+    }
+    const key = String(values.modelKey ?? "").trim();
+    if (key && !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._:-]+$/.test(key)) {
+      throw refusal("modelKey must look like providerId/modelId");
+    }
+    next.modelKey = key || null;
+  }
+  await writeProfileSettingsFile(filePath, next);
+  return { saved: true, values: { enabled: next.enabled === true, modelKey: next.modelKey ?? null } };
+}
+
+/** Write the settings file atomically with owner-only permissions. */
+async function writeProfileSettingsFile(filePath, values) {
+  const { mkdir, rename, writeFile } = await import("node:fs/promises");
+  await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  const temporary = `${filePath}.${process.pid}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(values, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  await rename(temporary, filePath);
+}
+
+/**
  * Draft an L0 profile candidate into `00 Inbox/` (ADR 0002 §6). The profile
  * note is never edited here; merging stays the user's action.
  */
@@ -641,7 +717,9 @@ async function profileRun(payload) {
     throw new Error(`profile candidates are refused: ${readOnlyState.refusalReason()}.`);
   }
   if (!service.pi) service.pi = globalThis.pi ?? null;
-  return runProfileCandidate({ service, settings: payload?.settings ?? undefined });
+  const settings = payload?.settings ?? undefined;
+  const result = await runProfileCandidate({ service, settings });
+  return { result, ...(await profileStatus()) };
 }
 
 async function onPanelInvoke(channel, payload) {
@@ -672,16 +750,37 @@ async function onPanelInvoke(channel, payload) {
     return { readEnabled: listed.readEnabled !== false };
   }
   if (channel === "kg.conversations.status") {
-    return conversationSyncer ? conversationSyncer.status() : { state: "stopped", device: null };
+    if (conversationSyncer) return conversationSyncer.status();
+    // The syncer is off (no host API, or the vault failed to load): still
+    // report the device and enablement so the panel can explain why.
+    const stored = await panelStoresFor().devices.get();
+    return {
+      state: globalThis.pi?.conversations?.changes ? "stopped" : "unsupported",
+      device: stored.deviceName || defaultDeviceName(),
+      storedDeviceName: stored.deviceName ?? null,
+    };
   }
   if (channel === "kg.conversations.sync") {
     if (!conversationSyncer) return { state: "stopped" };
     return conversationSyncer.syncOnce({ reason: "manual" });
   }
-  if (channel === "kg.profile.status") {
-    const { candidateDue, profileSettingsPath, readProfileSettings } = await import("./lib/profile-candidates.mjs");
-    const state = await readProfileSettings(profileSettingsPath());
-    return { settings: state, ...candidateDue(state) };
+  if (channel === "kg.conversations.device") {
+    return setDeviceName(payload?.deviceName);
+  }
+  if (channel === "kg.profile.set") {
+    return setProfileSettings(payload?.values ?? {});
+  }
+  if (channel === "kg.profile.status") return profileStatus();
+  if (channel === "kg.models.list") {
+    // `models.list` is a read-only catalog of the user's configured models.
+    if (typeof globalThis.pi?.models?.list !== "function") return { models: [] };
+    const listed = await globalThis.pi.models.list();
+    return {
+      models: (Array.isArray(listed) ? listed : []).map((model) => ({
+        key: String(model?.key ?? ""),
+        label: String(model?.alias || model?.label || model?.modelId || model?.key || ""),
+      })),
+    };
   }
   if (channel === "kg.profile.run") {
     return profileRun(payload);
@@ -710,23 +809,63 @@ async function startConversationSync() {
   const loaded = await ensureState().catch(() => null);
   if (!loaded) return null;
   const { redactSensitiveContent } = await import("./lib/redact.mjs");
+  const device = await currentDeviceName();
+  syncDevices = { name: device };
   conversationSyncer = new ConversationSyncer({
     pi: globalThis.pi,
     vaultRoot: loaded.index.root,
     config: archiveConfig(loaded.config ?? {}),
     redact: redactSensitiveContent,
+    device,
+    deviceProvider: () => syncDevices?.name ?? device,
   });
   conversationSyncer.start();
   return conversationSyncer;
+}
+
+async function profileStatus() {
+  const { candidateDue, profileSettingsPath, readProfileSettings } = await import("./lib/profile-candidates.mjs");
+  const state = await readProfileSettings(profileSettingsPath());
+  const due = candidateDue(state);
+  return {
+    settings: { enabled: state.enabled === true, modelKey: state.modelKey ?? null },
+    lastRunAt: state.lastRunAt ?? null,
+    lastError: state.lastError ?? null,
+    lastCandidate: state.lastCandidate ?? null,
+    due,
+  };
+}
+
+/**
+ * Start the weekly profile-candidate check (ADR 0002 §8). It runs only while
+ * the switch is on, never in read-only mode, and never faster than
+ * `candidateDue` allows; the timer stops with the plugin.
+ */
+async function startProfileScheduler() {
+  if (profileScheduler) return profileScheduler;
+  const { ProfileCandidateScheduler } = await import("./lib/profile-candidates.mjs");
+  profileScheduler = new ProfileCandidateScheduler({
+    settings: async () => (await profileStatus()).settings,
+    run: () => profileRun({}),
+    isReadOnly: isReadOnlyMode,
+  });
+  profileScheduler.start();
+  return profileScheduler;
 }
 
 async function onLoad() {
   // Warm the index so the first view render does not pay for the vault scan.
   await ensureState().catch(() => {});
   await startConversationSync().catch(() => null);
+  await startProfileScheduler().catch(() => null);
 }
 
 async function onUnload() {
+  if (profileScheduler) {
+    const scheduler = profileScheduler;
+    profileScheduler = null;
+    await scheduler.stop().catch(() => {});
+  }
   if (conversationSyncer) {
     const syncer = conversationSyncer;
     conversationSyncer = null;

@@ -42,6 +42,18 @@ export async function readConversationFile(root, relative) {
 }
 
 /**
+ * The device names this computer writes under. A rename in the panel adds a
+ * name, so files written before it stay ours; the comparison is therefore a
+ * set, and an unset `device` means "accept any".
+ */
+function ownsDevice(device, owner) {
+  if (device === null || device === undefined) return true;
+  const names = Array.isArray(device) ? device : [device];
+  const value = String(owner ?? "");
+  return value === "" || names.includes(value);
+}
+
+/**
  * Atomic write inside the conversation subtree. Returns
  * `{ written, reason }`; nothing is written when the file already holds
  * exactly these bytes, or when another computer owns the file.
@@ -54,10 +66,7 @@ export async function writeConversationFile(root, relative, content, { device = 
   const text = `${String(content).replace(/\s+$/, "")}\n`;
   const existing = await readConversationFile(root, relative);
   if (existing) {
-    if (device !== null) {
-      const owner = String(existing.metadata?.device ?? "");
-      if (owner && owner !== device) return { written: false, reason: "OTHER_DEVICE" };
-    }
+    if (!ownsDevice(device, existing.metadata?.device)) return { written: false, reason: "OTHER_DEVICE" };
     if (existing.raw === text) return { written: false, reason: "UNCHANGED" };
   }
   const parent = path.dirname(absolute);
@@ -96,9 +105,8 @@ export async function deleteConversationFile(root, relative, { device = null } =
     throw error;
   }
   if (!info.isFile()) throw new Error(`refusing to delete a non-file: ${relative}`);
-  if (device !== null) {
-    const owner = String(parseFrontmatter(await readFile(absolute, "utf8")).data?.device ?? "");
-    if (owner && owner !== device) return { deleted: false, reason: "OTHER_DEVICE" };
+  if (!ownsDevice(device, parseFrontmatter(await readFile(absolute, "utf8")).data?.device)) {
+    return { deleted: false, reason: "OTHER_DEVICE" };
   }
   try {
     await unlink(absolute);
@@ -171,8 +179,8 @@ export async function resolveConflictCopies(root, { device, files = null }) {
     const copyDevice = String(copy.metadata?.device ?? "");
     const canonicalDevice = canonical ? String(canonical.metadata?.device ?? "") : "";
     // A file with no `device` is not ours to move either: skip it rather than
-    // read "unset" as "this computer".
-    if (!copyDevice || copyDevice !== device || (canonical && canonicalDevice && canonicalDevice !== device)) {
+    // read "unset" as "this computer". A rename keeps both names valid.
+    if (!copyDevice || !ownsDevice(device, copyDevice) || (canonical && canonicalDevice && !ownsDevice(device, canonicalDevice))) {
       decisions.push({ path: relative, keep: canonicalPath, action: "skipped", reason: "OTHER_DEVICE" });
       continue;
     }

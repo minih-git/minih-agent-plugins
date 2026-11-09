@@ -220,6 +220,25 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* Read-only value next to a label, and an inline code span for error codes. */
+.field-value {
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.mono-inline {
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+.ghost-btn-compact {
+  padding: 3px 10px;
+  font-size: 11.5px;
+}
+
 /* ---- Fields & controls ---- */
 
 .field-row-grid {

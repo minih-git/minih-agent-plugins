@@ -326,3 +326,133 @@ test("an unparseable repo-map fails closed for every real write", async () => {
     assert.match(afterRepairMessage, /00 Inbox/, "the failure is about the target path, not read-only");
   });
 });
+
+test("kg.profile.set: only enabled and modelKey, everything else refused by name", async () => {
+  const { backend, root } = await makeBackend();
+  const statusFile = path.join(root, "blank-profile.json");
+  delete process.env.PERSONAL_KNOWLEDGE_PROFILE_SETTINGS;
+
+  const empty = await backend.onPanelInvoke("kg.profile.status", {});
+  assert.equal(empty.settings.enabled, false, "the switch is off by default");
+  assert.equal(empty.settings.modelKey, null);
+  assert.equal(empty.due.reason, "DISABLED");
+
+  const saved = await backend.onPanelInvoke("kg.profile.set", {
+    values: { enabled: true, modelKey: "minih-router/deepseek-flash" },
+  });
+  assert.deepEqual(saved.values, { enabled: true, modelKey: "minih-router/deepseek-flash" });
+  const after = await backend.onPanelInvoke("kg.profile.status", {});
+  assert.equal(after.settings.enabled, true);
+  assert.equal(after.settings.modelKey, "minih-router/deepseek-flash");
+  assert.equal(after.due.reason, null, "a model and the switch are all it needs");
+
+  // lastRunAt is written by a run, never by the panel.
+  await assert.rejects(
+    backend.onPanelInvoke("kg.profile.set", { values: { lastRunAt: "2026-01-01T00:00:00Z" } }),
+    /accepts only enabled and modelKey; refused: lastRunAt/,
+  );
+  await assert.rejects(
+    backend.onPanelInvoke("kg.profile.set", { values: { enabled: true, extra: 1 } }),
+    /refused: extra/,
+  );
+  await assert.rejects(
+    backend.onPanelInvoke("kg.profile.set", { values: { enabled: "yes" } }),
+    /enabled must be a boolean/,
+  );
+  await assert.rejects(
+    backend.onPanelInvoke("kg.profile.set", { values: { modelKey: "not a model key" } }),
+    /modelKey must look like providerId\/modelId/,
+  );
+  await assert.rejects(backend.onPanelInvoke("kg.profile.set", { values: [] }), /kg\.profile\.set accepts/);
+  void statusFile;
+});
+
+test("kg.conversations.device stores a sanitized name outside the vault", async () => {
+  const { backend, vault } = await makeBackend();
+  const before = await backend.onPanelInvoke("kg.conversations.status", {});
+  assert.equal(before.state, "unsupported", "no pi.conversations host means the syncer is not running");
+  assert.equal(before.storedDeviceName, null);
+  assert.ok(before.device, "a host-derived name is still reported");
+
+  const saved = await backend.onPanelInvoke("kg.conversations.device", { deviceName: "Minih Mac/Studio.local" });
+  assert.equal(saved.deviceName, "Minih-Mac-Studio");
+  const after = await backend.onPanelInvoke("kg.conversations.status", {});
+  assert.equal(after.storedDeviceName, "Minih-Mac-Studio");
+  assert.equal(after.device, "Minih-Mac-Studio");
+
+  await assert.rejects(backend.onPanelInvoke("kg.conversations.device", { deviceName: "" }), /CONFIG_INVALID/);
+  await assert.rejects(backend.onPanelInvoke("kg.conversations.device", { deviceName: "///" }), /CONFIG_INVALID/);
+
+  const { readdir } = await import("node:fs/promises");
+  const vaultEntries = await readdir(vault);
+  assert.ok(!vaultEntries.includes("conversation-settings.json"), "the name lives outside the vault");
+  const home = process.env.HOME;
+  assert.ok(
+    (await readdir(path.join(home, ".personal-knowledge"))).includes("conversation-settings.json"),
+    "the name is stored per computer in ~/.personal-knowledge",
+  );
+});
+
+test("kg.models.list answers the host catalog and an empty list without the API", async () => {
+  const { backend } = await makeBackend();
+  const withoutApi = await backend.onPanelInvoke("kg.models.list", {});
+  assert.deepEqual(withoutApi.models, []);
+
+  globalThis.pi.models = {
+    list: async () => [
+      { key: "minih-router/deepseek-flash", providerId: "minih-router", modelId: "deepseek-flash", label: "DeepSeek Flash", alias: "快速" },
+      { key: "anthropic/claude-sonnet-4", providerId: "anthropic", modelId: "claude-sonnet-4", label: "Claude Sonnet 4" },
+    ],
+  };
+  const listed = await backend.onPanelInvoke("kg.models.list", {});
+  assert.deepEqual(listed.models, [
+    { key: "minih-router/deepseek-flash", label: "快速" },
+    { key: "anthropic/claude-sonnet-4", label: "Claude Sonnet 4" },
+  ]);
+});
+
+test("the weekly scheduler runs on load when due, respects the switch, and stops on unload", async () => {
+  const { backend, root, vault } = await makeBackend();
+  const { mkdir: mk, readdir } = await import("node:fs/promises");
+  await mk(path.join(vault, "09 Conversations", "Demo"), { recursive: true });
+  await mk(path.join(vault, "00 Inbox"), { recursive: true });
+  await writeFile(
+    path.join(vault, "09 Conversations", "Demo", "2026-11-08 Deploy 11111111.md"),
+    `---\ntitle: "Deploy"\ntype: conversation\nsession_id: "11111111"\nproject: "Demo"\ndevice: "mac-a"\ncreated: 2026-11-08\nupdated: 2026-11-08\n---\n# Deploy\n\n## Goal\n\nShip it.\n`,
+  );
+  const settingsPath = path.join(root, "profile.json");
+  process.env.PERSONAL_KNOWLEDGE_PROFILE_SETTINGS = settingsPath;
+
+  const runs = [];
+  globalThis.pi.agent = {
+    complete: async (input) => {
+      runs.push(input.modelKey);
+      return { text: "- 偏好先出方案", modelKey: input.modelKey };
+    },
+  };
+
+  // Off by default: onLoad's check must not call the model.
+  await backend.onUnload();
+  await backend.onLoad();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(runs, [], "a disabled switch never runs on load");
+
+  // Turning it on with a model makes the next load run once.
+  await writeFile(settingsPath, JSON.stringify({ enabled: true, modelKey: "test/model" }));
+  await backend.onUnload();
+  await backend.onLoad();
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.deepEqual(runs, ["test/model"], "a due check runs once at startup");
+  const written = (await readdir(path.join(vault, "00 Inbox"))).filter((name) => name.endsWith(".md"));
+  assert.equal(written.length, 1);
+  assert.equal(written[0].normalize("NFC"), "画像候选 " + new Date().toISOString().slice(0, 10) + ".md");
+
+  // The run recorded itself, so a second load stays inside the week.
+  await backend.onUnload();
+  await backend.onLoad();
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.equal(runs.length, 1, "no second run inside the week");
+
+  await backend.onUnload();
+  delete process.env.PERSONAL_KNOWLEDGE_PROFILE_SETTINGS;
+});

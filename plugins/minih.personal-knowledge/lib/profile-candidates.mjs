@@ -102,13 +102,16 @@ export async function runProfileCandidate({
   service,
   pi = globalThis.pi,
   settings,
-  now = new Date(),
+  // Not `now = new Date()`: a default is evaluated once at module load, which
+  // would freeze the clock for every later run.
+  now = null,
   home = os.homedir(),
   env = process.env,
   log = null,
 } = {}) {
+  const at = now ?? new Date();
   const state = settings ?? (await readProfileSettings(profileSettingsPath({ home, env })));
-  const due = candidateDue(state, now);
+  const due = candidateDue(state, at);
   if (!due.due) return { written: false, reason: due.reason, nextEligibleAt: due.nextEligibleAt ?? null };
   const complete = pi?.agent?.complete;
   if (typeof complete !== "function") return { written: false, reason: "AGENT_COMPLETE_UNAVAILABLE" };
@@ -119,7 +122,7 @@ export async function runProfileCandidate({
     return { written: false, reason: "NO_MATERIAL" };
   }
 
-  const day = now.toISOString().slice(0, 10);
+  const day = at.toISOString().slice(0, 10);
   const prompt = buildPrompt({ sessions, memoryEntries });
   let text;
   try {
@@ -131,11 +134,15 @@ export async function runProfileCandidate({
     });
     text = String(result?.text ?? "").trim();
   } catch (error) {
-    await writeProfileSettings(profileSettingsPath({ home, env }), { ...state, lastRunAt: now.toISOString(), lastError: String(error?.code ?? error?.message ?? "UNKNOWN") });
+    await writeProfileSettings(profileSettingsPath({ home, env }), {
+      ...state,
+      lastRunAt: at.toISOString(),
+      lastError: String(error?.code ?? error?.message ?? "UNKNOWN"),
+    });
     return { written: false, reason: "MODEL_FAILED" };
   }
   if (!text) {
-    await writeProfileSettings(profileSettingsPath({ home, env }), { ...state, lastRunAt: now.toISOString(), lastError: "EMPTY" });
+    await writeProfileSettings(profileSettingsPath({ home, env }), { ...state, lastRunAt: at.toISOString(), lastError: "EMPTY" });
     return { written: false, reason: "EMPTY" };
   }
 
@@ -174,7 +181,7 @@ export async function runProfileCandidate({
   }
   await writeProfileSettings(profileSettingsPath({ home, env }), {
     ...state,
-    lastRunAt: now.toISOString(),
+    lastRunAt: at.toISOString(),
     lastError: null,
     lastCandidate: relative,
   });
@@ -264,4 +271,88 @@ async function collectUserMemory(pi) {
     offset = result.nextOffset;
   }
   return entries.slice(0, MAX_MEMORY_ENTRIES);
+}
+
+/**
+ * The weekly automatic run (ADR 0002 §8).
+ *
+ * A plain checker on a six-hour timer: it starts nothing when the switch is
+ * off, when no model is chosen, when the last attempt is younger than a week,
+ * or when the plugin is read-only. `onLoad` starts it and `onUnload` stops it;
+ * the timer never keeps the process alive and never overlaps itself.
+ */
+export const SCHEDULE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+export class ProfileCandidateScheduler {
+  constructor({
+    run,
+    settings = null,
+    now = () => new Date(),
+    intervalMs = SCHEDULE_INTERVAL_MS,
+    isReadOnly = async () => false,
+    log = null,
+  } = {}) {
+    this.run = run;
+    this.settings = settings;
+    this.now = now;
+    this.intervalMs = intervalMs;
+    this.isReadOnly = isReadOnly;
+    this.log = log;
+    this.timer = null;
+    this.running = null;
+    this.stopped = true;
+    this.lastCheck = null;
+  }
+
+  start() {
+    if (!this.stopped) return this;
+    this.stopped = false;
+    void this.check({ reason: "startup" });
+    this.timer = setInterval(() => {
+      void this.check({ reason: "interval" });
+    }, this.intervalMs);
+    if (typeof this.timer?.unref === "function") this.timer.unref();
+    return this;
+  }
+
+  async stop() {
+    this.stopped = true;
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    if (this.running) {
+      try {
+        await this.running;
+      } catch {
+        // A failed run already recorded its reason in the settings file.
+      }
+    }
+  }
+
+  /** One check; a check already in flight is shared. */
+  check({ reason = "manual" } = {}) {
+    if (this.running) return this.running;
+    this.running = this.#tick(reason)
+      .catch((error) => ({ ran: false, reason: String(error?.code ?? error?.message ?? "UNKNOWN") }))
+      .finally(() => {
+        this.running = null;
+      });
+    return this.running;
+  }
+
+  async #tick(reason) {
+    // Every path obeys the lifecycle: after `onUnload` no check runs, whether a
+    // timer fired late or a caller asked directly.
+    if (this.stopped) return { ran: false, reason: "STOPPED" };
+    const settings = this.settings ? await this.settings() : null;
+    const due = candidateDue(settings ?? {}, this.now());
+    this.lastCheck = { at: this.now().toISOString(), reason, due: due.reason, ran: false };
+    if (!due.due) return { ran: false, reason: due.reason };
+    if (await this.isReadOnly()) return { ran: false, reason: "READ_ONLY" };
+    this.lastCheck.ran = true;
+    const result = await this.run();
+    if (typeof this.log === "function") this.log(`[profile] scheduled run (${reason}): ${result?.written ? "written" : result?.reason}`);
+    return { ran: true, result };
+  }
 }
