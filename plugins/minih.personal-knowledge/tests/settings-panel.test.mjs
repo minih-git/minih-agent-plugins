@@ -456,3 +456,45 @@ test("the weekly scheduler runs on load when due, respects the switch, and stops
   await backend.onUnload();
   delete process.env.PERSONAL_KNOWLEDGE_PROFILE_SETTINGS;
 });
+
+test("kg.profile.run bypasses the weekly window, the scheduler does not", async () => {
+  const { backend, root, vault } = await makeBackend();
+  const { mkdir: mk, readdir } = await import("node:fs/promises");
+  await mk(path.join(vault, "09 Conversations", "Demo"), { recursive: true });
+  await mk(path.join(vault, "00 Inbox"), { recursive: true });
+  await writeFile(
+    path.join(vault, "09 Conversations", "Demo", "2026-11-08 Deploy 11111111.md"),
+    `---\ntitle: "Deploy"\ntype: conversation\nsession_id: "11111111"\nproject: "Demo"\ndevice: "mac-a"\ncreated: 2026-11-08\nupdated: 2026-11-08\n---\n# Deploy\n\n## Goal\n\nShip it.\n`,
+  );
+  const settingsPath = path.join(root, "profile.json");
+  process.env.PERSONAL_KNOWLEDGE_PROFILE_SETTINGS = settingsPath;
+  const twoDaysAgo = new Date(Date.now() - 2 * 86_400_000).toISOString();
+  await writeFile(settingsPath, JSON.stringify({ enabled: true, modelKey: "test/model", lastRunAt: twoDaysAgo }));
+
+  const runs = [];
+  globalThis.pi.agent = {
+    complete: async (input) => {
+      runs.push(input.modelKey);
+      return { text: "- 偏好先出方案", modelKey: input.modelKey };
+    },
+  };
+
+  const status = await backend.onPanelInvoke("kg.profile.status", {});
+  assert.equal(status.due.reason, "TOO_SOON", "the automatic schedule is inside the week");
+
+  // The panel's "Generate now" is a manual action: it runs anyway.
+  const manual = await backend.onPanelInvoke("kg.profile.run", {});
+  assert.equal(manual.result.written, true, JSON.stringify(manual.result));
+  assert.deepEqual(runs, ["test/model"]);
+  assert.equal(manual.due.reason, "TOO_SOON", "the week restarts from this run");
+  const written = (await readdir(path.join(vault, "00 Inbox"))).filter((name) => name.endsWith(".md"));
+  assert.equal(written.length, 1);
+
+  // The scheduler path still obeys the window: a fresh load writes nothing.
+  await backend.onUnload();
+  await backend.onLoad();
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.equal(runs.length, 1, "the scheduled check is still inside the week");
+  await backend.onUnload();
+  delete process.env.PERSONAL_KNOWLEDGE_PROFILE_SETTINGS;
+});

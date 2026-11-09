@@ -706,10 +706,14 @@ async function writeProfileSettingsFile(filePath, values) {
 }
 
 /**
- * Draft an L0 profile candidate into `00 Inbox/` (ADR 0002 §6). The profile
+ * Draft an L0 profile candidate into `00 Inbox/` (ADR 0002 §6, §8). The profile
  * note is never edited here; merging stays the user's action.
+ *
+ * `manual` marks a run the user asked for from the panel: it ignores the
+ * one-per-week window but still needs the switch, a model, and a writable
+ * vault. The automatic schedule passes `manual: false`.
  */
-async function profileRun(payload) {
+async function profileRun(payload, { manual = true } = {}) {
   const { runProfileCandidate } = await import("./lib/profile-candidates.mjs");
   await ensureState();
   const service = await ensurePanelService();
@@ -718,7 +722,7 @@ async function profileRun(payload) {
   }
   if (!service.pi) service.pi = globalThis.pi ?? null;
   const settings = payload?.settings ?? undefined;
-  const result = await runProfileCandidate({ service, settings });
+  const result = await runProfileCandidate({ service, settings, manual });
   return { result, ...(await profileStatus()) };
 }
 
@@ -846,7 +850,7 @@ async function startProfileScheduler() {
   const { ProfileCandidateScheduler } = await import("./lib/profile-candidates.mjs");
   profileScheduler = new ProfileCandidateScheduler({
     settings: async () => (await profileStatus()).settings,
-    run: () => profileRun({}),
+    run: () => profileRun({}, { manual: false }),
     isReadOnly: isReadOnlyMode,
   });
   profileScheduler.start();

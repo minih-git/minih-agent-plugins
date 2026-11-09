@@ -102,6 +102,13 @@ export async function runProfileCandidate({
   service,
   pi = globalThis.pi,
   settings,
+  /**
+   * A run the user asked for right now (`kg.profile.run`). It ignores the
+   * one-per-week limit — and only that: the switch must be on, a model must be
+   * chosen, and the vault must not be read-only, exactly like an automatic run.
+   * The attempt still records `lastRunAt`, so the schedule restarts from it.
+   */
+  manual = false,
   // Not `now = new Date()`: a default is evaluated once at module load, which
   // would freeze the clock for every later run.
   now = null,
@@ -112,7 +119,11 @@ export async function runProfileCandidate({
   const at = now ?? new Date();
   const state = settings ?? (await readProfileSettings(profileSettingsPath({ home, env })));
   const due = candidateDue(state, at);
-  if (!due.due) return { written: false, reason: due.reason, nextEligibleAt: due.nextEligibleAt ?? null };
+  // The weekly window is the only condition a manual run lifts; DISABLED and
+  // MODEL_REQUIRED still stop it here, before anything is read or sent.
+  if (!due.due && !(manual && due.reason === "TOO_SOON")) {
+    return { written: false, reason: due.reason, nextEligibleAt: due.nextEligibleAt ?? null };
+  }
   const complete = pi?.agent?.complete;
   if (typeof complete !== "function") return { written: false, reason: "AGENT_COMPLETE_UNAVAILABLE" };
 
