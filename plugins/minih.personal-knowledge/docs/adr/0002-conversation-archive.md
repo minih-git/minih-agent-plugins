@@ -173,9 +173,9 @@ additional permission; without the host API the panel falls back to typing
   feed), `agent.complete` (profile candidates) and `models.list` (the model
   list in the panel). The second one only ever runs when the user turns the
   feature on and names a model, but it is shown at install time.
-- `engines.minihAgent` / `piDesktop` move to `>=1.0.0`, the first Desktop
-  release whose changelog carries `conversation.read`. The 1.0.0 entry was
-  unreleased when this ADR was written.
+- `engines.minihAgent` / `piDesktop` move to `>=1.4.0`, the first published
+  Desktop release whose changelog carries `conversation.read`. Hosts 1.0.0–1.3.x
+  do not know the permission and would refuse this manifest.
 - `VaultIndex` learned to match a nested `ignoreFolders` entry as a path
   prefix; a plain top-level name behaves exactly as before.
 - The vault grows with the archive; L3 is the bulk of it. Deleting a

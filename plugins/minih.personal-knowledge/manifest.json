@@ -71,8 +71,8 @@
     "ui.panel"
   ],
   "engines": {
-    "minihAgent": ">=1.0.0",
-    "piDesktop": ">=1.0.0"
+    "minihAgent": ">=1.4.0",
+    "piDesktop": ">=1.4.0"
   },
   "activationEvents": [
     "onStartup"
