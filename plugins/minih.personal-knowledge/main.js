@@ -1,5 +1,6 @@
 /**
- * Personal Knowledge plugin backend (ADR 0001 §10 and §9).
+ * Personal Knowledge plugin backend (ADR 0001 §10 and §9; conversation archive
+ * in ADR 0002).
  *
  * Since 0.2.0 this module backs the Knowledge Universe view. It loads the same
  * shared index the MCP server uses (raw Node reads, like the MCP server: no
@@ -11,6 +12,12 @@
  * show learned-memory satellites next to their project and promote a mature
  * `fact` or `reference` into a vault note. Memory is read-only here; archiving
  * the original entry stays the user's action in the Desktop memory manager.
+ *
+ * Since 0.5.0 the backend also runs the conversation archive syncer: one pass
+ * at startup and one every five minutes, writing L2/L3 notes under
+ * `09 Conversations/` for sessions the host reports through the read-only
+ * `conversation.read` API (ADR 0002). The syncer owns the timer and stops with
+ * the plugin.
  */
 "use strict";
 
@@ -41,6 +48,10 @@ const CHANNELS = new Set([
   "kg.memory.status",
   "kg.prefs.get",
   "kg.prefs.set",
+  "kg.conversations.status",
+  "kg.conversations.sync",
+  "kg.profile.status",
+  "kg.profile.run",
   "kg.openSettings",
 ]);
 
@@ -49,6 +60,7 @@ const USER_CENTER_ID = "memory:user-center";
 
 let state = null;
 let panelStores = null;
+let conversationSyncer = null;
 let indexRun = null; // { controller, done, total, mode, error }
 let lastIndexRun = null; // survives unload so status can still report
 
@@ -617,6 +629,21 @@ async function settingsTest(payload) {
   }
 }
 
+/**
+ * Draft an L0 profile candidate into `00 Inbox/` (ADR 0002 §6). The profile
+ * note is never edited here; merging stays the user's action.
+ */
+async function profileRun(payload) {
+  const { runProfileCandidate } = await import("./lib/profile-candidates.mjs");
+  await ensureState();
+  const service = await ensurePanelService();
+  if (await isReadOnlyMode()) {
+    throw new Error(`profile candidates are refused: ${readOnlyState.refusalReason()}.`);
+  }
+  if (!service.pi) service.pi = globalThis.pi ?? null;
+  return runProfileCandidate({ service, settings: payload?.settings ?? undefined });
+}
+
 async function onPanelInvoke(channel, payload) {
   if (!CHANNELS.has(channel)) throw refusal(`unknown channel: ${channel}`);
   if (channel === "kg.graph") return graph(payload);
@@ -644,6 +671,21 @@ async function onPanelInvoke(channel, payload) {
     const listed = await globalThis.pi.memory.list({ limit: 1 });
     return { readEnabled: listed.readEnabled !== false };
   }
+  if (channel === "kg.conversations.status") {
+    return conversationSyncer ? conversationSyncer.status() : { state: "stopped", device: null };
+  }
+  if (channel === "kg.conversations.sync") {
+    if (!conversationSyncer) return { state: "stopped" };
+    return conversationSyncer.syncOnce({ reason: "manual" });
+  }
+  if (channel === "kg.profile.status") {
+    const { candidateDue, profileSettingsPath, readProfileSettings } = await import("./lib/profile-candidates.mjs");
+    const state = await readProfileSettings(profileSettingsPath());
+    return { settings: state, ...candidateDue(state) };
+  }
+  if (channel === "kg.profile.run") {
+    return profileRun(payload);
+  }
   if (channel === "kg.prefs.get") return panelStoresFor().prefs.get();
   if (channel === "kg.prefs.set") return panelStoresFor().prefs.set(String(payload?.language ?? ""));
   if (channel === "kg.openSettings") {
@@ -656,12 +698,40 @@ async function onPanelInvoke(channel, payload) {
   throw refusal(`unknown channel: ${channel}`);
 }
 
+/**
+ * Start the conversation archive syncer (ADR 0002 §1). It needs the read-only
+ * `conversation.read` API and a vault that exists; anything missing leaves it
+ * off without failing the plugin load.
+ */
+async function startConversationSync() {
+  if (conversationSyncer) return conversationSyncer;
+  if (typeof globalThis.pi?.conversations?.changes !== "function") return null;
+  const { ConversationSyncer, archiveConfig } = await import("./lib/conversation-sync.mjs");
+  const loaded = await ensureState().catch(() => null);
+  if (!loaded) return null;
+  const { redactSensitiveContent } = await import("./lib/redact.mjs");
+  conversationSyncer = new ConversationSyncer({
+    pi: globalThis.pi,
+    vaultRoot: loaded.index.root,
+    config: archiveConfig(loaded.config ?? {}),
+    redact: redactSensitiveContent,
+  });
+  conversationSyncer.start();
+  return conversationSyncer;
+}
+
 async function onLoad() {
   // Warm the index so the first view render does not pay for the vault scan.
   await ensureState().catch(() => {});
+  await startConversationSync().catch(() => null);
 }
 
 async function onUnload() {
+  if (conversationSyncer) {
+    const syncer = conversationSyncer;
+    conversationSyncer = null;
+    await syncer.stop().catch(() => {});
+  }
   indexRun?.controller?.abort();
   indexRun = null;
   panelStores = null;

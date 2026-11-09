@@ -22,6 +22,8 @@ import {
   loadEmbeddingSettings,
   resolveApiKey,
 } from "../lib/embeddings.mjs";
+import { CONVERSATIONS_FOLDER, isConversationPath } from "../lib/conversation-layout.mjs";
+import { ARCHIVE_CAVEAT, readConversation, recentConversations, searchConversations } from "../lib/conversation-search.mjs";
 import { composeNote, parseFrontmatter, patchFrontmatterSource } from "../lib/frontmatter.mjs";
 import { loadOntology } from "../lib/ontology.mjs";
 import { redactSensitiveContent, findSensitiveContent, redactionViolation } from "../lib/redact.mjs";
@@ -76,6 +78,20 @@ function normalizeRelative(value, { extensions = new Set([".md", ".base"]) } = {
 
 function isInside(root, candidate) {
   return candidate === root || candidate.startsWith(`${root}${path.sep}`);
+}
+
+/**
+ * `09 Conversations` stays out of `knowledge_search` unless the caller opts in
+ * with `include: ["conversations"]` (ADR 0002 §5): summaries and daily pages
+ * are searchable, the transcript subtree never is.
+ */
+function includesConversations(include) {
+  if (include === undefined || include === null) return false;
+  const values = Array.isArray(include) ? include : [include];
+  return values.some((value) => {
+    const name = String(value ?? "").trim().toLowerCase();
+    return name === "conversations" || name === "09 conversations" || name === "conversation";
+  });
 }
 
 async function exists(filePath) {
@@ -601,7 +617,7 @@ export class KnowledgeService {
     return neighbors;
   }
 
-  async #searchRanked({ query, limit, scope }) {
+  async #searchRanked({ query, limit, scope, includeConversations = false }) {
     await this.index.refresh();
     const budget = this.embedding && !this.backgroundRefreshed ? 3000 : 0;
     if (budget > 0) {
@@ -609,7 +625,8 @@ export class KnowledgeService {
       this.backgroundRefreshed = true;
     }
     const inScope = (relative) =>
-      !scope || relative === scope || relative.startsWith(`${scope}/`);
+      (!scope || relative === scope || relative.startsWith(`${scope}/`)) &&
+      (includeConversations || !isConversationPath(relative));
 
     // Lexical channel: chunk-level BM25F grouped by note.
     const bm25 = this.#bm25For();
@@ -724,7 +741,7 @@ export class KnowledgeService {
     };
   }
 
-  async search({ query, scope, mode, limit } = {}) {
+  async search({ query, scope, mode, limit, include } = {}) {
     let normalizedMode = mode ?? "ranked";
     if (!new Set(["ranked", "all", "any"]).has(normalizedMode)) {
       throw new Error('mode must be "ranked", "all", or "any".');
@@ -738,8 +755,9 @@ export class KnowledgeService {
       }
       normalizedScope = path.posix.normalize(rawScope).replace(/^\.\//, "").replace(/\/$/, "");
     }
+    const includeConversations = includesConversations(include);
     if (normalizedMode === "ranked") {
-      return this.#searchRanked({ query, limit: resultLimit, scope: normalizedScope });
+      return this.#searchRanked({ query, limit: resultLimit, scope: normalizedScope, includeConversations });
     }
 
     const terms = splitTerms(query);
@@ -747,6 +765,7 @@ export class KnowledgeService {
     const results = [];
     for (const relative of this.index.paths()) {
       if (normalizedScope && relative !== normalizedScope && !relative.startsWith(`${normalizedScope}/`)) continue;
+      if (!includeConversations && isConversationPath(relative)) continue;
       const record = this.index.note(relative);
       if (!record) continue;
       const raw = record.raw;
@@ -880,9 +899,21 @@ export class KnowledgeService {
         missing.push({ path: requested, error: error.message });
       }
     }
+    // Archived conversations of this project: links and titles only, never
+    // content (ADR 0002 §5). A search for the details stays an explicit call.
+    let conversations = { project: null, count: 0, items: [] };
+    try {
+      const projectFolder = await this.#conversationProjectFolder({ workingPath, mappingProjects, metadataProjects });
+      conversations = await this.conversationsFor({ project: projectFolder, limit: 3 });
+    } catch {
+      // A missing or unreadable conversation folder is simply no history.
+    }
+
     return {
       cwd: workingPath || null,
       topic: topic || null,
+      conversations,
+      conversationCaveat: conversations.count > 0 ? ARCHIVE_CAVEAT : null,
       matchedProjects: unique([
         ...mappingProjects.map((project) => project.name),
         ...metadataProjects.map((record) => record.title),
@@ -894,6 +925,34 @@ export class KnowledgeService {
       truncated: remaining <= 0,
       noteOrder: "project/route notes first, then default notes (head-only)",
     };
+  }
+
+  /** `conversation_search`: L2 summaries and daily pages, current project first. */
+  async conversationSearch({ query, scope, project, limit, cwd } = {}) {
+    return searchConversations(this, { query, scope, project, limit, cwd });
+  }
+
+  /** Whether the user's archive switch is on, as the host last reported it. */
+  async archiveState() {
+    const api = this.pi?.conversations;
+    if (!api || typeof api.changes !== "function") return { available: false, enabled: false };
+    try {
+      const page = await api.changes({ limit: 1 });
+      this.archiveEnabled = page?.enabled !== false;
+    } catch {
+      this.archiveEnabled = false;
+    }
+    return { available: true, enabled: this.archiveEnabled === true };
+  }
+
+  /** `conversation_read`: one session's summary, or its L3 transcript. */
+  async conversationRead(input = {}) {
+    return readConversation(this, input);
+  }
+
+  /** Newest archived sessions of a project, as links for `knowledge_context`. */
+  async conversationsFor({ project = null, limit = 3 } = {}) {
+    return recentConversations(this, { project, limit });
   }
 
   async stale({ limit, includeUnverified = true } = {}) {
@@ -970,6 +1029,26 @@ export class KnowledgeService {
   }
 
   /** Lint every note; returns `{ issues: [{ path, code, detail }], summary }`. */
+  /**
+   * Project folder for the conversation archive: the repo-map entry that
+   * matched the working directory, then a project note's `repo`, then the
+   * working directory's own name.
+   */
+  async #conversationProjectFolder({ workingPath, mappingProjects, metadataProjects }) {
+    const { projectFolderFor } = await import("../lib/conversation-layout.mjs");
+    if (mappingProjects.length > 0) {
+      const name = mappingProjects[0].name;
+      const mapped = projectFolderFor({ name, path: workingPath }, this.config);
+      if (mapped) return mapped;
+    }
+    for (const record of metadataProjects) {
+      const repoPath = typeof record.metadata?.repo === "string" ? record.metadata.repo.trim() : "";
+      if (repoPath) return projectFolderFor({ name: record.title, path: repoPath }, this.config);
+    }
+    if (workingPath) return projectFolderFor({ name: path.basename(workingPath), path: workingPath }, this.config);
+    return null;
+  }
+
   async lintVault() {
     await this.index.refresh();
     const issues = [];

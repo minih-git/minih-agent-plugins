@@ -1,5 +1,5 @@
 {
-  "$comment": "Personal mapping for the Personal Knowledge plugin. Drop this file at ~/.personal-knowledge/repo-map.json and the plugin picks it up automatically (no settings needed); or point PERSONAL_KNOWLEDGE_CONFIG at any path. Optional top-level keys: vaultPath (absolute path to a non-default Obsidian vault), defaultNotes, projects, topicRoutes, ignoreFolders, backupRetentionDays. Paths are vault-relative except repoPrefixes, which are absolute filesystem prefixes.",
+  "$comment": "Personal mapping for the Personal Knowledge plugin. Drop this file at ~/.personal-knowledge/repo-map.json and the plugin picks it up automatically (no settings needed); or point PERSONAL_KNOWLEDGE_CONFIG at any path. Optional top-level keys: vaultPath (absolute path to a non-default Obsidian vault), defaultNotes, projects, topicRoutes, ignoreFolders, backupRetentionDays. The conversation archive appends 09 Conversations/_raw and 09 Conversations/_daily to ignoreFolders by itself (see ADR 0002), so a transcript is never indexed. Paths are vault-relative except repoPrefixes, which are absolute filesystem prefixes.",
   "defaultNotes": [],
   "projects": [
     {
@@ -31,7 +31,9 @@
     ".obsidian",
     ".personal-knowledge",
     ".git",
-    "Templates"
+    "Templates",
+    "09 Conversations/_raw",
+    "09 Conversations/_daily"
   ],
   "backupRetentionDays": 30
 }
