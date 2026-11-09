@@ -203,8 +203,12 @@ export class VaultIndex {
       if (entry.name.startsWith(".")) continue;
       const absolute = path.join(current, entry.name);
       const relative = path.relative(this.root, absolute).split(path.sep).join("/");
-      const topLevel = relative.split("/")[0];
-      if (this.ignored.has(topLevel)) continue;
+      // `ignoreFolders` names a folder: a plain top-level name, or a
+      // vault-relative path such as `09 Conversations/_raw` (ADR 0002 §4).
+      if (this.ignored.has(relative.split("/")[0])) continue;
+      if ([...this.ignored].some((entry) => entry.includes("/") && (relative === entry || relative.startsWith(`${entry}/`)))) {
+        continue;
+      }
       if (entry.isDirectory()) {
         await this.#walk(absolute, output);
         continue;

@@ -25,6 +25,8 @@
         <a href="#sec-health" id="nav-health" class="nav-pill"></a>
         <a href="#sec-routing" id="nav-routing" class="nav-pill"></a>
         <a href="#sec-memory" id="nav-memory" class="nav-pill"></a>
+        <a href="#sec-conversations" id="nav-conversations" class="nav-pill"></a>
+        <a href="#sec-profile" id="nav-profile" class="nav-pill"></a>
       </nav>
     </header>
 
@@ -331,6 +333,114 @@
           <span id="memory-status-badge" class="status-pill">—</span>
         </div>
         <p id="memory-where-hint" class="field-hint"></p>
+      </section>
+
+      <!-- 8. Conversation archive -->
+      <section id="sec-conversations" class="panel-section">
+        <div class="section-header">
+          <div>
+            <h2 id="conversations-heading" class="section-title"></h2>
+            <p id="conversations-desc" class="section-desc"></p>
+          </div>
+          <div class="section-badges">
+            <span id="conversations-state-badge" class="status-pill status-muted">—</span>
+          </div>
+        </div>
+
+        <div class="memory-row">
+          <span id="label-conversations-archive" class="field-label"></span>
+          <span id="conversations-archive-badge" class="status-pill status-muted">—</span>
+        </div>
+        <p id="conversations-where-hint" class="field-hint"></p>
+
+        <div class="memory-row">
+          <span id="label-conversations-synced" class="field-label"></span>
+          <span id="conversations-synced-value" class="field-value">—</span>
+        </div>
+        <div class="memory-row">
+          <span id="label-conversations-counts" class="field-label"></span>
+          <span id="conversations-counts-value" class="field-value">—</span>
+        </div>
+        <div id="row-conversations-error" class="memory-row is-hidden">
+          <span id="label-conversations-error" class="field-label"></span>
+          <code id="conversations-error-value" class="mono-inline">—</code>
+        </div>
+
+        <div class="field-group">
+          <div class="field-label-row">
+            <label id="label-conversations-device" for="conversations-device" class="field-label"></label>
+          </div>
+          <input id="conversations-device" type="text" class="field-input" autocomplete="off" spellcheck="false" />
+          <div id="hint-conversations-device" class="field-hint"></div>
+        </div>
+
+        <div id="conversations-feedback" class="settings-feedback is-hidden" role="alert"></div>
+        <div class="section-actions">
+          <button id="btn-conversations-save-device" type="button" class="ghost-btn">
+            <span id="label-conversations-save-device"></span>
+          </button>
+          <button id="btn-conversations-sync" type="button" class="primary-btn">
+            <span id="label-conversations-sync"></span>
+          </button>
+        </div>
+      </section>
+
+      <!-- 9. Profile candidates -->
+      <section id="sec-profile" class="panel-section">
+        <div class="section-header">
+          <div>
+            <h2 id="profile-heading" class="section-title"></h2>
+            <p id="profile-desc" class="section-desc"></p>
+          </div>
+        </div>
+
+        <label class="checkbox-row" for="profile-enabled">
+          <input id="profile-enabled" type="checkbox" />
+          <span id="label-profile-enabled"></span>
+        </label>
+        <div id="hint-profile-enabled" class="field-hint"></div>
+
+        <div class="field-group">
+          <div class="field-label-row">
+            <label id="label-profile-model" for="profile-model" class="field-label"></label>
+            <span id="profile-model-badge" class="badge badge-muted"></span>
+          </div>
+          <input id="profile-model" type="text" class="field-input" autocomplete="off" spellcheck="false" list="profile-model-options" />
+          <datalist id="profile-model-options"></datalist>
+          <div id="hint-profile-model" class="field-hint"></div>
+        </div>
+
+        <div class="memory-row">
+          <span id="label-profile-last-run" class="field-label"></span>
+          <span id="profile-last-run-value" class="field-value">—</span>
+        </div>
+        <div id="row-profile-next-run" class="memory-row is-hidden">
+          <span id="label-profile-next-run" class="field-label"></span>
+          <span id="profile-next-run-value" class="field-value">—</span>
+        </div>
+        <div id="row-profile-error" class="memory-row is-hidden">
+          <span id="label-profile-error" class="field-label"></span>
+          <code id="profile-error-value" class="mono-inline">—</code>
+        </div>
+        <div id="row-profile-candidate" class="memory-row is-hidden">
+          <span id="label-profile-candidate" class="field-label"></span>
+          <span class="field-Inline-tags">
+            <span id="profile-candidate-value" class="mono-path"></span>
+            <button id="btn-profile-copy-link" type="button" class="ghost-btn ghost-btn-compact">
+              <span id="label-profile-copy-link"></span>
+            </button>
+          </span>
+        </div>
+
+        <div id="profile-feedback" class="settings-feedback is-hidden" role="alert"></div>
+        <div class="section-actions">
+          <button id="btn-profile-save" type="button" class="ghost-btn">
+            <span id="label-profile-save"></span>
+          </button>
+          <button id="btn-profile-run" type="button" class="primary-btn">
+            <span id="label-profile-run"></span>
+          </button>
+        </div>
       </section>
     </main>
 

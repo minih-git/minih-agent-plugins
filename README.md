@@ -40,10 +40,20 @@ keeping its own `LICENSE` and notice files inside its directory.
 
 | Plugin | Version | Author | License | Upstream |
 | --- | --- | --- | --- | --- |
-| `minih.personal-knowledge` (`Personal Knowledge`) | 0.4.1 | minih-git | MIT | this repository |
+| `minih.personal-knowledge` (`Personal Knowledge`) | 0.5.0 | minih-git | MIT | this repository |
 | `minih.selection-translate` (`Selection Translate`) | 0.3.2 | minih-git | MIT | this repository |
 | `minih.cache-keepwarm` (`Cache keep-warm`) | 0.1.0 | minih-git | MIT | this repository |
 | `pi.file-manager` (`File Manager`) | 0.9.0 | Tioit-Wang | not declared by the author | not published by the author |
+
+`minih.personal-knowledge` 0.5.0 adds the conversation archive (ADR 0002 in
+its `docs/adr/`): it archives Desktop conversations into `09 Conversations/`
+inside the vault, adds `conversation_search` and `conversation_read`, and asks
+for three more permissions — `conversation.read`, `agent.complete` and
+`models.list`. Its settings panel gains two sections: the archive status with
+"sync now" and an editable device name, and the weekly profile candidates with
+a model picker. It requires Desktop v1.4.0 or newer
+(`engines.minihAgent` is `>=1.4.0`), the first release that publishes
+`conversation.read`.
 
 The redistributed ones are listed with `trust: "community"` and
 `verified: false`: the `verified` badge is a claim about a publisher this

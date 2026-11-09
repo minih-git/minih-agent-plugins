@@ -4,6 +4,8 @@ import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
 const REQUIRED_TOOLS = [
+  "conversation_read",
+  "conversation_search",
   "knowledge_context",
   "knowledge_links",
   "knowledge_read",

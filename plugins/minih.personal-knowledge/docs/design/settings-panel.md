@@ -41,6 +41,8 @@ panel in its manifest. The plugin declares one and requests `ui.panel`:
 | Ontology health | The issue list now in the view, with the severity filter and a copy-link action per note | Read only |
 | Project routing | Projects (repo prefixes, aliases, notes), topic routes, default notes; notes that do not exist are flagged | Read only; edit `repo-map.json` by hand |
 | Memory | Whether learned-memory reading is enabled in Desktop, and where to turn it on | Read only |
+| Conversation archive | The Desktop archive switch, this computer's device name, the last sync time, what the last pass wrote and removed, the last error code; "Sync now" | Device name; sync action |
+| Profile candidates | The weekly switch, the model, the last run, the next allowed run, the last error code, the latest candidate with a copy-link action; "Generate now" (manual, ignores the weekly limit) | Yes |
 
 Ontology migration stays out of the panel; a session drives it.
 
@@ -89,6 +91,13 @@ Rules:
 | `kg.memory.status` | → `{ readEnabled }`, from `pi.memory.list({ limit: 1 })` |
 | `kg.prefs.get/set` | `{ language: "auto" \| "zh-CN" \| "en" }` |
 | `kg.openSettings` | → opens the panel |
+| `kg.conversations.status` | → the syncer status: `state`, `enabled`, `device`, `finishedAt`, `written`, `removed`, `skipped`, `error` (code only) |
+| `kg.conversations.sync` | → one pass, same shape as the status |
+| `kg.conversations.device` | `{ deviceName }` → `{ saved, deviceName }`; sanitized, stored in `~/.personal-knowledge/conversation-settings.json` |
+| `kg.profile.status` | → `{ settings: { enabled, modelKey }, lastRunAt, lastError, lastCandidate, due }` |
+| `kg.profile.set` | `{ values: { enabled?, modelKey? } }` → `{ saved, values }`. Any other key is refused by name |
+| `kg.profile.run` | → `{ result, …status }`. A manual run ignores the weekly limit; it is refused without the switch and a model |
+| `kg.models.list` | → `{ models: [{ key, label }] }` from `pi.models.list` (`models.list`) |
 
 ## 5. View changes
 
@@ -106,6 +115,10 @@ Rules:
 - The 3D / star-chart mode toggle is unchanged.
 
 ## 6. Lifecycle and concurrency
+
+- The profile-candidate check is a six-hour timer owned by `main.js`
+  (`ProfileCandidateScheduler`): `onLoad` starts it, `onUnload` clears it, and
+  every path obeys `candidateDue` (switch, model, one week, not read-only).
 
 - `main.js` owns at most one index run. A second `kg.index.rebuild` while one
   is running is refused with `RUNNING`.

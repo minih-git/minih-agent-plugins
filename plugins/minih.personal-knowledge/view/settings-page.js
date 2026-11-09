@@ -9,6 +9,8 @@
  * 5. Ontology health (`kg.graph` issues + severity filter + Obsidian link copy)
  * 6. Project routing (`kg.routing.get`, read-only with missing-note flags)
  * 7. Memory (`kg.memory.status`, read-only)
+ * 8. Conversation archive (`kg.conversations.status|sync|device`, ADR 0002)
+ * 9. Profile candidates (`kg.profile.status|set|run`, ADR 0002 §6–§8)
  */
 
 import { invokeBridge, hasBridge } from "./bridge.js";
@@ -397,6 +399,12 @@ const state = {
   healthSeverity: "all",
   routing: null,
   memoryStatus: { readEnabled: false },
+  conversations: null,
+  conversationsBusy: false,
+  conversationsDeviceDirty: false,
+  profile: null,
+  profileBusy: false,
+  profileModels: null,
   lastCopiedLink: null,
 };
 
@@ -1138,6 +1146,267 @@ function renderMemorySection() {
   badge.textContent = enabled ? t("memoryStatusEnabled") : t("memoryStatusDisabled");
 }
 
+// ---- Section 8: Conversation archive (`kg.conversations.*`) ----
+
+function formatStamp(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString();
+}
+
+function conversationStateKey(status) {
+  if (!status) return "conversationsStateIdle";
+  if (status.running) return "conversationsStateRunning";
+  const known = {
+    ok: "conversationsStateOk",
+    disabled: "conversationsStateDisabled",
+    error: "conversationsStateError",
+    stopped: "conversationsStateStopped",
+    unsupported: "conversationsStateUnsupported",
+    idle: "conversationsStateIdle",
+  };
+  return known[status.state] ?? "conversationsStateStopped";
+}
+
+async function loadConversationsStatus() {
+  if (!hasBridge()) {
+    state.conversations = null;
+    renderConversationsSection();
+    return;
+  }
+  try {
+    state.conversations = await invokeBridge("kg.conversations.status", {}, BRIDGE_TIMEOUT_MS);
+  } catch {
+    state.conversations = { state: "stopped", device: null };
+  }
+  renderConversationsSection();
+}
+
+function renderConversationsSection() {
+  const status = state.conversations;
+  const view = conversationsView(status);
+  const badge = $("conversations-state-badge");
+  badge.className = `status-pill status-${view.stateTone}`;
+  badge.textContent = t(view.stateKey);
+
+  // The host switch is only visible through `enabled`; a stopped syncer has
+  // nothing to report, so the row stays neutral rather than guessing.
+  const archiveBadge = $("conversations-archive-badge");
+  archiveBadge.className = `status-pill status-${view.archiveTone}`;
+  archiveBadge.textContent = !view.archiveKnown
+    ? "—"
+    : view.archiveOn
+      ? t("conversationsArchiveOn")
+      : t("conversationsArchiveOff");
+  // The hint says where the host switch lives; it is shown unless the switch
+  // is known to be on, and it never pretends to be a jump.
+  $("conversations-where-hint").classList.toggle("is-hidden", !view.showWhereHint);
+
+  $("conversations-synced-value").textContent = formatStamp(status?.finishedAt) ?? t("conversationsNever");
+  $("conversations-counts-value").textContent = status ? t("conversationsCountsValue", view.counts) : "—";
+
+  const error = view.error;
+  $("row-conversations-error").classList.toggle("is-hidden", !error);
+  $("conversations-error-value").textContent = error || "—";
+
+  const deviceInput = $("conversations-device");
+  if (!state.conversationsDeviceDirty) deviceInput.value = view.device;
+  $("conversations-device").disabled = Boolean(status?.running) || !hasBridge();
+  $("btn-conversations-sync").disabled = state.conversationsBusy || !hasBridge();
+  $("label-conversations-sync").textContent = state.conversationsBusy
+    ? t("conversationsSyncing")
+    : t("conversationsSyncNow");
+  $("btn-conversations-save-device").disabled = state.conversationsBusy || !hasBridge();
+}
+
+async function syncConversationsNow() {
+  if (state.conversationsBusy || !hasBridge()) return;
+  state.conversationsBusy = true;
+  setFeedback("conversations-feedback", "", false);
+  renderConversationsSection();
+  try {
+    const result = await invokeBridge("kg.conversations.sync", {}, BRIDGE_TIMEOUT_MS * 6);
+    if (result?.state === "error") {
+      setFeedback("conversations-feedback", String(result.error ?? "SYNC_FAILED"), true);
+    } else if (result?.state === "disabled") {
+      setFeedback("conversations-feedback", t("conversationsArchiveOff"), true);
+    } else {
+      setFeedback(
+        "conversations-feedback",
+        t("conversationsDone", { written: result?.written ?? 0, removed: result?.removed ?? 0 }),
+        false,
+      );
+    }
+  } catch (error) {
+    setFeedback("conversations-feedback", error?.message || String(error), true);
+  } finally {
+    state.conversationsBusy = false;
+    state.conversationsDeviceDirty = false;
+    await loadConversationsStatus();
+  }
+}
+
+async function saveConversationsDevice() {
+  if (!hasBridge()) return;
+  const deviceName = String($("conversations-device").value ?? "").trim();
+  try {
+    const result = await invokeBridge("kg.conversations.device", { deviceName }, BRIDGE_TIMEOUT_MS);
+    state.conversationsDeviceDirty = false;
+    showToast(t("conversationsDeviceSaved", { device: result?.deviceName ?? deviceName }));
+    await loadConversationsStatus();
+  } catch (error) {
+    setFeedback("conversations-feedback", error?.message || String(error), true);
+  }
+}
+
+// ---- Section 9: Profile candidates (`kg.profile.*`) ----
+
+function profileReasonText(code) {
+  const known = {
+    DISABLED: "profileReasonDisabled",
+    MODEL_REQUIRED: "profileReasonModelRequired",
+    TOO_SOON: "profileReasonTooSoon",
+    NO_MATERIAL: "profileReasonNoMaterial",
+    MODEL_FAILED: "profileReasonModelFailed",
+    READ_ONLY: "profileReasonReadOnly",
+    EMPTY: "profileReasonEmpty",
+  };
+  const key = known[String(code ?? "").toUpperCase()];
+  return key ? t(key) : String(code ?? "");
+}
+
+async function loadProfileModels() {
+  if (state.profileModels || !hasBridge()) return state.profileModels;
+  try {
+    const listed = await invokeBridge("kg.models.list", {}, BRIDGE_TIMEOUT_MS);
+    state.profileModels = Array.isArray(listed?.models) ? listed.models : Array.isArray(listed) ? listed : [];
+  } catch {
+    state.profileModels = [];
+  }
+  return state.profileModels;
+}
+
+async function loadProfileStatus({ models = false } = {}) {
+  if (!hasBridge()) {
+    state.profile = null;
+    renderProfileSection();
+    return;
+  }
+  try {
+    state.profile = await invokeBridge("kg.profile.status", {}, BRIDGE_TIMEOUT_MS);
+  } catch {
+    state.profile = null;
+  }
+  if (models) await loadProfileModels();
+  renderProfileSection();
+}
+
+function renderProfileModelOptions() {
+  const list = $("profile-model-options");
+  if (!list) return;
+  list.innerHTML = "";
+  for (const model of state.profileModels ?? []) {
+    const key = model?.key ?? model?.modelKey ?? "";
+    if (!key) continue;
+    const option = document.createElement("option");
+    option.value = String(key);
+    option.label = String(model.alias || model.label || model.name || key);
+    list.appendChild(option);
+  }
+}
+
+function renderProfileSection() {
+  const profile = state.profile;
+  const view = profileView(profile, { busy: state.profileBusy });
+  const settings = { enabled: view.enabled, modelKey: view.modelKey };
+  $("profile-enabled").checked = settings.enabled === true;
+  if (document.activeElement !== $("profile-model")) {
+    $("profile-model").value = settings.modelKey ?? "";
+  }
+  renderProfileModelOptions();
+  $("profile-model-badge").textContent = (state.profileModels ?? []).length ? t("profileModelFromHost") : t("profileModelManual");
+  $("hint-profile-model").textContent = (state.profileModels ?? []).length
+    ? t("profileModelHint")
+    : t("profileModelUnavailable");
+
+  $("profile-last-run-value").textContent = formatStamp(profile?.lastRunAt) ?? t("profileNever");
+  const nextAllowed = view.nextEligibleAt;
+  $("row-profile-next-run").classList.toggle("is-hidden", !nextAllowed);
+  $("profile-next-run-value").textContent = formatStamp(nextAllowed) ?? "—";
+
+  const error = view.error;
+  $("row-profile-error").classList.toggle("is-hidden", !error);
+  $("profile-error-value").textContent = error || "—";
+
+  const candidate = view.candidate;
+  $("row-profile-candidate").classList.toggle("is-hidden", !candidate);
+  $("profile-candidate-value").textContent = candidate || "—";
+  $("btn-profile-copy-link").disabled = !candidate;
+
+  $("btn-profile-run").disabled = !view.canRun || !hasBridge();
+  $("label-profile-run").textContent = state.profileBusy ? t("profileRunning") : t("profileRunNow");
+  $("btn-profile-save").disabled = state.profileBusy || !hasBridge();
+  $("label-profile-run").title =
+    view.runBlockedReason === "disabled"
+      ? t("profileRunDisabled")
+      : view.runBlockedReason === "model"
+        ? t("profileRunNeedsModel")
+        : "";
+}
+
+async function saveProfileSettings() {
+  if (!hasBridge()) return;
+  const values = {
+    enabled: $("profile-enabled").checked === true,
+    modelKey: String($("profile-model").value ?? "").trim() || null,
+  };
+  try {
+    await invokeBridge("kg.profile.set", { values }, BRIDGE_TIMEOUT_MS);
+    showToast(t("profileSaved"));
+    setFeedback("profile-feedback", "", false);
+  } catch (error) {
+    setFeedback("profile-feedback", error?.message || String(error), true);
+  }
+  await loadProfileStatus();
+}
+
+async function runProfileNow() {
+  if (state.profileBusy || !hasBridge()) return;
+  state.profileBusy = true;
+  setFeedback("profile-feedback", "", false);
+  renderProfileSection();
+  try {
+    const answer = await invokeBridge("kg.profile.run", {}, BRIDGE_TIMEOUT_MS * 8);
+    const result = answer?.result ?? answer ?? {};
+    if (result.written) {
+      setFeedback("profile-feedback", t("profileGenerated", { path: result.path ?? "" }), false);
+    } else {
+      setFeedback(
+        "profile-feedback",
+        t("profileRefused", { reason: profileReasonText(result.reason) }),
+        true,
+      );
+    }
+    if (answer?.settings) state.profile = answer;
+  } catch (error) {
+    setFeedback("profile-feedback", error?.message || String(error), true);
+  } finally {
+    state.profileBusy = false;
+    await loadProfileStatus();
+  }
+}
+
+async function copyProfileCandidateLink() {
+  const path = state.profile?.lastCandidate;
+  if (!path) return;
+  try {
+    await invokeBridge("kg.copyLink", { path }, BRIDGE_TIMEOUT_MS);
+    showToast(t("profileCopied"));
+  } catch (error) {
+    setFeedback("profile-feedback", error?.message || String(error), true);
+  }
+}
+
 // ---- Translations ----
 
 function applyTranslations() {
@@ -1153,6 +1422,8 @@ function applyTranslations() {
   $("nav-health").textContent = t("navHealth");
   $("nav-routing").textContent = t("navRouting");
   $("nav-memory").textContent = t("navMemory");
+  $("nav-conversations").textContent = t("navConversations");
+  $("nav-profile").textContent = t("navProfile");
 
   // 1. Vault
   $("vault-heading").textContent = t("vaultHeading");
@@ -1218,6 +1489,34 @@ function applyTranslations() {
   renderRoutingSection();
 
   // 7. Memory
+  // 8. Conversation archive
+  $("conversations-heading").textContent = t("conversationsHeading");
+  $("conversations-desc").textContent = t("conversationsDesc");
+  $("label-conversations-archive").textContent = t("conversationsArchiveLabel");
+  $("conversations-where-hint").textContent = t("conversationsWhereToEnable");
+  $("label-conversations-synced").textContent = t("conversationsSyncedLabel");
+  $("label-conversations-counts").textContent = t("conversationsCountsLabel");
+  $("label-conversations-error").textContent = t("conversationsErrorLabel");
+  $("label-conversations-device").textContent = t("conversationsDeviceLabel");
+  $("hint-conversations-device").textContent = t("conversationsDeviceHint");
+  $("label-conversations-save-device").textContent = t("conversationsSaveDevice");
+
+  // 9. Profile candidates
+  $("profile-heading").textContent = t("profileHeading");
+  $("profile-desc").textContent = t("profileDesc");
+  $("label-profile-enabled").textContent = t("profileEnabledLabel");
+  $("hint-profile-enabled").textContent = t("profileEnabledHint");
+  $("label-profile-model").textContent = t("profileModelLabel");
+  $("profile-model").placeholder = t("profileModelPlaceholder");
+  $("label-profile-last-run").textContent = t("profileLastRunLabel");
+  $("label-profile-next-run").textContent = t("profileNextRunLabel");
+  $("label-profile-error").textContent = t("profileErrorLabel");
+  $("label-profile-candidate").textContent = t("profileCandidateLabel");
+  $("label-profile-copy-link").textContent = t("profileCopyLink");
+  $("label-profile-save").textContent = t("profileSave");
+  renderConversationsSection();
+  renderProfileSection();
+
   $("memory-heading").textContent = t("memoryHeading");
   $("memory-desc").textContent = t("memoryDesc");
   $("label-memory-status").textContent = t("memoryReadStatusLabel");
@@ -1230,6 +1529,31 @@ function applyTranslations() {
 function bindUi() {
   $("btn-vault-save").addEventListener("click", () => {
     void saveVaultConfig();
+  });
+
+  $("btn-conversations-sync").addEventListener("click", () => {
+    void syncConversationsNow();
+  });
+  $("btn-conversations-save-device").addEventListener("click", () => {
+    void saveConversationsDevice();
+  });
+  $("conversations-device").addEventListener("input", () => {
+    state.conversationsDeviceDirty = true;
+  });
+  $("btn-profile-save").addEventListener("click", () => {
+    void saveProfileSettings();
+  });
+  $("btn-profile-run").addEventListener("click", () => {
+    void runProfileNow();
+  });
+  $("btn-profile-copy-link").addEventListener("click", () => {
+    void copyProfileCandidateLink();
+  });
+  $("profile-enabled").addEventListener("change", () => {
+    void saveProfileSettings();
+  });
+  $("profile-model").addEventListener("change", () => {
+    void saveProfileSettings();
   });
 
   $("btn-index-rebuild-incremental").addEventListener("click", () => {
@@ -1284,6 +1608,8 @@ async function reloadAll() {
     loadHealthGraph(),
     loadRouting(),
     loadMemoryStatus(),
+    loadConversationsStatus(),
+    loadProfileStatus({ models: true }),
   ]);
   applyTranslations();
 }
@@ -1300,14 +1626,68 @@ async function boot() {
   await reloadAll();
 }
 
-window.__kgSettingsPanel = {
-  state,
-  get retrievalPanel() {
-    return retrievalPanel;
-  },
-  reloadAll,
-  buildObsidianLink,
-  vaultBasename,
-};
+/**
+ * Pure view model of the two archive sections. `render*` applies it to the DOM;
+ * tests can assert the strings and flags without a browser.
+ */
+export function conversationsView(status) {
+  const archiveKnown = status?.enabled !== undefined && status?.enabled !== null;
+  const archiveOn = archiveKnown ? status.enabled === true && status.state !== "disabled" : null;
+  const state = archiveOn === true ? "ok" : archiveOn === false ? "warn" : "muted";
+  return {
+    stateKey: conversationStateKey(status),
+    stateTone: status?.state === "ok" ? "ok" : status?.state === "error" ? "error" : "muted",
+    archiveKnown,
+    archiveOn,
+    archiveTone: state,
+    showWhereHint: !(archiveKnown && archiveOn === true),
+    counts: {
+      written: status?.written ?? 0,
+      removed: status?.removed ?? 0,
+      skipped: status?.skipped ?? 0,
+    },
+    error: status?.error ? String(status.error) : "",
+    syncedAt: status?.finishedAt ?? null,
+    device: status?.device ?? "",
+  };
+}
 
-boot();
+export function profileView(profile, { busy = false } = {}) {
+  const settings = profile?.settings ?? { enabled: false, modelKey: null };
+  const due = profile?.due ?? null;
+  const tooSoon = due?.due === false && due.reason === "TOO_SOON";
+  return {
+    enabled: settings.enabled === true,
+    modelKey: settings.modelKey ?? null,
+    lastRunAt: profile?.lastRunAt ?? null,
+    nextEligibleAt: tooSoon ? (due?.nextEligibleAt ?? null) : null,
+    error: profile?.lastError ? String(profile.lastError) : "",
+    candidate: profile?.lastCandidate ? String(profile.lastCandidate) : "",
+    canRun: settings.enabled === true && Boolean(settings.modelKey) && !busy,
+    runBlockedReason: settings.enabled !== true ? "disabled" : !settings.modelKey ? "model" : null,
+  };
+}
+
+// The page boots itself only in a document; `conversationsView` and
+// `profileView` are plain functions that tests import without a DOM.
+if (typeof window !== "undefined" && typeof document !== "undefined") {
+  window.__kgSettingsPanel = {
+    state,
+    loadConversationsStatus,
+    syncConversationsNow,
+    saveConversationsDevice,
+    loadProfileStatus,
+    saveProfileSettings,
+    runProfileNow,
+    profileReasonText,
+    conversationsView,
+    profileView,
+    get retrievalPanel() {
+      return retrievalPanel;
+    },
+    reloadAll,
+    buildObsidianLink,
+    vaultBasename,
+  };
+  boot();
+}

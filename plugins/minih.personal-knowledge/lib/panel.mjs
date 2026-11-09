@@ -222,3 +222,59 @@ export function createPrefsStore({ dataPath } = {}) {
     },
   };
 }
+
+/**
+ * Settings of the two archived-conversation features (settings-panel.md §2,
+ * ADR 0002 §8). They live next to the sync state in `~/.personal-knowledge/`,
+ * never in the vault: which computer archives and under what name is per
+ * computer, and the profile candidate switch is the user's opt-in on this one.
+ *
+ *   conversation-settings.json  { deviceName }
+ *   profile-candidates.json     { enabled, modelKey, lastRunAt, lastError, lastCandidate }
+ */
+export function createConversationSettingsStore({ home = os.homedir(), env = process.env } = {}) {
+  const file = env.PERSONAL_KNOWLEDGE_CONVERSATION_SETTINGS
+    ? path.resolve(env.PERSONAL_KNOWLEDGE_CONVERSATION_SETTINGS)
+    : path.join(home, ".personal-knowledge", "conversation-settings.json");
+
+  async function read() {
+    try {
+      const parsed = JSON.parse(await readFile(file, "utf8"));
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch (error) {
+      if (error?.code === "ENOENT" || error instanceof SyntaxError) return {};
+      throw error;
+    }
+  }
+
+  async function write(values) {
+    await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    const temporary = `${file}.${process.pid}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(values, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    await rename(temporary, file);
+  }
+
+  return {
+    file,
+    async get() {
+      const raw = await read();
+      return { deviceName: typeof raw.deviceName === "string" ? raw.deviceName : null };
+    },
+    /** A device name must survive being a folder name, so it is sanitized. */
+    async setDeviceName(value) {
+      const cleaned = String(value ?? "")
+        .replace(/\.local$/i, "")
+        .replace(/[^A-Za-z0-9._-]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      if (!cleaned) {
+        throw configError("CONFIG_INVALID", "deviceName must contain at least one letter or digit");
+      }
+      if (cleaned.length > 64) {
+        throw configError("CONFIG_INVALID", "deviceName must be at most 64 characters");
+      }
+      const next = { ...(await read()), deviceName: cleaned };
+      await write(next);
+      return { saved: true, deviceName: cleaned };
+    },
+  };
+}
