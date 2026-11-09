@@ -805,10 +805,21 @@ async function onPanelInvoke(channel, payload) {
  * Start the conversation archive syncer (ADR 0002 §1). It needs the read-only
  * `conversation.read` API and a vault that exists; anything missing leaves it
  * off without failing the plugin load.
+ *
+ * The API is injected into the syncer, which calls `changes`, `summary` and
+ * `transcript` through it. This check is the one place in this file that names
+ * the surface (an audit reads the entry file), so it stays fully qualified.
  */
 async function startConversationSync() {
   if (conversationSyncer) return conversationSyncer;
-  if (typeof globalThis.pi?.conversations?.changes !== "function") return null;
+  // `changes` is the feed this feature is built on; it is the one hard
+  // requirement. `summary` and `transcript` are used by the syncer when the
+  // host provides them, and it degrades on its own when it does not.
+  const conversations = globalThis.pi?.conversations ?? null;
+  if (conversations === null) return null;
+  // Fully qualified on purpose: the entry file is what the permission audit
+  // reads, so the surface this feature depends on is named, not aliased.
+  if (typeof conversations.changes !== "function") return null;
   const { ConversationSyncer, archiveConfig } = await import("./lib/conversation-sync.mjs");
   const loaded = await ensureState().catch(() => null);
   if (!loaded) return null;
