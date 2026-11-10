@@ -72,11 +72,21 @@ place that holds `pi.embeddings`:
   same index, and the same vector file the MCP server uses.
 - **Other providers** (Ollama, OpenAI-compatible): nothing is registered. The
   MCP server answers both tools because it can embed its own queries.
-- Names do not collide: a registered tool becomes
-  `plugin_<id>_knowledge_search` while an MCP tool becomes
-  `plugin_<id>_<serverId>_knowledge_search`, and the two sets are mutually
-  exclusive — switching the provider registers or unregisters them, and
-  `onUnload` removes them.
+- **The MCP server withholds them in host mode.** It reads `embedding.json` at
+  startup (the same file, the same validator) and, when the provider is
+  `host`, leaves both tools out of `tools/list`; a `tools/call` for either name
+  answers with an error that says where the tool now lives. Names differ anyway
+  (`plugin_<id>_<tool>` versus `plugin_<id>_<serverId>_<tool>`), but the point
+  is that the model should not have to choose between a vector-less copy and a
+  good one.
+- **The switch is not instant on the MCP side.** The host reads `tools/list`
+  once per MCP connection and ignores `notifications/tools/list_changed`, and no
+  plugin API restarts that connection. Entering host mode registers here at
+  once while the MCP copies linger until the plugin or the app is reloaded;
+  leaving it keeps the registered tools until that reload, because removing
+  them while the MCP server still withholds them would leave the agent with no
+  retrieval tool at all. The panel says so after such a save, and the rule it
+  follows is "a duplicate is tolerable, a gap is not".
 - One index, two writers, still safe: `ensureVectors` never runs for a host
   model in a process without `pi.embeddings` (`#cannotEmbedHere`), so the MCP
   side only reads what the main process wrote and never reports the other
@@ -90,8 +100,9 @@ dimensions" handles both.
 
 Registering a tool needs `agent.tool.register`, which this version does not
 declare yet (§4): the tools stay unregistered on a host that has not granted
-it, and that provider combination then behaves like any other plugin tool —
-lexical plus whatever the MCP server can do itself.
+it, and the MCP server still lists its own copies (it only withholds them when
+the provider is `host`), so the agent keeps a working, if purely lexical,
+retrieval tool.
 
 The visible consequence, stated so it is not a surprise: in host mode the
 ranked search inside an agent session is only as fresh as the last index pass

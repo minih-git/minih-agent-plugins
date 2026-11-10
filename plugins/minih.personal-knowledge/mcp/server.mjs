@@ -1,11 +1,18 @@
 import { readFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
+import { loadEmbeddingSettings } from "../lib/embeddings.mjs";
 import { createReadOnlyState } from "../lib/read-only.mjs";
 import { createKnowledgeService } from "./knowledge-core.mjs";
-import { TOOL_SCHEMAS, renderConversationSearch, renderKnowledgeSearch } from "./tool-text.mjs";
+import {
+  MAIN_PROCESS_TOOLS,
+  TOOL_SCHEMAS,
+  renderConversationSearch,
+  renderKnowledgeSearch,
+} from "./tool-text.mjs";
 
 const serverDir = path.dirname(fileURLToPath(import.meta.url));
 const pluginRoot = path.resolve(serverDir, "..");
@@ -25,8 +32,40 @@ async function readPluginVersion() {
   return "0.0.0";
 }
 
+/**
+ * Whether the plugin's main process owns the two retrieval tools right now.
+ *
+ * In `host` mode the query vector can only be computed where `pi.embeddings`
+ * lives, so the main process registers those tools through
+ * `pi.agent.registerTool`. Serving them from here as well would put two tools
+ * with the same job in front of the model, and this one would lose the vector
+ * channel — so they are withheld from `tools/list` for the whole life of this
+ * process (ADR 0003 §2).
+ *
+ * The host reads `tools/list` once per connection and does not handle
+ * `notifications/tools/list_changed`, so the decision has to be made here, at
+ * startup: changing the provider takes effect for the agent after the plugin
+ * (or the app) is reloaded, which the settings panel says.
+ */
+async function hostModeOwnsRetrievalTools() {
+  try {
+    const settings = await loadEmbeddingSettings(embeddingSettingsPath());
+    return settings.enabled === true && settings.provider === "host";
+  } catch {
+    return false;
+  }
+}
+
+function embeddingSettingsPath() {
+  return (
+    process.env.PERSONAL_KNOWLEDGE_EMBEDDING_CONFIG ??
+    path.join(os.homedir(), ".personal-knowledge", "embedding.json")
+  );
+}
+
 const service = await createKnowledgeService({ pluginRoot });
 const manifest = { version: await readPluginVersion() };
+const mainProcessOwnsRetrieval = await hostModeOwnsRetrievalTools();
 
 const TOOL_DEFINITIONS = [
   {
@@ -166,6 +205,11 @@ const TOOL_DEFINITIONS = [
   },
 ];
 
+/** The tools this process actually answers (see `hostModeOwnsRetrievalTools`). */
+const SERVED_TOOLS = mainProcessOwnsRetrieval
+  ? TOOL_DEFINITIONS.filter((tool) => !MAIN_PROCESS_TOOLS.includes(tool.name))
+  : TOOL_DEFINITIONS;
+
 // The read-only switch: env wins, otherwise the repo-map `readOnly` key,
 // re-read on mtime change so the settings panel flips it without a restart.
 const readOnlyState = createReadOnlyState({ env: process.env });
@@ -259,11 +303,21 @@ async function handleRequest(message) {
     return;
   }
   if (method === "tools/list") {
-    result(id, { tools: TOOL_DEFINITIONS });
+    result(id, { tools: SERVED_TOOLS });
     return;
   }
   if (method === "tools/call") {
     const name = params?.name;
+    if (mainProcessOwnsRetrieval && MAIN_PROCESS_TOOLS.includes(name)) {
+      // Named on purpose: a caller that reached this process anyway should be
+      // told where the tool lives, not just that it is unknown.
+      error(
+        id,
+        -32602,
+        `${name} is served by the plugin's main process in host mode (the embedding model runs there); it is not available on this MCP server`,
+      );
+      return;
+    }
     const handler = handlers[name];
     if (!handler) {
       error(id, -32602, `Unknown tool: ${name ?? ""}`);

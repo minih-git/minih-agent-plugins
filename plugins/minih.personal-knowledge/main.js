@@ -813,9 +813,18 @@ async function onPanelInvoke(channel, payload) {
   if (channel === "kg.settings.get") return settingsGet();
   if (channel === "kg.settings.set") {
     const saved = await settingsSet(payload);
-    // A provider change decides whether this process owns the retrieval tools.
-    await syncKnowledgeTools().catch(() => {});
-    return saved;
+    // A provider change decides whether this process owns the retrieval tools,
+    // and whether the model needs a reload to stop seeing two copies.
+    const tools = await syncKnowledgeTools().catch(() => null);
+    return {
+      ...saved,
+      tools: {
+        ...tools,
+        // The MCP server lists its tools from the configuration it read when
+        // it started; no API restarts that connection.
+        agentReloadRequired: Boolean(tools?.mcpListsRetrieval) !== (saved.settings?.provider !== "host"),
+      },
+    };
   }
   if (channel === "kg.settings.test") return settingsTest(payload);
   if (channel === "kg.config.get") return configPayload();
@@ -976,14 +985,33 @@ async function startProfileScheduler() {
  * The retrieval tools, registered in this process (ADR 0003 §2).
  *
  * `pi.embeddings.embed` exists only here, so in `host` mode a query can only be
- * turned into a vector here. When that mode is active the plugin registers
- * `knowledge_search` and `conversation_search` as agent tools from this
- * process: the host names them `plugin_<id>_<tool>`, while the MCP server's
- * tools are named `plugin_<id>_<serverId>_<tool>`, so the model sees exactly one
- * set. The tools share the same `KnowledgeService`, index, and vector file as
- * the MCP server; nothing is duplicated.
+ * turned into a vector here — the MCP server withholds `knowledge_search` and
+ * `conversation_search` in that mode (it reads `embedding.json` at startup) and
+ * this process serves them instead, over the same `KnowledgeService`, index,
+ * and vector file.
+ *
+ * The two sets are named differently (`plugin_<id>_<tool>` here,
+ * `plugin_<id>_<serverId>_<tool>` on the MCP side), and keeping the model from
+ * seeing both depends on *when* each side changes:
+ *
+ *  - entering `host` mode registers here immediately, and the MCP server still
+ *    lists its copies until it reconnects, so both briefly exist;
+ *  - leaving `host` mode must NOT unregister here until the MCP server lists
+ *    them again, or the agent would be left with no retrieval tool at all.
+ *
+ * The host reads `tools/list` once per MCP connection and ignores
+ * `notifications/tools/list_changed`, and no plugin API restarts that
+ * connection, so the MCP side only changes when the plugin or the app is
+ * reloaded. Until then the safer of the two states is kept: a duplicate, never
+ * a gap.
  */
 let knowledgeTools = null; // [name, ...] registered by this process
+
+/**
+ * Whether the MCP server lists the retrieval tools for this install: it
+ * decides at startup, so this mirrors what it saw when the plugin loaded.
+ */
+let mcpListsRetrievalTools = true;
 
 /** Whether the query vector must be computed here (host model or host-vector index). */
 async function needsHostQueryVectors() {
@@ -1050,14 +1078,32 @@ async function runKnowledgeTool(name, args, render) {
 }
 
 /**
- * Keep the registered tools in step with the current settings: register them in
- * `host` mode, remove them otherwise, so the model never sees a second copy of
- * a tool the MCP server already answers.
+ * Keep the registered tools in step with the current provider, within the
+ * limit the MCP side imposes (see above): register as soon as host mode is
+ * on, and unregister on leaving it only when the MCP server is known to list
+ * the tools again — otherwise they stay until the plugin reloads.
  */
-async function syncKnowledgeTools() {
+async function syncKnowledgeTools({ startup = false } = {}) {
   const wanted = await needsHostQueryVectors();
-  if (wanted && !knowledgeTools) await registerKnowledgeTools();
-  else if (!wanted && knowledgeTools) await unregisterKnowledgeTools();
+  if (startup) {
+    // The MCP server read `embedding.json` a moment ago on its own start; the
+    // file has not changed since unless the user edited it by hand.
+    mcpListsRetrievalTools = !wanted;
+  }
+  if (wanted && !knowledgeTools) {
+    await registerKnowledgeTools();
+    return { registered: true, mcpListsRetrieval: mcpListsRetrievalTools };
+  }
+  if (!wanted && knowledgeTools) {
+    if (mcpListsRetrievalTools) {
+      await unregisterKnowledgeTools();
+      return { registered: false, mcpListsRetrieval: true };
+    }
+    // The MCP server still withholds them: removing ours would leave the agent
+    // with no retrieval tool, so they stay until the plugin is reloaded.
+    return { registered: true, mcpListsRetrieval: false, deferred: true };
+  }
+  return { registered: Boolean(knowledgeTools), mcpListsRetrieval: mcpListsRetrievalTools, deferred: false };
 }
 
 async function onLoad() {
@@ -1065,7 +1111,7 @@ async function onLoad() {
   await ensureState().catch(() => {});
   await startConversationSync().catch(() => null);
   await startProfileScheduler().catch(() => null);
-  await syncKnowledgeTools().catch(() => null);
+  await syncKnowledgeTools({ startup: true }).catch(() => null);
 }
 
 async function onUnload() {

@@ -491,7 +491,13 @@ export class RetrievalSettingsPanel {
     try {
       await invokeBridge("kg.settings.set", { embedding: values }, BRIDGE_TIMEOUT_MS);
       this.confirmingRemote = false;
-      this.showToast(this.t("toastSettingsSaved"));
+      // Switching to or from the in-app model changes which process serves the
+      // retrieval tools; the MCP server only picks that up on reconnect.
+      if (res?.tools?.agentReloadRequired) {
+        this.feedback(this.t("settingsReloadForAgent"), false);
+      } else {
+        this.showToast(this.t("toastSettingsSaved"));
+      }
       await this.load(true);
       await this.onSaved?.();
     } catch (error) {

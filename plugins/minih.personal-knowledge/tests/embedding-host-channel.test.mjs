@@ -311,14 +311,35 @@ test("the same index answers only when the query vector is supplied", async () =
   globalThis.pi = savedPi;
 });
 
-test("leaving host mode removes the main-process tools again", async () => {
+test("leaving host mode keeps the tools until the MCP side lists them again", async () => {
   const { backend, api } = await makeToolBackend();
   assert.equal(api.tools.has("knowledge_search"), true);
-  await backend.onPanelInvoke("kg.settings.set", {
+  const saved = await backend.onPanelInvoke("kg.settings.set", {
     embedding: { enabled: true, provider: "ollama", baseUrl: "http://127.0.0.1:11434", model: "bge-m3", exclude: [] },
   });
-  assert.equal(api.tools.has("knowledge_search"), false, "the MCP server answers again");
-  assert.equal(api.tools.has("conversation_search"), false);
+  // The MCP server decided at startup what it lists and is still withholding
+  // both tools, so removing ours would leave the agent with no retrieval tool.
+  assert.equal(api.tools.has("knowledge_search"), true, "a duplicate is tolerable, a gap is not");
+  assert.equal(saved.tools.deferred, true);
+  assert.equal(saved.tools.agentReloadRequired, true, "the panel must ask for a reload");
+  await backend.onUnload();
+
+  // After a reload the MCP server lists them again, so nothing is registered.
+  const reloaded = await makeToolBackend({
+    settings: { enabled: true, provider: "ollama", baseUrl: "http://127.0.0.1:11434", model: "bge-m3", exclude: [] },
+  });
+  assert.equal(reloaded.api.tools.size, 0);
+  await reloaded.backend.onUnload();
+});
+
+test("entering host mode registers at once and asks for a reload", async () => {
+  const { backend, api } = await makeToolBackend({
+    settings: { enabled: true, provider: "ollama", baseUrl: "http://127.0.0.1:11434", model: "bge-m3", exclude: [] },
+  });
+  assert.equal(api.tools.size, 0, "the MCP server answers while a direct endpoint is configured");
+  const saved = await backend.onPanelInvoke("kg.settings.set", { embedding: HOST });
+  assert.equal(api.tools.has("knowledge_search"), true, "registered immediately");
+  assert.equal(saved.tools.agentReloadRequired, true, "the MCP copies linger until a reload");
   await backend.onUnload();
 });
 

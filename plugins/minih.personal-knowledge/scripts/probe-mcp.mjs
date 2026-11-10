@@ -3,6 +3,9 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
+// In host mode the two retrieval tools are served by the plugin's main process
+// instead (ADR 0003 §2), so the MCP server must not list them.
+const MAIN_PROCESS_TOOLS = ["conversation_search", "knowledge_search"];
 const REQUIRED_TOOLS = [
   "conversation_read",
   "conversation_search",
@@ -13,6 +16,20 @@ const REQUIRED_TOOLS = [
   "knowledge_stale",
   "knowledge_write",
 ];
+
+/** Whether the configuration this probe runs against embeds in host mode. */
+async function hostModeConfigured(env, root) {
+  const { loadEmbeddingSettings } = await import(path.join(root, "lib", "embeddings.mjs"));
+  const file =
+    env.PERSONAL_KNOWLEDGE_EMBEDDING_CONFIG ??
+    path.join(process.env.HOME ?? "", ".personal-knowledge", "embedding.json");
+  try {
+    const settings = await loadEmbeddingSettings(file);
+    return settings.enabled === true && settings.provider === "host";
+  } catch {
+    return false;
+  }
+}
 
 function pluginRoot() {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -118,8 +135,10 @@ try {
   client.notify("notifications/initialized");
   const listed = await client.request("tools/list");
   const names = listed.tools.map((tool) => tool.name).sort();
-  const missing = REQUIRED_TOOLS.filter((name) => !names.includes(name));
-  const unexpected = names.filter((name) => !REQUIRED_TOOLS.includes(name));
+  const hostMode = await hostModeConfigured(env, root);
+  const expected = hostMode ? REQUIRED_TOOLS.filter((name) => !MAIN_PROCESS_TOOLS.includes(name)) : REQUIRED_TOOLS;
+  const missing = expected.filter((name) => !names.includes(name));
+  const unexpected = names.filter((name) => !expected.includes(name));
   if (missing.length || unexpected.length) {
     throw new Error(`Tool mismatch. Missing: ${missing.join(", ") || "none"}; unexpected: ${unexpected.join(", ") || "none"}`);
   }
