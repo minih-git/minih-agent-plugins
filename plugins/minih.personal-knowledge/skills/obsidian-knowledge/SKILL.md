@@ -1,9 +1,9 @@
 ---
 name: obsidian-knowledge
-description: Retrieve and maintain the user's Obsidian knowledge when work depends on existing projects, preferences, decisions, or infrastructure. Save confirmed durable changes; skip self-contained tasks that need no prior context.
+description: Retrieve and maintain the user's local Markdown knowledge vault (Obsidian-compatible) when work depends on existing projects, preferences, decisions, or infrastructure. Save confirmed durable changes; skip self-contained tasks that need no prior context.
 ---
 
-# Obsidian Knowledge
+# Personal Knowledge (Markdown vault)
 
 Use the vault configured in the Personal Knowledge plugin settings (default `~/Documents/Knowledge`). This skill owns the retrieval and write-back workflow; the Personal Knowledge plugin supplies its MCP tools.
 

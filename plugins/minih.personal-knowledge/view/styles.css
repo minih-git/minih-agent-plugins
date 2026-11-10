@@ -579,6 +579,176 @@ body {
   overflow: auto;
 }
 
+/* ---- rendered note (obsidian-independence §2) ---- */
+
+.md-body {
+  font-family: -apple-system, "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
+  font-size: 12px;
+  line-height: 1.62;
+  white-space: normal;
+}
+
+.md-body > :first-child {
+  margin-top: 0;
+}
+
+.md-body > :last-child {
+  margin-bottom: 0;
+}
+
+.md-body p,
+.md-body ul,
+.md-body ol,
+.md-body pre,
+.md-body table,
+.md-body blockquote,
+.md-body .md-callout {
+  margin: 0 0 8px;
+}
+
+.md-body .md-heading {
+  margin: 14px 0 6px;
+  color: #dbe6fb;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.md-body h2.md-heading {
+  font-size: 13.5px;
+}
+
+.md-body h3.md-heading {
+  font-size: 12.5px;
+}
+
+.md-body h4.md-heading,
+.md-body h5.md-heading,
+.md-body h6.md-heading {
+  font-size: 12px;
+}
+
+.md-body code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(96, 165, 250, 0.14);
+  color: #cfe0ff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+}
+
+.md-body .md-pre {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(4, 9, 22, 0.85);
+  overflow: auto;
+}
+
+.md-body .md-pre code {
+  padding: 0;
+  background: none;
+  white-space: pre;
+}
+
+.md-body .md-list {
+  padding-left: 18px;
+}
+
+.md-body .md-list li {
+  margin: 2px 0;
+}
+
+.md-body .md-task-item {
+  list-style: none;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.md-body .md-task {
+  margin: 0;
+  accent-color: #60a5fa;
+}
+
+.md-body .md-quote {
+  padding: 4px 10px;
+  border-left: 2px solid rgba(147, 197, 253, 0.45);
+  color: #aebbd6;
+}
+
+.md-body .md-callout {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border-left: 3px solid #60a5fa;
+  background: rgba(96, 165, 250, 0.1);
+}
+
+.md-body .md-callout-title {
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.md-body .callout-warning,
+.md-body .callout-caution {
+  border-left-color: #fbbf24;
+  background: rgba(251, 191, 36, 0.12);
+}
+
+.md-body .callout-danger,
+.md-body .callout-error,
+.md-body .callout-bug,
+.md-body .callout-failure {
+  border-left-color: #f87171;
+  background: rgba(248, 113, 113, 0.12);
+}
+
+.md-body .callout-success,
+.md-body .callout-done {
+  border-left-color: #34d399;
+  background: rgba(52, 211, 153, 0.12);
+}
+
+.md-body .md-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 11px;
+}
+
+.md-body .md-table th,
+.md-body .md-table td {
+  padding: 3px 6px;
+  border: 1px solid rgba(94, 118, 172, 0.34);
+  text-align: left;
+}
+
+.md-body .md-wikilink {
+  color: #93c5fd;
+  text-decoration: none;
+  border-bottom: 1px dotted rgba(147, 197, 253, 0.6);
+  cursor: pointer;
+}
+
+.md-body .md-wikilink:hover {
+  color: #bfdbfe;
+}
+
+.md-body .md-wikilink.is-missing {
+  color: #94a3b8;
+  border-bottom: 1px dashed rgba(148, 163, 184, 0.6);
+  cursor: default;
+}
+
+.md-body .md-external {
+  color: #7dd3fc;
+}
+
+.md-body .md-embed {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.18);
+  color: #b6c2d8;
+  font-size: 10.5px;
+}
+
 .empty-note {
   color: var(--ink-faint);
   font-size: 11.5px;

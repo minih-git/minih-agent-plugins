@@ -127,8 +127,9 @@
       <h2 id="drawer-title" class="drawer-title">—</h2>
       <div id="drawer-path" class="drawer-path">—</div>
       <div id="drawer-belong" class="drawer-belong"></div>
-      <div class="drawer-actions">
-        <button id="btn-copy-link" type="button" class="primary-btn"></button>
+      <div id="drawer-copy-actions" class="drawer-actions">
+        <button id="btn-copy-path" type="button" class="ghost-btn" data-copy="path"></button>
+        <button id="btn-copy-link" type="button" class="ghost-btn" data-copy="link"></button>
         <button id="btn-promote-memory" type="button" class="ghost-btn is-hidden"></button>
       </div>
       <div id="drawer-error" class="drawer-error is-hidden" role="alert"></div>
@@ -146,7 +147,7 @@
             <span id="drawer-preview-label">正文预览</span>
             <span id="drawer-truncated-badge" class="badge is-hidden"></span>
           </h3>
-          <pre id="drawer-content" class="drawer-body-preview" tabindex="0"></pre>
+          <div id="drawer-content" class="drawer-body-preview md-body" tabindex="0"></div>
         </section>
       </div>
     </aside>

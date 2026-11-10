@@ -40,7 +40,7 @@ keeping its own `LICENSE` and notice files inside its directory.
 
 | Plugin | Version | Author | License | Upstream |
 | --- | --- | --- | --- | --- |
-| `minih.personal-knowledge` (`Personal Knowledge`) | 0.6.0 | minih-git | MIT | this repository |
+| `minih.personal-knowledge` (`Personal Knowledge`) | 0.7.0 | minih-git | MIT | this repository |
 | `minih.selection-translate` (`Selection Translate`) | 0.3.2 | minih-git | MIT | this repository |
 | `minih.cache-keepwarm` (`Cache keep-warm`) | 0.1.0 | minih-git | MIT | this repository |
 | `pi.file-manager` (`File Manager`) | 0.9.0 | Tioit-Wang | not declared by the author | not published by the author |
@@ -62,6 +62,15 @@ model configured in Desktop (`pi.embeddings.embed`, ADR 0003 in the plugin's
 `agent.tool.register`. In that mode the plugin's main process serves
 `knowledge_search` and `conversation_search` itself, because only it can reach
 the app's embedding model.
+
+0.7.0 removes the last reason to also install Obsidian: the drawer renders a
+note as Markdown instead of raw text, its wikilinks open in place (or are drawn
+as missing), and the settings panel gains a knowledge dashboard that derives
+the vault's two `.base` tables ("活跃项目", "待复核知识") with the same rules.
+Obsidian stays optional — the vault is read as plain Markdown, nothing is
+written for the dashboard, and "copy Obsidian link" remains as a secondary
+action. It adds one permission, `shell.openExternal`, for http(s) links found
+in a note. The design is `docs/design/obsidian-independence.md` in the plugin.
 
 The redistributed ones are listed with `trust: "community"` and
 `verified: false`: the `verified` badge is a claim about a publisher this

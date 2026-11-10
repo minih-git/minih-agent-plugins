@@ -1,13 +1,13 @@
 ---
 name: obsidian-project-knowledge
-description: Extract repository knowledge into structured Obsidian project notes. Use when the user wants to turn a codebase, docs folder, README, architecture, features, deployment flow, or operations knowledge into reusable Obsidian notes, MOCs, or linked project knowledge pages.
+description: Extract repository knowledge into structured project notes in a local Markdown knowledge vault (Obsidian-compatible). Use when the user wants to turn a codebase, docs folder, README, architecture, features, deployment flow, or operations knowledge into reusable notes, MOCs, or linked project knowledge pages.
 ---
 
-# Obsidian Project Knowledge
+# Project Knowledge (Markdown vault)
 
-Use this skill when a user wants to **沉淀 / 提炼 / 保存项目知识到 Obsidian**.
+Use this skill when a user wants to **沉淀 / 提炼 / 保存项目知识到知识库**.
 
-This skill is for turning a repository into a small Obsidian knowledge system rather than dumping raw code summaries. It works best when the user wants reusable notes such as:
+This skill is for turning a repository into a small Markdown knowledge system (the notes stay compatible with Obsidian) rather than dumping raw code summaries. It works best when the user wants reusable notes such as:
 - project overview
 - architecture notes
 - feature notes
@@ -19,27 +19,27 @@ This skill is for turning a repository into a small Obsidian knowledge system ra
 
 Use these alongside this skill when relevant:
 - `obsidian-cli` — locate the vault, create/read notes, verify links
-- `obsidian-markdown` — write valid Obsidian notes with frontmatter and wikilinks
-- `obsidian-bases` — only if the user also wants `.base` dashboards
+- `obsidian-markdown` — write valid vault notes with frontmatter and wikilinks (Obsidian-compatible)
+- `obsidian-bases` — only if the user also wants `.base` dashboards (they open in Obsidian; the plugin shows the same two tables without it)
 
 ## Outcome
 
-Produce a **usable knowledge package** inside the user's Obsidian vault, typically including:
+Produce a **usable knowledge package** inside the user's Markdown knowledge vault, typically including:
 1. one project overview note
 2. zero or one knowledge map / MOC
 3. zero to N topic notes
 4. links from existing project/resource/MOC pages
-5. verification that notes and links resolve in Obsidian
+5. verification that notes and links resolve in the vault
 
 ## Workflow
 
 ### 1. Find the sink before writing
-Determine the Obsidian vault first.
+Determine the knowledge vault first.
 
 Preferred order:
 1. If the user gave the vault path, use it
 2. Otherwise use `obsidian vaults verbose` / `obsidian vault info=path`
-3. If needed, search for `.obsidian` folders
+3. If needed, search for `.obsidian` folders (present only when the vault is also opened in Obsidian)
 
 Do not start writing notes until the vault target is known.
 
@@ -126,7 +126,7 @@ When appropriate, append links to existing:
 
 If no obvious index exists, create the new notes first and keep the internal links strong.
 
-### 7. Verify in Obsidian
+### 7. Verify in the vault
 Minimum verification:
 1. read the created note(s) via `obsidian read`
 2. check the expected links via `obsidian links`
@@ -160,7 +160,7 @@ At completion, report:
 - remaining gaps, if any
 
 ## Examples of requests that should trigger this skill
-- “把这个项目沉淀到我的 Obsidian 知识库”
-- “帮我把仓库功能和架构整理成 Obsidian 笔记”
+- “把这个项目沉淀到我的知识库”
+- “帮我把仓库功能和架构整理成项目笔记”
 - “把 docs 和源码提炼成项目知识地图”
 - “把这个 repo 的部署和设计保存到知识库”

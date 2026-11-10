@@ -1,15 +1,20 @@
 /**
  * Note drawer (design doc §6.5): class/galaxy line, 关联 (constellation and
  * typed neighbors), 相关事件 (tethers), 被引用 (backlinks), collapsed 维护
- * 提示, the redacted `kg.note` preview, and the copy-link button. Memory
- * satellites keep their P4 promotion channel (`kg.promote.preview` →
- * `kg.promote.apply`).
+ * 提示, the rendered note, and the two copy actions. Memory satellites keep
+ * their P4 promotion channel (`kg.promote.preview` → `kg.promote.apply`).
+ *
+ * Since 0.7.0 the preview is Markdown, not raw text
+ * (`docs/design/obsidian-independence.md` §2): `view/markdown.js` parses the
+ * note and this file builds the DOM from that tree, so the note is readable
+ * without Obsidian and its wikilinks can be followed in place.
  */
 
 import { invokeBridge, hasBridge, rgbaString } from "./bridge.js";
 import { BRIDGE_TIMEOUT_MS } from "./strings.js";
 import { classifyIssueCode } from "./strings.js";
 import { galaxyDisplayName, linkedNeighbors, nodeDisplayName, tethersOf } from "./model.js";
+import { parseMarkdown, toDom } from "./markdown.js";
 
 const FIXTURE_NOTES = new Map();
 
@@ -39,8 +44,12 @@ export class NoteDrawer {
   }
 
   bind() {
-    document.getElementById("drawer-close").addEventListener("click", () => this.close());
-    document.getElementById("btn-copy-link").addEventListener("click", () => this.copyLink());
+    document.getElementById("drawer-copy-actions").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-copy]");
+      if (!button) return;
+      if (button.dataset.copy === "path") void this.copyPath();
+      else void this.copyLink();
+    });
     document.getElementById("btn-promote-memory").addEventListener("click", () => this.promote());
     document.getElementById("drawer-hints-head").addEventListener("click", () => {
       const body = document.getElementById("drawer-hints-body");
@@ -119,8 +128,9 @@ export class NoteDrawer {
     document.getElementById("drawer-redacted-badge").classList.add("is-hidden");
     document.getElementById("drawer-truncated-badge").classList.add("is-hidden");
 
-    const copyBtn = document.getElementById("btn-copy-link");
-    copyBtn.disabled = node.family === "memory";
+    // The note is readable here, so copying something is secondary work.
+    document.getElementById("btn-copy-path").disabled = node.family === "memory";
+    document.getElementById("btn-copy-link").disabled = node.family === "memory";
     const promoteBtn = document.getElementById("btn-promote-memory");
     promoteBtn.classList.toggle("is-hidden", node.family !== "memory");
     promoteBtn.textContent = t("promoteDraft");
@@ -187,14 +197,98 @@ export class NoteDrawer {
     hintsBody.classList.add("is-collapsed");
     document.getElementById("drawer-hints-caret").textContent = "▸";
 
-    if (noteData) {
-      document.getElementById("drawer-redacted-badge").classList.toggle("is-hidden", !noteData.redacted);
-      const truncated = document.getElementById("drawer-truncated-badge");
-      truncated.classList.toggle("is-hidden", !noteData.truncated);
-      truncated.textContent = t("drawerTruncated");
-      content.textContent = noteData.content || "";
-    } else {
+    if (!noteData?.content) {
       content.textContent = "";
+      return;
+    }
+    document.getElementById("drawer-redacted-badge").classList.toggle("is-hidden", !noteData.redacted);
+    const truncated = document.getElementById("drawer-truncated-badge");
+    truncated.classList.toggle("is-hidden", !noteData.truncated);
+    truncated.textContent = t("drawerTruncated");
+    this.renderNote(content, noteData);
+  }
+
+  /**
+   * Render the note's Markdown into the preview slot. Link resolution comes
+   * from `kg.note.links` (resolved in the main process with
+   * `VaultIndex.resolveTarget`), so this file never guesses a target.
+   */
+  renderNote(container, noteData) {
+    const resolvedByTarget = new Map(
+      (noteData.links ?? []).map((link) => [String(link.raw), link.resolved ?? null]),
+    );
+    const tree = parseMarkdown(noteData.content ?? "", {
+      resolveLink: (target) => resolvedByTarget.get(target) ?? null,
+    });
+    const body = toDom(tree, {
+      embedPrefix: this.t("drawerEmbed"),
+      onWikilink: (target) => this.followWikilink(target),
+      onExternal: (url) => this.openExternal(url),
+    });
+    container.replaceChildren(body);
+  }
+
+  /** Follow a wikilink: a node in the graph navigates, anything else opens. */
+  followWikilink(target) {
+    if (!target) return;
+    const model = this.model;
+    const node = model?.nodesById?.get(target);
+    if (node && node.kind !== "satellite") {
+      this.onNavigate?.(node);
+      return;
+    }
+    void this.openPath(target);
+  }
+
+  /**
+   * Open a note that the graph may not draw (a ghost, a `.base` file, a
+   * note outside the current layers). The note is fetched through `kg.note`;
+   * a refusal is shown, not swallowed.
+   */
+  async openPath(target) {
+    const t = this.t;
+    const errorBox = document.getElementById("drawer-error");
+    const content = document.getElementById("drawer-content");
+    try {
+      const noteData = this.fixtureMode
+        ? FIXTURE_NOTES.get(target) ?? null
+        : await invokeBridge("kg.note", { path: target }, BRIDGE_TIMEOUT_MS);
+      if (!noteData) {
+        this.showToast(t("drawerLinkMissing", { target }), true);
+        return;
+      }
+      errorBox.classList.add("is-hidden");
+      document.getElementById("drawer-title").textContent = noteData.title || target;
+      document.getElementById("drawer-path").textContent = noteData.path || target;
+      document.getElementById("drawer-truncated-badge").classList.toggle("is-hidden", !noteData.truncated);
+      document.getElementById("drawer-redacted-badge").classList.toggle("is-hidden", !noteData.redacted);
+      this.renderNote(content, noteData);
+    } catch (error) {
+      errorBox.textContent = t("drawerError", { reason: error?.message || String(error) });
+      errorBox.classList.remove("is-hidden");
+    }
+  }
+
+  /** `[text](https://…)` in a note: forwarded to the host, http(s) only. */
+  async openExternal(url) {
+    try {
+      if (!hasBridge()) throw new Error(this.t("openExternalUnavailable"));
+      await invokeBridge("kg.openExternal", { url }, BRIDGE_TIMEOUT_MS);
+    } catch (error) {
+      this.showToast(this.t("toastOpenExternalFailed", { reason: error?.message || String(error) }), true);
+    }
+  }
+
+  /** Copy the note's absolute path: the way to open it in any editor. */
+  async copyPath() {
+    const node = this.selectedNode;
+    if (!node) return;
+    const t = this.t;
+    try {
+      const answer = await invokeBridge("kg.copyPath", { path: node.id }, BRIDGE_TIMEOUT_MS);
+      this.showToast(t("toastPathCopied", { path: answer?.path ?? node.id }));
+    } catch (error) {
+      this.showToast(t("toastCopyFailed", { reason: error?.message || String(error) }), true);
     }
   }
 
@@ -281,6 +375,7 @@ export class NoteDrawer {
 
   applyTranslations() {
     const t = this.t;
+    document.getElementById("btn-copy-path").textContent = t("drawerCopyPath");
     document.getElementById("btn-copy-link").textContent = t("drawerCopyLink");
     document.getElementById("drawer-hints-label").textContent = t("drawerHints");
     document.getElementById("drawer-preview-label").textContent = t("drawerPreview");
