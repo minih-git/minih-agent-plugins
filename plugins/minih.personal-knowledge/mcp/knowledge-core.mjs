@@ -148,7 +148,7 @@ function lineChangeSummary(before, after) {
 }
 
 export class KnowledgeService {
-  constructor({ vaultPath, config = {}, now = () => new Date(), pluginRoot = null, ontology = null }) {
+  constructor({ vaultPath, config = {}, now = () => new Date(), pluginRoot = null, ontology = null, hostEmbed = null }) {
     this.vaultPath = path.resolve(vaultPath);
     this.config = config;
     this.now = now;
@@ -156,6 +156,8 @@ export class KnowledgeService {
     this.rootRealpath = null;
     this.index = null;
     this.ontology = ontology;
+    /** `pi.embeddings.embed`, when this process is allowed to call it. */
+    this.hostEmbed = hostEmbed;
   }
 
   async initialize() {
@@ -273,9 +275,19 @@ export class KnowledgeService {
       this.embedding = null;
       return;
     }
-    const key = await resolveApiKey(settings.apiKeyEnv, { home: os.homedir() });
+    const key =
+      settings.provider === "host"
+        ? { status: "not-required", value: null }
+        : await resolveApiKey(settings.apiKeyEnv, { home: os.homedir() });
     this.apiKeyStatus = key.status;
-    const client = new EmbeddingClient({ settings, apiKey: key.value, now: this.now });
+    // A host model runs inside Desktop; there is no endpoint, no key, and no
+    // probe. The embed function arrives from whoever holds `pi` (ADR 0003).
+    const client = new EmbeddingClient({
+      settings,
+      apiKey: settings.provider === "host" ? null : key.value,
+      now: this.now,
+      hostEmbed: this.hostEmbed ?? null,
+    });
     const identityChanged = previousPrefix !== null && previousPrefix !== client.identityPrefix();
     this.embedding = client;
     if (identityChanged && this.vectors) {
@@ -459,6 +471,28 @@ export class KnowledgeService {
       this.ensureVectorsInFlightForce = null;
     });
     return this.ensureVectorsPromise;
+  }
+
+  /**
+   * How many chunks still need a vector, without embedding anything. A host
+   * model is driven from the plugin's main process (ADR 0003), which asks this
+   * to show progress and to decide whether a background pass is worth
+   * starting — the MCP process itself can never call `pi.embeddings`.
+   */
+  async pendingVectorCount() {
+    await this.#refreshEmbeddingClient({ force: true });
+    if (!this.embedding) return 0;
+    const exclude = this.embeddingSettings?.exclude ?? [];
+    const known = new Set((this.vectors?.chunks ?? []).map((row) => row.sha));
+    let missing = 0;
+    for (const relative of this.index.paths()) {
+      if (!relative.endsWith(".md")) continue;
+      if (isExcluded(relative, exclude)) continue;
+      const record = this.index.note(relative);
+      if (!record) continue;
+      for (const chunk of record.chunks) if (!known.has(chunk.sha)) missing += 1;
+    }
+    return missing;
   }
 
   async #ensureVectors({ budgetMs = 3000, force = false, onProgress = null, signal = null } = {}) {
@@ -1297,6 +1331,7 @@ export async function createKnowledgeService({
   vaultPath,
   config,
   now,
+  hostEmbed = null,
 } = {}) {
   const resolvedConfig = config ?? (pluginRoot ? await loadConfig(pluginRoot) : {});
   // Vault resolution: explicit argument, then PERSONAL_KNOWLEDGE_VAULT, then
@@ -1311,5 +1346,6 @@ export async function createKnowledgeService({
     config: resolvedConfig,
     now,
     pluginRoot: pluginRoot ?? null,
+    hostEmbed,
   }).initialize();
 }

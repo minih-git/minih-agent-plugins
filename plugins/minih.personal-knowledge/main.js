@@ -56,6 +56,7 @@ const CHANNELS = new Set([
   "kg.profile.run",
   "kg.conversations.device",
   "kg.models.list",
+  "kg.models.listEmbedding",
   "kg.openSettings",
 ]);
 
@@ -126,6 +127,22 @@ async function currentDeviceName() {
 }
 
 /** The KnowledgeService for panel channels (vector index, notes count). */
+/**
+ * `pi.embeddings.embed`, bound to this process. It exists only here: the MCP
+ * server is a separate child process with no `pi` (ADR 0003), so a host model
+ * is called from the main process and nowhere else.
+ */
+function hostEmbed() {
+  const api = globalThis.pi?.embeddings;
+  if (typeof api?.embed !== "function") return null;
+  return (input) => api.embed(input);
+}
+
+/** Whether this Desktop version can run an embedding model for the plugin. */
+function hostEmbeddingAvailable() {
+  return typeof globalThis.pi?.embeddings?.embed === "function";
+}
+
 async function ensurePanelService() {
   if (!state) throw new Error("plugin state is not initialized");
   if (!state.service) {
@@ -134,9 +151,29 @@ async function ensurePanelService() {
       pluginRoot,
       vaultPath: state.vaultPath,
       config: state.config,
+      hostEmbed: hostEmbed(),
     });
   }
   return state.service;
+}
+
+/**
+ * In `host` mode the vectors of the query have to be computed here, because the
+ * MCP server cannot reach `pi`. This embeds whatever the shared index still
+ * misses, in the background, with a bounded budget; the search itself keeps
+ * working through the lexical channel until it is done.
+ */
+async function maintainHostVectors() {
+  if (!state) return null;
+  const { loadEmbeddingSettings } = await loadEmbeddingLib();
+  const service = await ensurePanelService();
+  const settings = await loadEmbeddingSettings(embeddingSettingsPath()).catch(() => null);
+  if (!settings || settings.provider !== "host" || !settings.enabled) return null;
+  if (!hostEmbeddingAvailable()) return null;
+  const pending = await service.pendingVectorCount();
+  if (pending === 0) return null;
+  await service.ensureVectors({ budgetMs: 60_000 }).catch(() => {});
+  return pending;
 }
 
 function indexRunState() {
@@ -601,7 +638,7 @@ async function settingsGet() {
     settingsError = { code: error.code ?? "EMBEDDING_CONFIG_INVALID", message: error.message };
   }
   let apiKeyStatus = "not-required";
-  if (settings && settings.apiKeyEnv) {
+  if (settings && settings.apiKeyEnv && settings.provider !== "host") {
     apiKeyStatus = (await resolveApiKey(settings.apiKeyEnv, { home: os.homedir() })).status;
   }
   let index = null;
@@ -669,11 +706,17 @@ async function settingsTest(payload) {
   } catch (error) {
     return { ok: false, reason: error.code ?? "EMBEDDING_CONFIG_INVALID", message: error.message };
   }
-  const key = await resolveApiKey(settings.apiKeyEnv, { home: os.homedir() });
-  if (settings.apiKeyEnv && key.status !== "found") {
+  const isHost = settings.provider === "host";
+  const key = isHost ? { status: "not-required", value: null } : await resolveApiKey(settings.apiKeyEnv, { home: os.homedir() });
+  if (!isHost && settings.apiKeyEnv && key.status !== "found") {
     return { ok: false, reason: "EMBEDDING_KEY_MISSING", message: `environment variable ${settings.apiKeyEnv} has no value` };
   }
-  const client = new EmbeddingClient({ settings, apiKey: key.value, home: os.homedir() });
+  const client = new EmbeddingClient({
+    settings,
+    apiKey: key.value,
+    home: os.homedir(),
+    hostEmbed: isHost ? hostEmbed() : null,
+  });
   try {
     const [vector] = await client.embed(["personal-knowledge connection test"]);
     return { ok: true, dims: vector.length, latencyMs: Date.now() - started };
@@ -811,6 +854,26 @@ async function onPanelInvoke(channel, payload) {
     return setProfileSettings(payload?.values ?? {});
   }
   if (channel === "kg.profile.status") return profileStatus();
+  if (channel === "kg.models.listEmbedding") {
+    const answer = { models: [], hostSupported: hostEmbeddingAvailable() };
+    if (!hostEmbeddingAvailable() || typeof globalThis.pi?.models?.list !== "function") return answer;
+    try {
+      // `kind` is the Desktop 1.5.0 contract; an older host ignores it and
+      // returns chat models, which are filtered out below.
+      const listed = await globalThis.pi.models.list({ kind: "embedding" });
+      answer.models = (Array.isArray(listed) ? listed : [])
+        .filter((model) => model?.kind === "embedding" || model?.kind === undefined)
+        .map((model) => ({
+          key: String(model?.key ?? ""),
+          label: String(model?.alias || model?.label || model?.modelId || model?.key || ""),
+          providerName: String(model?.providerName ?? ""),
+        }))
+        .filter((model) => model.key);
+    } catch {
+      answer.models = [];
+    }
+    return answer;
+  }
   if (channel === "kg.models.list") {
     // `models.list` is a read-only catalog of the user's configured models.
     if (typeof globalThis.pi?.models?.list !== "function") return { models: [] };

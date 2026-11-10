@@ -55,6 +55,11 @@ a model picker. It requires Desktop v1.4.0 or newer
 (`engines.minihAgent` is `>=1.4.0`), the first release that publishes
 `conversation.read`.
 
+The unreleased 0.6.0 source adds a third vector provider, `host`, which embeds
+through an embedding model configured in Desktop (`pi.embeddings.embed`, ADR
+0003 in the plugin's `docs/adr/`); until Desktop 1.5.0 is published the option
+is disabled and the manifest keeps its current permissions and `engines`.
+
 The redistributed ones are listed with `trust: "community"` and
 `verified: false`: the `verified` badge is a claim about a publisher this
 repository cannot make on someone else's behalf. A plugin authored here is the
