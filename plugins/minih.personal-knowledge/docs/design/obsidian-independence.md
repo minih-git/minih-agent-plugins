@@ -117,9 +117,11 @@ definition, not the ontology `STALE` rule):
 - Day arithmetic uses local dates; `now` is injectable for tests.
 
 UI: two compact tables reusing the health-list row styles. Each row shows
-title and the listed fields; clicking a row opens the note in the Knowledge
-Universe drawer if the view is open, otherwise copies the file path with a
-toast. Counts appear in the section header. Empty states use i18n strings.
+title and the listed fields; clicking a row copies the note's file path and
+shows a toast. Opening the note in the Knowledge Universe drawer from the
+panel would need a cross-page targeting channel the host does not offer yet,
+so it is out of scope here. Counts appear in the section header. Empty states
+use i18n strings.
 
 Do not write any file into the vault for this.
 

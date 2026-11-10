@@ -199,7 +199,7 @@ export const STRINGS = {
     // Knowledge dashboard (obsidian-independence §3)
     navDashboard: "知识看板",
     dashboardHeading: "知识看板 (Knowledge Dashboard)",
-    dashboardDesc: "与知识库的 .base 看板同一套规则，只读展示；点击行可在抽屉里打开笔记。",
+    dashboardDesc: "与知识库的 .base 看板同一套规则，只读展示；点击行复制该笔记的文件路径。",
     dashboardActiveProjects: "活跃项目",
     dashboardReviewDue: "待复核知识",
     dashboardActiveEmpty: "没有进行中的项目笔记",
@@ -214,8 +214,8 @@ export const STRINGS = {
     dashboardColState: "知识状态",
     dashboardReviewDueState: "需复核",
     dashboardReviewMissingState: "未验证",
-    dashboardOpenInDrawer: "在知识宇宙中打开 {title}",
-    dashboardOpenFailed: "无法打开笔记，已复制文件路径",
+    dashboardCopyPathHint: "点击复制文件路径",
+    dashboardCopyFailed: "当前宿主不可用，无法复制文件路径",
     dashboardCount: "{count} 篇",
     dashboardUnavailable: "知识看板不可用：{reason}",
     // Section 6: Project routing
@@ -583,7 +583,7 @@ export const STRINGS = {
     // Knowledge dashboard (obsidian-independence §3)
     navDashboard: "Dashboard",
     dashboardHeading: "Knowledge Dashboard",
-    dashboardDesc: "The vault's `.base` dashboard rules, read-only. Click a row to open the note in the drawer.",
+    dashboardDesc: "The vault's `.base` dashboard rules, read-only. Clicking a row copies that note's file path.",
     dashboardActiveProjects: "Active projects",
     dashboardReviewDue: "Review due",
     dashboardActiveEmpty: "No active project notes",
@@ -598,8 +598,8 @@ export const STRINGS = {
     dashboardColState: "State",
     dashboardReviewDueState: "Review due",
     dashboardReviewMissingState: "Unverified",
-    dashboardOpenInDrawer: "Open {title} in Knowledge Universe",
-    dashboardOpenFailed: "Could not open the note; its file path was copied instead",
+    dashboardCopyPathHint: "Click to copy the file path",
+    dashboardCopyFailed: "This host cannot copy files, so the path was not copied",
     dashboardCount: "{count}",
     dashboardUnavailable: "Dashboard unavailable: {reason}",
     // Section 6: Project routing

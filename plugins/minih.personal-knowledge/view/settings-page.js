@@ -13,8 +13,10 @@
  * 9. Conversation archive (`kg.conversations.status|sync|device`, ADR 0002)
  * 10. Profile candidates (`kg.profile.status|set|run`, ADR 0002 §6–§8)
  *
- * A row that names a note can be opened in the Knowledge Universe drawer
- * (`kg.openSettings`) or copied as a file path (`kg.copyPath`).
+ * A row that names a note copies its file path (`kg.copyPath`); the health
+ * list also offers the Obsidian link. Opening a note here would need a
+ * cross-page hand-off into the Knowledge Universe drawer, which the host does
+ * not provide (`docs/design/obsidian-independence.md` §3).
  */
 
 import { invokeBridge, hasBridge } from "./bridge.js";
@@ -1230,7 +1232,7 @@ function renderDashboardTable(container, options) {
     const row = document.createElement("tr");
     row.className = "dashboard-row";
     row.tabIndex = 0;
-    row.title = t("dashboardOpenInDrawer", { title: entry.title });
+    row.title = t("dashboardCopyPathHint");
     for (const column of columns) {
       const className = typeof column.className === "function" ? column.className(entry) : column.className;
       row.appendChild(dashboardCell("td", column.value(entry), className));
@@ -1292,21 +1294,15 @@ function renderDashboard() {
 }
 
 /**
- * Open a dashboard row where the user can read it. The panel cannot reach
- * another view's DOM, so it asks the host to bring the Knowledge Universe
- * forward (`kg.openSettings` → `pi.ui.openPanel`) and copies the file path,
- * which is the actionable answer when that view is not available.
+ * A dashboard row is an actionable path, not a preview: clicking it copies the
+ * note's absolute path and says so. Opening the note itself would need a
+ * cross-page hand-off into the Knowledge Universe drawer, which the host does
+ * not offer yet (`docs/design/obsidian-independence.md` §3).
  */
 async function openDashboardRow(entry) {
   if (!entry?.path) return;
   if (!hasBridge()) {
-    showToast(t("dashboardOpenFailed"), true);
-    return;
-  }
-  try {
-    await invokeBridge("kg.openSettings", {}, BRIDGE_TIMEOUT_MS);
-  } catch {
-    showToast(t("dashboardOpenFailed"), true);
+    showToast(t("dashboardCopyFailed"), true);
     return;
   }
   await copyNotePath(entry.path);
