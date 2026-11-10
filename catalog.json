@@ -4,8 +4,8 @@
   "catalog_id": null,
   "name": "Minih-Agent-Desktop Plugins",
   "homepage": "https://gitea.hungraim.com/minih/minih-agent-plugins",
-  "updated_at": "2026-11-09T13:16:06Z",
-  "generated_at": "2026-11-09T13:16:06Z",
+  "updated_at": "2026-11-10T01:33:41Z",
+  "generated_at": "2026-11-10T01:33:41Z",
   "policy_version": null,
   "artifact_base_url": "https://gitea.hungraim.com/minih/minih-agent-plugins/raw/branch/main",
   "plugins": [
@@ -127,11 +127,11 @@
       },
       "versions": [
         {
-          "version": "0.5.0",
-          "publishedAt": "2026-11-09T13:16:06Z",
-          "shasum": "7e263fb9a7f7a9a4c5f0bcf2b5bbcccd1e5fbb1b03e692ed02d42d0571fe907e",
-          "url": "packages/minih.personal-knowledge-0.5.0.piplug",
-          "sizeBytes": 3160184,
+          "version": "0.5.1",
+          "publishedAt": "2026-11-10T01:33:41Z",
+          "shasum": "9aeccb8adec751788630857e98c781ade6f43c7cbc4d2bbf389e427978423270",
+          "url": "packages/minih.personal-knowledge-0.5.1.piplug",
+          "sizeBytes": 3167682,
           "permissions": [
             "agent.prompt.inject",
             "mcp.server.local",
