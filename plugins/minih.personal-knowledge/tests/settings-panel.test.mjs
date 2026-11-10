@@ -45,7 +45,7 @@ async function makeBackend({ lockVault = true } = {}) {
   const dataPath = path.join(root, "data");
   await mkdir(dataPath, { recursive: true });
   globalThis.pi = {
-    plugin: { getDataPath: () => dataPath },
+    plugin: { getDataPath: async () => dataPath },
     memory: undefined,
   };
   for (const key of Object.keys(require.cache)) {

@@ -72,15 +72,46 @@ let syncDevices = null; // { store, name } — the device name the syncer writes
 let indexRun = null; // { controller, done, total, mode, error }
 let lastIndexRun = null; // survives unload so status can still report
 
+/**
+ * The panel's stores. `pi.plugin.getDataPath` is async in the host contract
+ * (`getDataPath: () => Promise<string>`), so this is async too and the first
+ * caller's promise is shared: concurrent channels build the stores once.
+ * A failed build clears the cache, so the next call can retry instead of
+ * inheriting a rejected promise forever.
+ */
 function panelStoresFor() {
   if (!panelStores) {
-    panelStores = {
-      config: createConfigStore({ env: process.env, pluginRoot }),
-      prefs: createPrefsStore({ dataPath: globalThis.pi?.plugin?.getDataPath?.() ?? null }),
-      devices: createConversationSettingsStore({ env: process.env }),
-    };
+    panelStores = buildPanelStores().catch((error) => {
+      panelStores = null;
+      throw error;
+    });
   }
   return panelStores;
+}
+
+async function buildPanelStores() {
+  const dataPath = await resolveDataPath();
+  return {
+    config: createConfigStore({ env: process.env, pluginRoot }),
+    prefs: createPrefsStore({ dataPath }),
+    devices: createConversationSettingsStore({ env: process.env }),
+  };
+}
+
+/**
+ * The plugin's data directory, or `null` when the host cannot provide one.
+ * `createPrefsStore` treats a missing path as "unavailable" rather than
+ * throwing, so a host without the API only loses the language preference.
+ */
+async function resolveDataPath() {
+  const read = globalThis.pi?.plugin?.getDataPath;
+  if (typeof read !== "function") return null;
+  try {
+    const value = await read.call(globalThis.pi.plugin);
+    return typeof value === "string" && value.trim() !== "" ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -89,7 +120,7 @@ function panelStoresFor() {
  * host name is used, so the first pass has a stable value.
  */
 async function currentDeviceName() {
-  const store = panelStoresFor().devices;
+  const { devices: store } = await panelStoresFor();
   const stored = await store.get();
   return stored.deviceName || defaultDeviceName();
 }
@@ -200,13 +231,15 @@ async function configPayload() {
   const service = await ensurePanelService();
   await service.index.refresh();
   const notesCount = service.index.paths().filter((p) => p.endsWith(".md")).length;
-  return panelStoresFor().config.get({ notesCount });
+  const { config } = await panelStoresFor();
+  return config.get({ notesCount });
 }
 
 async function routingPayload() {
   const service = await ensurePanelService();
   await service.index.refresh();
-  return panelStoresFor().config.routing({
+  const { config } = await panelStoresFor();
+  return config.routing({
     noteExists: (note) => Boolean(service.index.note(note)) || Boolean(service.index.resolveTarget(note)),
   });
 }
@@ -655,7 +688,8 @@ async function settingsTest(payload) {
  * disk keep the name they were written under and stay this computer's.
  */
 async function setDeviceName(deviceName) {
-  const stored = await panelStoresFor().devices.setDeviceName(deviceName);
+  const { devices } = await panelStoresFor();
+  const stored = await devices.setDeviceName(deviceName);
   if (syncDevices) syncDevices.name = stored.deviceName;
   return { saved: true, deviceName: stored.deviceName };
 }
@@ -738,7 +772,8 @@ async function onPanelInvoke(channel, payload) {
   if (channel === "kg.settings.test") return settingsTest(payload);
   if (channel === "kg.config.get") return configPayload();
   if (channel === "kg.config.set") {
-    const result = await panelStoresFor().config.set(payload?.values ?? {});
+    const { config } = await panelStoresFor();
+    const result = await config.set(payload?.values ?? {});
     return { saved: result.saved, reloadRequired: result.reloadRequired };
   }
   if (channel === "kg.routing.get") return routingPayload();
@@ -757,7 +792,8 @@ async function onPanelInvoke(channel, payload) {
     if (conversationSyncer) return conversationSyncer.status();
     // The syncer is off (no host API, or the vault failed to load): still
     // report the device and enablement so the panel can explain why.
-    const stored = await panelStoresFor().devices.get();
+    const { devices } = await panelStoresFor();
+    const stored = await devices.get();
     return {
       state: globalThis.pi?.conversations?.changes ? "stopped" : "unsupported",
       device: stored.deviceName || defaultDeviceName(),
@@ -789,8 +825,8 @@ async function onPanelInvoke(channel, payload) {
   if (channel === "kg.profile.run") {
     return profileRun(payload);
   }
-  if (channel === "kg.prefs.get") return panelStoresFor().prefs.get();
-  if (channel === "kg.prefs.set") return panelStoresFor().prefs.set(String(payload?.language ?? ""));
+  if (channel === "kg.prefs.get") return (await panelStoresFor()).prefs.get();
+  if (channel === "kg.prefs.set") return (await panelStoresFor()).prefs.set(String(payload?.language ?? ""));
   if (channel === "kg.openSettings") {
     if (typeof globalThis.pi?.ui?.openPanel !== "function") {
       throw refusal("this host does not expose pi.ui.openPanel");

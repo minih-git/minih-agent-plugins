@@ -342,7 +342,9 @@ test("kg.index.rebuild: single run, monotonic progress, abort leaves no shrink",
     return texts.map(() => new Float32Array(4).fill(0.5));
   };
   const dataPath = await mkdtemp(path.join(os.tmpdir(), "personal-knowledge-panel-data-"));
-  globalThis.pi = { plugin: { getDataPath: () => dataPath }, memory: undefined };
+  // The host's `pi.plugin.getDataPath` is async; the fake must be too, or the
+  // panel path is exercised under a contract the real host never offers.
+  globalThis.pi = { plugin: { getDataPath: async () => dataPath }, memory: undefined };
   for (const key of Object.keys(require.cache)) {
     if (key.startsWith(PLUGIN_ROOT)) delete require.cache[key];
   }
