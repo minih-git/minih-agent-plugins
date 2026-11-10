@@ -197,7 +197,12 @@ function rawLockedValue(env, key) {
 }
 
 export function createPrefsStore({ dataPath } = {}) {
-  const file = dataPath ? path.join(dataPath, "view-prefs.json") : null;
+  // The host hands the data path over as a promise; a caller that forgets to
+  // await it must not reach `path.join`. Anything that is not a non-empty
+  // string means "no data path in this host", and the store reports itself
+  // unavailable instead of throwing on every panel open.
+  const usable = typeof dataPath === "string" && dataPath.trim() !== "";
+  const file = usable ? path.join(dataPath, "view-prefs.json") : null;
   return {
     async get() {
       if (!file) return { language: "auto", available: false };
