@@ -22,6 +22,7 @@
         <a href="#sec-retrieval" id="nav-retrieval" class="nav-pill"></a>
         <a href="#sec-index" id="nav-index" class="nav-pill"></a>
         <a href="#sec-display" id="nav-display" class="nav-pill"></a>
+        <a href="#sec-dashboard" id="nav-dashboard" class="nav-pill"></a>
         <a href="#sec-health" id="nav-health" class="nav-pill"></a>
         <a href="#sec-routing" id="nav-routing" class="nav-pill"></a>
         <a href="#sec-memory" id="nav-memory" class="nav-pill"></a>
@@ -285,7 +286,34 @@
         </div>
       </section>
 
-      <!-- 5. Ontology health -->
+      <!-- 5. Knowledge dashboard (obsidian-independence §3) -->
+      <section id="sec-dashboard" class="panel-section">
+        <div class="section-header">
+          <div>
+            <h2 id="dashboard-heading" class="section-title"></h2>
+            <p id="dashboard-desc" class="section-desc"></p>
+          </div>
+        </div>
+        <div id="dashboard-feedback" class="settings-feedback is-hidden" role="alert"></div>
+
+        <div class="routing-block">
+          <h3 class="sub-heading">
+            <span id="dashboard-projects-heading"></span>
+            <span id="dashboard-projects-count" class="badge"></span>
+          </h3>
+          <div id="dashboard-projects" class="dashboard-table"></div>
+        </div>
+
+        <div class="routing-block">
+          <h3 class="sub-heading">
+            <span id="dashboard-review-heading"></span>
+            <span id="dashboard-review-count" class="badge"></span>
+          </h3>
+          <div id="dashboard-review" class="dashboard-table"></div>
+        </div>
+      </section>
+
+      <!-- 6. Ontology health -->
       <section id="sec-health" class="panel-section">
         <div class="section-header">
           <div>
@@ -302,10 +330,11 @@
             </select>
           </div>
         </div>
+
         <div id="health-list" class="health-list"></div>
       </section>
 
-      <!-- 6. Project routing -->
+      <!-- 7. Project routing -->
       <section id="sec-routing" class="panel-section">
         <div class="section-header">
           <div>

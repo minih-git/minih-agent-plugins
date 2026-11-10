@@ -72,7 +72,7 @@ const TOOL_DEFINITIONS = [
     name: "knowledge_context",
     title: "Load Personal Knowledge Context",
     description:
-      "Load the smallest relevant context pack from the user's Obsidian vault by matching a repository path and task topic. Call before non-trivial work involving the user's projects, preferences, stack, infrastructure, or prior decisions.",
+      "Load the smallest relevant context pack from the user's knowledge vault (local Markdown, Obsidian-compatible) by matching a repository path and task topic. Call before non-trivial work involving the user's projects, preferences, stack, infrastructure, or prior decisions.",
     inputSchema: {
       type: "object",
       properties: {

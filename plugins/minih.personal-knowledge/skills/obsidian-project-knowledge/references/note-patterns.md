@@ -1,4 +1,4 @@
-# Note Patterns for Obsidian Project Knowledge
+# Note Patterns for Project Knowledge
 
 Use these patterns selectively. Do not generate every note type unless the repository justifies it.
 

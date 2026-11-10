@@ -15,7 +15,7 @@ export const MAIN_PROCESS_TOOLS = ["knowledge_search", "conversation_search"];
 export const TOOL_SCHEMAS = {
   knowledge_search: {
     description:
-      "Search Markdown notes and Obsidian Bases in the local knowledge vault with exact, deterministic term matching and safe snippets.",
+      "Search Markdown notes and `.base` dashboards in the local knowledge vault with exact, deterministic term matching and safe snippets.",
     inputSchema: {
       type: "object",
       properties: {

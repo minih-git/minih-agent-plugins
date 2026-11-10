@@ -9,7 +9,7 @@ vault. Each kind of knowledge has exactly one authority (ADR 0001 §9):
 | --- | --- | --- |
 | Hard rules for every task | `AGENTS.md` | System prompt |
 | Preferences and corrective feedback | Desktop learned memory (`MemoryRemember`, memory manager) | Session-start index and `MemorySearch` |
-| Projects, topics, environments, decisions, events, procedures | Obsidian vault | `knowledge_context` on demand |
+| Projects, topics, environments, decisions, events, procedures | Markdown knowledge vault (Obsidian-compatible) | `knowledge_context` on demand |
 | Loose facts and references not yet part of a note | Learned memory, promoted to the vault when mature | Index and `MemorySearch` |
 | Conversation evidence | Desktop transcripts | Session history search |
 

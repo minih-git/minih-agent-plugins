@@ -11,7 +11,7 @@ if [[ -z "$query" ]]; then
 fi
 
 if [[ ! -d "$vault_path" ]]; then
-  echo "Obsidian vault not found: $vault_path" >&2
+  echo "Knowledge vault not found: $vault_path" >&2
   exit 1
 fi
 

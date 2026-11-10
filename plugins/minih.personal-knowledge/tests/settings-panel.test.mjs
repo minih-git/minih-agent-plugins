@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { copyFile, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -497,4 +497,95 @@ test("kg.profile.run bypasses the weekly window, the scheduler does not", async 
   assert.equal(runs.length, 1, "the scheduled check is still inside the week");
   await backend.onUnload();
   delete process.env.PERSONAL_KNOWLEDGE_PROFILE_SETTINGS;
+});
+
+test("kg.note reports resolved and unresolved wikilinks for the renderer", async () => {
+  const { backend, vault } = await makeBackend();
+  await writeFile(
+    path.join(vault, "Note.md"),
+    [
+      "---",
+      "title: Note",
+      "type: topic",
+      "status: active",
+      "---",
+      "# Note",
+      "",
+      "See [[01 Projects/Alpha]] and [[Ghost]] and [[Alpha|alias]] again.",
+      "An embed ![[image.png]] is not a followed link.",
+      "",
+    ].join("\n"),
+  );
+  const note = await backend.onPanelInvoke("kg.note", { path: "Note.md" });
+  assert.deepEqual(note.links, [
+    { raw: "01 Projects/Alpha", resolved: "01 Projects/Alpha.md" },
+    { raw: "Ghost", resolved: null },
+    { raw: "Alpha", resolved: "01 Projects/Alpha.md" },
+    { raw: "image.png", resolved: null },
+  ]);
+  assert.equal(await realpath(note.absolutePath), await realpath(path.join(vault, "Note.md")));
+  await backend.onUnload();
+});
+
+test("kg.dashboard returns both .base tables for the vault", async () => {
+  const { backend, vault } = await makeBackend();
+  await mkdir(path.join(vault, "Templates"), { recursive: true });
+  await writeFile(
+    path.join(vault, "01 Projects", "Beta.md"),
+    '---\ntitle: Beta\ntype: project\nstatus: active\nstability: mixed\nverified: 2020-01-01\n---\n# Beta\n',
+  );
+  await writeFile(
+    path.join(vault, "Templates", "Template.md"),
+    "---\ntitle: Template\ntype: project\nstatus: active\n---\n# Template\n",
+  );
+  const dashboard = await backend.onPanelInvoke("kg.dashboard", {});
+  assert.deepEqual(
+    dashboard.activeProjects.map((row) => row.path),
+    ["01 Projects/Alpha.md", "01 Projects/Beta.md"],
+    JSON.stringify(dashboard.activeProjects),
+  );
+  assert.equal(dashboard.activeProjects[1].stability, "mixed");
+  assert.deepEqual(
+    dashboard.reviewDue.map((row) => row.path).sort(),
+    ["01 Projects/Alpha.md", "01 Projects/Beta.md", "Note.md"],
+    "active notes without verified, plus the mixed note verified in 2020",
+  );
+  const byPath = new Map(dashboard.reviewDue.map((row) => [row.path, row]));
+  assert.equal(byPath.get("Note.md").reviewState, "未验证");
+  assert.equal(byPath.get("01 Projects/Beta.md").reviewState, "需复核");
+  assert.equal(byPath.has("Templates/Template.md"), false, "Templates/ is outside the .base filter");
+  await backend.onUnload();
+});
+
+test("kg.copyPath writes the absolute path through pi.clipboard", async () => {
+  const { backend, vault } = await makeBackend();
+  const written = [];
+  globalThis.pi.clipboard = { writeText: async (text) => written.push(text) };
+  const answer = await backend.onPanelInvoke("kg.copyPath", { path: "Note" });
+  assert.deepEqual(written.map((entry) => entry), [answer.path]);
+  assert.equal(await realpath(answer.path), await realpath(path.join(vault, "Note.md")));
+  await assert.rejects(backend.onPanelInvoke("kg.copyPath", { path: "Missing" }), /unknown note/);
+  globalThis.pi.clipboard = undefined;
+  await assert.rejects(backend.onPanelInvoke("kg.copyPath", { path: "Note.md" }), /clipboard unavailable/);
+  await backend.onUnload();
+});
+
+test("kg.openExternal forwards http(s) only", async () => {
+  const { backend } = await makeBackend();
+  const opened = [];
+  globalThis.pi.shell = { openExternal: async (url) => opened.push(url) };
+  const answer = await backend.onPanelInvoke("kg.openExternal", { url: "https://example.com/a?b=1" });
+  assert.deepEqual(opened, ["https://example.com/a?b=1"]);
+  assert.equal(answer.opened, true);
+  for (const url of ["file:///etc/passwd", "obsidian://open?vault=Knowledge", "javascript:alert(1)", "not a url"]) {
+    await assert.rejects(
+      backend.onPanelInvoke("kg.openExternal", { url }),
+      (error) => error.code === "INVALID_ARGUMENT" || /not a URL/.test(error.message),
+      `${url} must be refused`,
+    );
+  }
+  assert.deepEqual(opened, ["https://example.com/a?b=1"], "a refused scheme never reaches the host");
+  globalThis.pi.shell = undefined;
+  await assert.rejects(backend.onPanelInvoke("kg.openExternal", { url: "https://example.com" }), /pi\.shell\.openExternal/);
+  await backend.onUnload();
 });

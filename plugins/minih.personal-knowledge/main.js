@@ -18,6 +18,12 @@
  * `09 Conversations/` for sessions the host reports through the read-only
  * `conversation.read` API (ADR 0002). The syncer owns the timer and stops with
  * the plugin.
+ *
+ * Since 0.7.0 the vault is read as plain Markdown: the drawer renders a note
+ * instead of showing its raw text, follows its wikilinks, and the settings
+ * panel derives the two dashboard tables the vault used to show through
+ * Obsidian Bases (`docs/design/obsidian-independence.md`). Obsidian is
+ * optional; `obsidian://` links stay as a secondary action.
  */
 "use strict";
 
@@ -36,6 +42,9 @@ const CHANNELS = new Set([
   "kg.graph",
   "kg.note",
   "kg.copyLink",
+  "kg.copyPath",
+  "kg.openExternal",
+  "kg.dashboard",
   "kg.promote.preview",
   "kg.promote.apply",
   "kg.settings.get",
@@ -284,6 +293,20 @@ async function routingPayload() {
   });
 }
 
+/**
+ * `kg.dashboard`: the two `.base` tables ("活跃项目", "待复核知识") derived
+ * from the shared index (`lib/dashboard.mjs`). Read-only; nothing is written
+ * into the vault.
+ */
+async function dashboardPayload() {
+  const { buildDashboard } = await import("./lib/dashboard.mjs");
+  const { index } = await ensureState();
+  // A user asking for the dashboard wants the vault as it is now, not as it
+  // was within the refresh throttle.
+  await index.refresh({ force: true });
+  return buildDashboard({ index });
+}
+
 async function ensureState() {
   if (state) return state;
   const [{ VaultIndex }, { loadOntology }, { redactSensitiveContent }] = await Promise.all([
@@ -492,9 +515,13 @@ async function note(payload) {
   await index.refresh();
   const requested = String(payload?.path ?? "");
   const resolved = index.resolveTarget(requested);
-  if (!resolved || !resolved.endsWith(".md") || !index.note(resolved)) {
+  if (!resolved || !resolved.endsWith(".md")) {
     throw refusal(`unknown note: ${requested}`);
   }
+  // Re-read this one file: `refresh()` is throttled to one scan per second, so
+  // a note written moments ago would otherwise render from a stale cache.
+  await index.invalidate(resolved);
+  if (!index.note(resolved)) throw refusal(`unknown note: ${requested}`);
   const record = index.note(resolved);
   const safe = redactSensitiveContent(record.raw);
   const issues = ontology.validate(record, {
@@ -506,8 +533,15 @@ async function note(payload) {
     backlinkCount: index.backlinksOf(resolved).length,
     now: new Date(),
   });
+  // Resolution stays here: the renderer draws what this answers instead of
+  // re-implementing `resolveTarget` (obsidian-independence §2).
+  const links = bodyWikilinks(record.raw).map((raw) => ({
+    raw,
+    resolved: index.resolveTarget(raw),
+  }));
   return {
     path: resolved,
+    absolutePath: path.join(index.root, ...resolved.split("/")),
     title: record.title,
     metadata: record.metadata,
     outline: record.outline,
@@ -517,7 +551,59 @@ async function note(payload) {
     truncated: safe.length > MAX_PREVIEW_CHARS,
     issues,
     backlinks: index.backlinksOf(resolved),
+    links,
   };
+}
+
+/**
+ * Wikilink targets in first-appearance order, as written (`target#heading`
+ * normalized by `normalizeLinkTarget`). The note's own `linkTargets` also
+ * carries frontmatter links, which the drawer does not render.
+ */
+function bodyWikilinks(raw) {
+  const targets = [];
+  for (const match of String(raw ?? "").matchAll(/!?\[\[([^\][]+)\]\]/g)) {
+    const target = match[1].split("|")[0].split("#")[0].trim();
+    if (target && !targets.includes(target)) targets.push(target);
+  }
+  return targets;
+}
+
+/** `kg.copyPath`: the note's absolute path, for pasting into any editor. */
+async function copyPath(payload) {
+  const { index } = await ensureState();
+  const requested = String(payload?.path ?? "");
+  const resolved = index.resolveTarget(requested);
+  if (!resolved || !index.note(resolved)) throw refusal(`unknown note: ${requested}`);
+  const absolutePath = path.join(index.root, ...resolved.split("/"));
+  if (typeof globalThis.pi?.clipboard?.writeText !== "function") {
+    throw new Error("clipboard unavailable in this host");
+  }
+  await globalThis.pi.clipboard.writeText(absolutePath);
+  return { copied: true, path: absolutePath };
+}
+
+/**
+ * `kg.openExternal`: http(s) only. The renderer never puts a note's URL into
+ * a live link itself; a refused scheme stays text.
+ */
+async function openExternal(payload) {
+  const url = String(payload?.url ?? "").trim();
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw refusal(`not a URL: ${url}`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw refusal(`only http(s) links can be opened: ${parsed.protocol}`);
+  }
+  const api = globalThis.pi?.shell;
+  if (typeof api?.openExternal !== "function") {
+    throw new Error("this host does not expose pi.shell.openExternal");
+  }
+  await api.openExternal(url);
+  return { opened: true, url };
 }
 
 async function copyLink(payload) {
@@ -811,6 +897,9 @@ async function onPanelInvoke(channel, payload) {
   if (channel === "kg.graph") return graph(payload);
   if (channel === "kg.note") return note(payload);
   if (channel === "kg.copyLink") return copyLink(payload);
+  if (channel === "kg.copyPath") return copyPath(payload);
+  if (channel === "kg.openExternal") return openExternal(payload);
+  if (channel === "kg.dashboard") return dashboardPayload();
   if (channel === "kg.promote.preview") return promotePreview(payload);
   if (channel === "kg.promote.apply") return promoteApply(payload);
   if (channel === "kg.settings.get") return settingsGet();

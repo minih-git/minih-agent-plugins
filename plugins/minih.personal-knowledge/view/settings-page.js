@@ -1,16 +1,20 @@
 /**
  * Personal Knowledge settings panel logic (settings-panel.md §1–§7).
  *
- * Manages the seven sections in a single host panel:
+ * Manages the sections in a single host panel:
  * 1. Vault (`kg.config.get` / `kg.config.set`)
  * 2. Vector retrieval (`kg.settings.get` / `kg.settings.set` / `kg.settings.test`)
  * 3. Index (`kg.index.status` / `kg.index.rebuild` with 1s polling while running)
  * 4. Display (`kg.prefs.get` / `kg.prefs.set`)
- * 5. Ontology health (`kg.graph` issues + severity filter + Obsidian link copy)
- * 6. Project routing (`kg.routing.get`, read-only with missing-note flags)
- * 7. Memory (`kg.memory.status`, read-only)
- * 8. Conversation archive (`kg.conversations.status|sync|device`, ADR 0002)
- * 9. Profile candidates (`kg.profile.status|set|run`, ADR 0002 §6–§8)
+ * 5. Knowledge dashboard (`kg.dashboard`, read-only; obsidian-independence §3)
+ * 6. Ontology health (`kg.graph` issues + severity filter + open / copy)
+ * 7. Project routing (`kg.routing.get`, read-only with missing-note flags)
+ * 8. Memory (`kg.memory.status`, read-only)
+ * 9. Conversation archive (`kg.conversations.status|sync|device`, ADR 0002)
+ * 10. Profile candidates (`kg.profile.status|set|run`, ADR 0002 §6–§8)
+ *
+ * A row that names a note can be opened in the Knowledge Universe drawer
+ * (`kg.openSettings`) or copied as a file path (`kg.copyPath`).
  */
 
 import { invokeBridge, hasBridge } from "./bridge.js";
@@ -552,6 +556,7 @@ const state = {
   indexPollTimer: null,
   hasIndexRunInSession: false,
   graphPayload: null,
+  dashboard: null,
   healthSeverity: "all",
   routing: null,
   memoryStatus: { readEnabled: false },
@@ -1065,18 +1070,28 @@ function renderHealthList() {
 
     info.append(title, meta);
 
-    const link = buildObsidianLink(state.vaultName, node.id);
+    // A note is read in the drawer now; the Obsidian link stays secondary.
+    const pathBtn = document.createElement("button");
+    pathBtn.type = "button";
+    pathBtn.className = "ghost-btn copy-link-btn";
+    pathBtn.textContent = t("healthCopyPath");
+    pathBtn.addEventListener("click", () => {
+      void copyNotePath(node.id);
+    });
     const copyBtn = document.createElement("button");
     copyBtn.type = "button";
     copyBtn.className = "ghost-btn copy-link-btn";
-    copyBtn.textContent = t("drawerCopyLink");
-    copyBtn.dataset.link = link;
-    copyBtn.title = link;
+    copyBtn.textContent = t("healthCopyLink");
+    copyBtn.dataset.link = buildObsidianLink(state.vaultName, node.id);
+    copyBtn.title = copyBtn.dataset.link;
     copyBtn.addEventListener("click", () => {
       void copyNoteLink(node.id);
     });
 
-    top.append(info, copyBtn);
+    const actions = document.createElement("div");
+    actions.className = "health-row-actions";
+    actions.append(pathBtn, copyBtn);
+    top.append(info, actions);
 
     const chips = document.createElement("div");
     chips.className = "health-row-issues";
@@ -1116,6 +1131,185 @@ async function copyNoteLink(notePath) {
     }
   }
   showToast(t("toastCopied"));
+}
+
+/** Copy the absolute path of a note (`kg.copyPath`), with a toast. */
+async function copyNotePath(notePath) {
+  try {
+    const answer = await invokeBridge("kg.copyPath", { path: notePath }, BRIDGE_TIMEOUT_MS);
+    showToast(t("toastPathCopied", { path: answer?.path ?? notePath }));
+  } catch (error) {
+    showToast(t("toastCopyFailed", { reason: error?.message || String(error) }), true);
+  }
+}
+
+// ---- Section 5: Knowledge dashboard (`kg.dashboard`) ----
+
+/** Fixture-mode sample rows, drawn from the same demo graph as the view. */
+function dashboardFixture() {
+  return {
+    activeProjects: FIXTURE_GRAPH.nodes
+      .filter((node) => node.cls === "project" && node.status === "active")
+      .slice(0, 6)
+      .map((node) => ({
+        path: node.id,
+        title: node.title,
+        status: node.status,
+        stability: node.stability ?? null,
+        verified: node.verified ?? null,
+      })),
+    reviewDue: FIXTURE_GRAPH.nodes
+      .filter((node) => node.status === "active" && !node.verified)
+      .slice(0, 8)
+      .map((node) => ({
+        path: node.id,
+        title: node.title,
+        type: node.cls,
+        project: node.project ?? null,
+        stability: node.stability ?? null,
+        verificationScope: null,
+        verified: null,
+        reviewState: "未验证",
+      })),
+  };
+}
+
+/** The review state as the panel shows it, in the current language. */
+export function reviewStateLabel(reviewState) {
+  if (reviewState === "需复核") return t("dashboardReviewDueState");
+  if (reviewState === "未验证") return t("dashboardReviewMissingState");
+  return String(reviewState ?? "");
+}
+
+async function loadDashboard() {
+  if (!hasBridge()) {
+    state.dashboard = dashboardFixture();
+    setFeedback("dashboard-feedback", "", false);
+    renderDashboard();
+    return;
+  }
+  try {
+    state.dashboard = await invokeBridge("kg.dashboard", {}, BRIDGE_TIMEOUT_MS);
+    setFeedback("dashboard-feedback", "", false);
+  } catch (error) {
+    state.dashboard = { activeProjects: [], reviewDue: [] };
+    setFeedback("dashboard-feedback", t("dashboardUnavailable", { reason: error?.message || String(error) }), true);
+  }
+  renderDashboard();
+}
+
+function dashboardCell(tag, textValue, className) {
+  const cell = document.createElement(tag);
+  if (className) cell.className = className;
+  cell.textContent = textValue ?? "";
+  return cell;
+}
+
+/**
+ * One dashboard table: a real `<table>` with a header row and one row per
+ * note. Clicking (or Enter on) a row opens the note in the Knowledge Universe
+ * drawer when that view answers, and otherwise copies its file path.
+ */
+function renderDashboardTable(container, options) {
+  const { columns, rows, emptyKey } = options;
+  if (!container) return;
+  const headerRow = document.createElement("tr");
+  for (const column of columns) headerRow.appendChild(dashboardCell("th", t(column.label)));
+  const head = document.createElement("thead");
+  head.appendChild(headerRow);
+
+  const body = document.createElement("tbody");
+  if (rows.length === 0) {
+    const row = document.createElement("tr");
+    const cell = dashboardCell("td", t(emptyKey), "dashboard-empty");
+    cell.colSpan = columns.length;
+    row.appendChild(cell);
+    body.appendChild(row);
+  }
+  for (const entry of rows) {
+    const row = document.createElement("tr");
+    row.className = "dashboard-row";
+    row.tabIndex = 0;
+    row.title = t("dashboardOpenInDrawer", { title: entry.title });
+    for (const column of columns) {
+      const className = typeof column.className === "function" ? column.className(entry) : column.className;
+      row.appendChild(dashboardCell("td", column.value(entry), className));
+    }
+    const open = () => {
+      void openDashboardRow(entry);
+    };
+    row.addEventListener("click", open);
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        open();
+      }
+    });
+    body.appendChild(row);
+  }
+
+  const table = document.createElement("table");
+  table.className = "dashboard-table-grid";
+  table.append(head, body);
+  container.replaceChildren(table);
+}
+
+function renderDashboard() {
+  if (!$("dashboard-projects-heading")) return;
+  const dashboard = state.dashboard ?? { activeProjects: [], reviewDue: [] };
+  $("dashboard-projects-heading").textContent = t("dashboardActiveProjects");
+  $("dashboard-review-heading").textContent = t("dashboardReviewDue");
+  $("dashboard-projects-count").textContent = t("dashboardCount", { count: dashboard.activeProjects.length });
+  $("dashboard-review-count").textContent = t("dashboardCount", { count: dashboard.reviewDue.length });
+
+  renderDashboardTable($("dashboard-projects"), {
+    columns: [
+      { label: "dashboardColTitle", value: (entry) => entry.title },
+      { label: "dashboardColStatus", value: (entry) => entry.status },
+      { label: "dashboardColStability", value: (entry) => entry.stability ?? "—" },
+      { label: "dashboardColVerified", value: (entry) => entry.verified ?? "—" },
+    ],
+    rows: dashboard.activeProjects,
+    emptyKey: "dashboardActiveEmpty",
+  });
+  renderDashboardTable($("dashboard-review"), {
+    columns: [
+      { label: "dashboardColTitle", value: (entry) => entry.title },
+      { label: "dashboardColType", value: (entry) => entry.type ?? "—" },
+      { label: "dashboardColProject", value: (entry) => entry.project ?? "—" },
+      { label: "dashboardColStability", value: (entry) => entry.stability ?? "—" },
+      { label: "dashboardColScope", value: (entry) => entry.verificationScope ?? "—" },
+      { label: "dashboardColVerified", value: (entry) => entry.verified ?? "—" },
+      {
+        label: "dashboardColState",
+        value: (entry) => reviewStateLabel(entry.reviewState),
+        className: (entry) => `dashboard-state state-${entry.reviewState === "需复核" ? "due" : "missing"}`,
+      },
+    ],
+    rows: dashboard.reviewDue,
+    emptyKey: "dashboardReviewEmpty",
+  });
+}
+
+/**
+ * Open a dashboard row where the user can read it. The panel cannot reach
+ * another view's DOM, so it asks the host to bring the Knowledge Universe
+ * forward (`kg.openSettings` → `pi.ui.openPanel`) and copies the file path,
+ * which is the actionable answer when that view is not available.
+ */
+async function openDashboardRow(entry) {
+  if (!entry?.path) return;
+  if (!hasBridge()) {
+    showToast(t("dashboardOpenFailed"), true);
+    return;
+  }
+  try {
+    await invokeBridge("kg.openSettings", {}, BRIDGE_TIMEOUT_MS);
+  } catch {
+    showToast(t("dashboardOpenFailed"), true);
+    return;
+  }
+  await copyNotePath(entry.path);
 }
 
 // ---- Section 6: Project Routing (`kg.routing.get`) ----
@@ -1575,6 +1769,7 @@ function applyTranslations() {
   $("nav-retrieval").textContent = t("navRetrieval");
   $("nav-index").textContent = t("navIndex");
   $("nav-display").textContent = t("navDisplay");
+  $("nav-dashboard").textContent = t("navDashboard");
   $("nav-health").textContent = t("navHealth");
   $("nav-routing").textContent = t("navRouting");
   $("nav-memory").textContent = t("navMemory");
@@ -1626,7 +1821,12 @@ function applyTranslations() {
   $("opt-lang-zh").textContent = t("languageZh");
   $("opt-lang-en").textContent = t("languageEn");
   renderLanguageButtons();
+  // 5. Knowledge dashboard
+  $("dashboard-heading").textContent = t("dashboardHeading");
+  $("dashboard-desc").textContent = t("dashboardDesc");
+  renderDashboard();
 
+  // 6. Ontology health
   // 5. Ontology health
   $("health-heading").textContent = t("healthHeading");
   $("health-desc").textContent = t("healthDesc");
@@ -1636,7 +1836,7 @@ function applyTranslations() {
   $("health-sev-muted").textContent = t("healthFilterMuted");
   renderHealthList();
 
-  // 6. Project routing
+  // 7. Project routing
   $("routing-heading").textContent = t("routingHeading");
   $("routing-readonly-hint").textContent = t("routingReadOnlyHint");
   $("routing-projects-heading").textContent = t("routingProjectsSubheading");
@@ -1761,6 +1961,7 @@ async function reloadAll() {
     loadVaultConfig({ populateForm: true }),
     retrievalPanel.load(true),
     loadIndexStatus(),
+    loadDashboard(),
     loadHealthGraph(),
     loadRouting(),
     loadMemoryStatus(),
@@ -1842,6 +2043,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       return retrievalPanel;
     },
     reloadAll,
+    reviewStateLabel,
     buildObsidianLink,
     vaultBasename,
   };
