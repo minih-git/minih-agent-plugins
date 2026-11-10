@@ -811,7 +811,12 @@ async function onPanelInvoke(channel, payload) {
   if (channel === "kg.promote.preview") return promotePreview(payload);
   if (channel === "kg.promote.apply") return promoteApply(payload);
   if (channel === "kg.settings.get") return settingsGet();
-  if (channel === "kg.settings.set") return settingsSet(payload);
+  if (channel === "kg.settings.set") {
+    const saved = await settingsSet(payload);
+    // A provider change decides whether this process owns the retrieval tools.
+    await syncKnowledgeTools().catch(() => {});
+    return saved;
+  }
   if (channel === "kg.settings.test") return settingsTest(payload);
   if (channel === "kg.config.get") return configPayload();
   if (channel === "kg.config.set") {
@@ -967,14 +972,104 @@ async function startProfileScheduler() {
   return profileScheduler;
 }
 
+/**
+ * The retrieval tools, registered in this process (ADR 0003 §2).
+ *
+ * `pi.embeddings.embed` exists only here, so in `host` mode a query can only be
+ * turned into a vector here. When that mode is active the plugin registers
+ * `knowledge_search` and `conversation_search` as agent tools from this
+ * process: the host names them `plugin_<id>_<tool>`, while the MCP server's
+ * tools are named `plugin_<id>_<serverId>_<tool>`, so the model sees exactly one
+ * set. The tools share the same `KnowledgeService`, index, and vector file as
+ * the MCP server; nothing is duplicated.
+ */
+let knowledgeTools = null; // [name, ...] registered by this process
+
+/** Whether the query vector must be computed here (host model or host-vector index). */
+async function needsHostQueryVectors() {
+  if (!hostEmbeddingAvailable()) return false;
+  try {
+    const { loadEmbeddingSettings } = await loadEmbeddingLib();
+    const settings = await loadEmbeddingSettings(embeddingSettingsPath());
+    return settings.enabled && settings.provider === "host";
+  } catch {
+    return false;
+  }
+}
+
+async function registerKnowledgeTools() {
+  if (knowledgeTools) return knowledgeTools;
+  const api = globalThis.pi?.agent;
+  if (typeof api?.registerTool !== "function") return null;
+  const { TOOL_SCHEMAS, renderMainProcessTool, MAIN_PROCESS_TOOLS } = await import("./mcp/tool-text.mjs");
+  const registered = [];
+  for (const name of MAIN_PROCESS_TOOLS) {
+    const schema = TOOL_SCHEMAS[name];
+    await api.registerTool({
+      name,
+      description: schema.description,
+      risk: "low",
+      schema: schema.inputSchema,
+      execute: async (args) => runKnowledgeTool(name, args, renderMainProcessTool),
+    });
+    registered.push(name);
+  }
+  knowledgeTools = registered;
+  return knowledgeTools;
+}
+
+async function unregisterKnowledgeTools() {
+  const registered = knowledgeTools;
+  knowledgeTools = null;
+  if (!registered) return;
+  const api = globalThis.pi?.agent;
+  if (typeof api?.unregisterTool !== "function") return;
+  for (const name of registered) {
+    await api.unregisterTool(name).catch(() => {});
+  }
+}
+
+/**
+ * Run one of the two retrieval tools with the query vector computed here. The
+ * text the model reads is the same as the MCP tool's, so the two paths cannot
+ * answer differently.
+ */
+async function runKnowledgeTool(name, args, render) {
+  const input = args ?? {};
+  const service = await ensurePanelService();
+  const embedQuery = async (text) => {
+    const [vector] = await service.embedding.embed([text]);
+    return vector;
+  };
+  if (name === "knowledge_search") {
+    const value = await service.search(input, { embedQuery });
+    return render(name, value);
+  }
+  const value = await service.conversationSearch(input);
+  return render(name, value);
+}
+
+/**
+ * Keep the registered tools in step with the current settings: register them in
+ * `host` mode, remove them otherwise, so the model never sees a second copy of
+ * a tool the MCP server already answers.
+ */
+async function syncKnowledgeTools() {
+  const wanted = await needsHostQueryVectors();
+  if (wanted && !knowledgeTools) await registerKnowledgeTools();
+  else if (!wanted && knowledgeTools) await unregisterKnowledgeTools();
+}
+
 async function onLoad() {
   // Warm the index so the first view render does not pay for the vault scan.
   await ensureState().catch(() => {});
   await startConversationSync().catch(() => null);
   await startProfileScheduler().catch(() => null);
+  await syncKnowledgeTools().catch(() => null);
 }
 
 async function onUnload() {
+  await unregisterKnowledgeTools().catch(() => {});
   if (profileScheduler) {
     const scheduler = profileScheduler;
     profileScheduler = null;

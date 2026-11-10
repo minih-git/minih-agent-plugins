@@ -62,26 +62,41 @@ is no host bridge in it. The authentication token file that already sits next to
 the skills is a Desktop-side channel for *plugins calling the desktop*, not a
 path from an MCP child back into `pi`.
 
-Rather than invent a new IPC surface, the plugin puts vector work where the API
-already exists:
+So the tools moved rather than inventing an IPC surface. `pi.agent.registerTool`
+registers a tool that **runs in the plugin main process**, which is the one
+place that holds `pi.embeddings`:
 
-- **MCP process**: builds the lexical index, serves `knowledge_search`, and does
-  the vector work for the endpoint providers it can reach itself (Ollama,
-  OpenAI-compatible) — unchanged.
-- **Main process**: in `host` mode it is the only place that can call
-  `pi.embeddings.embed`, so it owns the host-model vectors. It opens the same
-  shared index (`~/.personal-knowledge/index/<sha1(vault)>`) through the shared
-  `KnowledgeService`, embeds whatever is still missing with
-  `ensureVectors({ budgetMs })`, and does so in the background after a settings
-  change or a panel open, never blocking a panel channel for long.
-- The shared `.lock`, the identity check, and the shrink guard keep the two
-  writers safe: each only ever writes rows it embedded, and a mismatch in
-  identity makes the other side reload.
+- **Host mode**: the main process registers `knowledge_search` and
+  `conversation_search` as agent tools, computes the query vector with
+  `pi.embeddings.embed`, and answers through the same `KnowledgeService`, the
+  same index, and the same vector file the MCP server uses.
+- **Other providers** (Ollama, OpenAI-compatible): nothing is registered. The
+  MCP server answers both tools because it can embed its own queries.
+- Names do not collide: a registered tool becomes
+  `plugin_<id>_knowledge_search` while an MCP tool becomes
+  `plugin_<id>_<serverId>_knowledge_search`, and the two sets are mutually
+  exclusive — switching the provider registers or unregisters them, and
+  `onUnload` removes them.
+- One index, two writers, still safe: `ensureVectors` never runs for a host
+  model in a process without `pi.embeddings` (`#cannotEmbedHere`), so the MCP
+  side only reads what the main process wrote and never reports the other
+  side's absence as its own failure. A search reloads the on-disk rows when
+  this process has none, so a vector written a moment ago is used.
 
-The visible consequence, stated here so it is not a surprise: in `host` mode,
-`knowledge_search` *inside an agent session* uses the lexical channel plus the
-vectors the main process has already written. It never computes a query vector
-by itself. The panel says so, and `kg.index.status` shows the pending count.
+The identity comparison had to learn the second shape: a host identity is
+`host:<modelKey>|dims` (two parts) where a direct endpoint has
+`provider|baseUrl|model|dims` (four). Comparing "everything before the
+dimensions" handles both.
+
+Registering a tool needs `agent.tool.register`, which this version does not
+declare yet (§4): the tools stay unregistered on a host that has not granted
+it, and that provider combination then behaves like any other plugin tool —
+lexical plus whatever the MCP server can do itself.
+
+The visible consequence, stated so it is not a surprise: in host mode the
+ranked search inside an agent session is only as fresh as the last index pass
+by the main process. `kg.index.status` shows the pending count, and a settings
+change or a panel open triggers one in the background.
 
 ### 3. The panel explains before it sends
 
@@ -101,7 +116,8 @@ by itself. The panel says so, and `kg.index.status` shows the pending count.
 
 ### 4. Permissions and versions
 
-`embeddings.run` and `engines.minihAgent >= 1.5.0` are **not** declared yet.
+`embeddings.run`, `agent.tool.register`, and `engines.minihAgent >= 1.5.0` are
+**not** declared yet.
 Declaring an unknown permission makes today's hosts refuse the manifest, so P1
 ships the code and the panel with the host option disabled on a host that
 cannot honour it; P2 flips the manifest once Desktop 1.5.0 is published.
