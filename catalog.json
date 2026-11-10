@@ -4,8 +4,8 @@
   "catalog_id": null,
   "name": "Minih-Agent-Desktop Plugins",
   "homepage": "https://gitea.hungraim.com/minih/minih-agent-plugins",
-  "updated_at": "2026-11-10T01:33:41Z",
-  "generated_at": "2026-11-10T01:33:41Z",
+  "updated_at": "2026-11-10T04:19:42Z",
+  "generated_at": "2026-11-10T04:19:42Z",
   "policy_version": null,
   "artifact_base_url": "https://gitea.hungraim.com/minih/minih-agent-plugins/raw/branch/main",
   "plugins": [
@@ -112,26 +112,26 @@
       "publisher_id": "minih-git",
       "homepage": null,
       "repository": "https://github.com/minih-git/minih-agent-plugins",
-      "safety_notes": "Spawns a local Node MCP process and a view backend that read and write inside your Obsidian vault (default ~/Documents/Knowledge; override with the vaultPath key in your repo-map or the PERSONAL_KNOWLEDGE_VAULT variable). Writes are guarded: dry-run by default, updates require the note's current SHA-256, likely credentials are rejected, changes are written atomically and backed up. Nothing leaves the machine by default; embeddings run on a local Ollama until you enable a remote provider in the view's retrieval settings, after which redacted note sections are sent to that endpoint. The API key is never stored: embedding.json records only the name of an environment variable, whose value is read from the process environment or, failing that, from your shell rc, and it is never logged. The view backend reads the vault with direct Node access, the same way the MCP server does. Archiving conversations is opt-in in Desktop (Global AI → conversation archive): while it is on, the plugin pulls redacted conversation changes every five minutes and writes summaries and transcripts under 09 Conversations/ in the vault, so they reach your other computers through the vault sync. The host sends no thinking, no tool results, and no attachments. Profile candidates (off by default) send recent summaries and user-scope learned memory to the model you choose, and write only to 00 Inbox/ — the profile note itself is never edited automatically.",
+      "safety_notes": "Spawns a local Node MCP process and a view backend that read and write inside your Obsidian vault (default ~/Documents/Knowledge; override with the vaultPath key in your repo-map or the PERSONAL_KNOWLEDGE_VAULT variable). Writes are guarded: dry-run by default, updates require the note's current SHA-256, likely credentials are rejected, changes are written atomically and backed up. Nothing leaves the machine by default; embeddings run on a local Ollama until you enable a remote provider in the view's retrieval settings, after which redacted note sections are sent to that endpoint. The API key is never stored: embedding.json records only the name of an environment variable, whose value is read from the process environment or, failing that, from your shell rc, and it is never logged. The view backend reads the vault with direct Node access, the same way the MCP server does. Vector retrieval can use an embedding model you configured in Desktop (provider \"host\", permission embeddings.run): while it is selected, redacted note sections are sent to that model's service through the app and spend its quota, and the app's own model list decides what is available. Archiving conversations is opt-in in Desktop (Global AI → conversation archive): while it is on, the plugin pulls redacted conversation changes every five minutes and writes summaries and transcripts under 09 Conversations/ in the vault, so they reach your other computers through the vault sync. The host sends no thinking, no tool results, and no attachments. Profile candidates (off by default) send recent summaries and user-scope learned memory to the model you choose, and write only to 00 Inbox/ — the profile note itself is never edited automatically.",
       "i18n": {
         "en": {
           "name": "Personal Knowledge",
           "description": "Use a local Obsidian vault as verified, time-aware long-term context: scoped retrieval, guarded write-back, project routing, the Knowledge Universe view, and an archived history of your conversations.",
-          "safetyNotes": "Spawns a local Node MCP process and a view backend that read and write inside your Obsidian vault (default ~/Documents/Knowledge; override with the vaultPath key in your repo-map or the PERSONAL_KNOWLEDGE_VAULT variable). Writes are guarded: dry-run by default, updates require the note's current SHA-256, likely credentials are rejected, changes are written atomically and backed up. Nothing leaves the machine by default; embeddings run on a local Ollama until you enable a remote provider in the view's retrieval settings, after which redacted note sections are sent to that endpoint. The API key is never stored: embedding.json records only the name of an environment variable, whose value is read from the process environment or, failing that, from your shell rc, and it is never logged. The view backend reads the vault with direct Node access, the same way the MCP server does. Archiving conversations is opt-in in Desktop (Global AI → conversation archive): while it is on, the plugin pulls redacted conversation changes every five minutes and writes summaries and transcripts under 09 Conversations/ in the vault, so they reach your other computers through the vault sync. The host sends no thinking, no tool results, and no attachments. Profile candidates (off by default) send recent summaries and user-scope learned memory to the model you choose, and write only to 00 Inbox/ — the profile note itself is never edited automatically."
+          "safetyNotes": "Spawns a local Node MCP process and a view backend that read and write inside your Obsidian vault (default ~/Documents/Knowledge; override with the vaultPath key in your repo-map or the PERSONAL_KNOWLEDGE_VAULT variable). Writes are guarded: dry-run by default, updates require the note's current SHA-256, likely credentials are rejected, changes are written atomically and backed up. Nothing leaves the machine by default; embeddings run on a local Ollama until you enable a remote provider in the view's retrieval settings, after which redacted note sections are sent to that endpoint. The API key is never stored: embedding.json records only the name of an environment variable, whose value is read from the process environment or, failing that, from your shell rc, and it is never logged. The view backend reads the vault with direct Node access, the same way the MCP server does. Vector retrieval can use an embedding model you configured in Desktop (provider \"host\", permission embeddings.run): while it is selected, redacted note sections are sent to that model's service through the app and spend its quota, and the app's own model list decides what is available. Archiving conversations is opt-in in Desktop (Global AI → conversation archive): while it is on, the plugin pulls redacted conversation changes every five minutes and writes summaries and transcripts under 09 Conversations/ in the vault, so they reach your other computers through the vault sync. The host sends no thinking, no tool results, and no attachments. Profile candidates (off by default) send recent summaries and user-scope learned memory to the model you choose, and write only to 00 Inbox/ — the profile note itself is never edited automatically."
         },
         "zh-CN": {
           "name": "Personal Knowledge",
           "description": "把本地 Obsidian 知识库当作经过校验、带时效的长期上下文：按仓库与主题加载、检索、读取带哈希保护的笔记并安全回写，另有知识宇宙视图与会话归档检索。",
-          "safetyNotes": "会启动一个本地 Node MCP 进程和视图后端，只在你的 Obsidian 知识库（默认 ~/Documents/Knowledge，可用 repo-map 的 vaultPath 键或 PERSONAL_KNOWLEDGE_VAULT 覆盖）内读写。写入有防护：默认 dry-run，更新需要笔记当前 SHA-256，拒绝疑似凭据，原子写入并自动备份。默认不出本机：向量嵌入走本地 Ollama；在视图的检索设置中开启远程向量后，脱敏后的笔记分段会发送到该端点。API key 不落盘：embedding.json 只登记环境变量名，取值先读进程环境变量、再读 shell rc，且绝不写入日志。视图后端与 MCP 服务器一样使用直接 Node 访问读取知识库。 会话归档在 Desktop「设置 → 全局 AI」里开启：开启期间插件每 5 分钟拉取一次脱敏后的会话变更，把摘要和原文写到知识库的 09 Conversations/ 下，随知识库同步到其他电脑。宿主不会发出思考内容、工具返回结果和附件。画像候选默认关闭，开启后会把最近的摘要与用户作用域的学习记忆发送到你选择的模型，结果只写进 00 Inbox/，插件不会自动修改画像笔记。"
+          "safetyNotes": "会启动一个本地 Node MCP 进程和视图后端，只在你的 Obsidian 知识库（默认 ~/Documents/Knowledge，可用 repo-map 的 vaultPath 键或 PERSONAL_KNOWLEDGE_VAULT 覆盖）内读写。写入有防护：默认 dry-run，更新需要笔记当前 SHA-256，拒绝疑似凭据，原子写入并自动备份。默认不出本机：向量嵌入走本地 Ollama；在视图的检索设置中开启远程向量后，脱敏后的笔记分段会发送到该端点。API key 不落盘：embedding.json 只登记环境变量名，取值先读进程环境变量、再读 shell rc，且绝不写入日志。视图后端与 MCP 服务器一样使用直接 Node 访问读取知识库。向量检索可以改用你在 Desktop 中配置的 embedding 模型（provider 为 host，需要 embeddings.run 权限）：选中后，脱敏后的笔记分段会经由应用发送到该模型所属的服务并消耗其额度，可选模型来自应用内的模型列表。 会话归档在 Desktop「设置 → 全局 AI」里开启：开启期间插件每 5 分钟拉取一次脱敏后的会话变更，把摘要和原文写到知识库的 09 Conversations/ 下，随知识库同步到其他电脑。宿主不会发出思考内容、工具返回结果和附件。画像候选默认关闭，开启后会把最近的摘要与用户作用域的学习记忆发送到你选择的模型，结果只写进 00 Inbox/，插件不会自动修改画像笔记。"
         }
       },
       "versions": [
         {
-          "version": "0.5.1",
-          "publishedAt": "2026-11-10T01:33:41Z",
-          "shasum": "9aeccb8adec751788630857e98c781ade6f43c7cbc4d2bbf389e427978423270",
-          "url": "packages/minih.personal-knowledge-0.5.1.piplug",
-          "sizeBytes": 3167682,
+          "version": "0.6.0",
+          "publishedAt": "2026-11-10T04:19:42Z",
+          "shasum": "382e16932095fe8bae1d087ab11bc252fe3200ed4244da178a0cb799bf4925c0",
+          "url": "packages/minih.personal-knowledge-0.6.0.piplug",
+          "sizeBytes": 3265977,
           "permissions": [
             "agent.prompt.inject",
             "mcp.server.local",
@@ -141,10 +141,12 @@
             "conversation.read",
             "agent.complete",
             "models.list",
+            "embeddings.run",
+            "agent.tool.register",
             "ui.panel"
           ],
           "yanked": false,
-          "minMinihAgent": ">=1.4.0"
+          "minMinihAgent": ">=1.5.0"
         }
       ]
     },
