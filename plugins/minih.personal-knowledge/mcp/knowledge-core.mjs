@@ -148,7 +148,7 @@ function lineChangeSummary(before, after) {
 }
 
 export class KnowledgeService {
-  constructor({ vaultPath, config = {}, now = () => new Date(), pluginRoot = null, ontology = null }) {
+  constructor({ vaultPath, config = {}, now = () => new Date(), pluginRoot = null, ontology = null, hostEmbed = null }) {
     this.vaultPath = path.resolve(vaultPath);
     this.config = config;
     this.now = now;
@@ -156,6 +156,8 @@ export class KnowledgeService {
     this.rootRealpath = null;
     this.index = null;
     this.ontology = ontology;
+    /** `pi.embeddings.embed`, when this process is allowed to call it. */
+    this.hostEmbed = hostEmbed;
   }
 
   async initialize() {
@@ -188,8 +190,9 @@ export class KnowledgeService {
     if (this.embedding?.settings.enabled) {
       await this.#loadVectorsFromDisk();
       // Refresh changed chunks in the background; a tool call spends at most
-      // 3 seconds waiting for it before answering (§6).
-      this.ensureVectors({ budgetMs: 3000 }).catch(() => {});
+      // 3 seconds waiting for it before answering (§6). A host model is
+      // embedded elsewhere, so the disk index is simply read.
+      if (!this.#cannotEmbedHere()) this.ensureVectors({ budgetMs: 3000 }).catch(() => {});
     }
     return this;
   }
@@ -222,8 +225,15 @@ export class KnowledgeService {
   #diskIdentityMatches(meta) {
     if (!meta || !Number.isInteger(meta.dims) || meta.dims <= 0) return false;
     const prefix = this.embedding?.identityPrefix?.() ?? "";
-    const diskPrefix = String(meta.identity ?? "").split("|").slice(0, 3).join("|");
-    return prefix !== "" && prefix.split("|").slice(0, 3).join("|") === diskPrefix;
+    if (prefix === "") return false;
+    // The identity ends with the dimensions. A direct endpoint names three
+    // parts (`provider|baseUrl|model|dims`); a host model names one
+    // (`host:<modelKey>|dims`), so the comparison keeps every part before dims.
+    const withoutDims = (value) => {
+      const parts = String(value ?? "").split("|");
+      return parts.slice(0, -1).join("|");
+    };
+    return withoutDims(prefix) === withoutDims(meta.identity);
   }
 
   /**
@@ -273,9 +283,19 @@ export class KnowledgeService {
       this.embedding = null;
       return;
     }
-    const key = await resolveApiKey(settings.apiKeyEnv, { home: os.homedir() });
+    const key =
+      settings.provider === "host"
+        ? { status: "not-required", value: null }
+        : await resolveApiKey(settings.apiKeyEnv, { home: os.homedir() });
     this.apiKeyStatus = key.status;
-    const client = new EmbeddingClient({ settings, apiKey: key.value, now: this.now });
+    // A host model runs inside Desktop; there is no endpoint, no key, and no
+    // probe. The embed function arrives from whoever holds `pi` (ADR 0003).
+    const client = new EmbeddingClient({
+      settings,
+      apiKey: settings.provider === "host" ? null : key.value,
+      now: this.now,
+      hostEmbed: this.hostEmbed ?? null,
+    });
     const identityChanged = previousPrefix !== null && previousPrefix !== client.identityPrefix();
     this.embedding = client;
     if (identityChanged && this.vectors) {
@@ -461,7 +481,44 @@ export class KnowledgeService {
     return this.ensureVectorsPromise;
   }
 
+  /**
+   * How many chunks still need a vector, without embedding anything. A host
+   * model is driven from the plugin's main process (ADR 0003), which asks this
+   * to show progress and to decide whether a background pass is worth
+   * starting — the MCP process itself can never call `pi.embeddings`.
+   */
+  async pendingVectorCount() {
+    await this.#refreshEmbeddingClient({ force: true });
+    if (!this.embedding) return 0;
+    const exclude = this.embeddingSettings?.exclude ?? [];
+    const known = new Set((this.vectors?.chunks ?? []).map((row) => row.sha));
+    let missing = 0;
+    for (const relative of this.index.paths()) {
+      if (!relative.endsWith(".md")) continue;
+      if (isExcluded(relative, exclude)) continue;
+      const record = this.index.note(relative);
+      if (!record) continue;
+      for (const chunk of record.chunks) if (!known.has(chunk.sha)) missing += 1;
+    }
+    return missing;
+  }
+
+  /**
+   * A host model can only be embedded by the process that holds `pi`, so this
+   * one (the MCP server) uses whatever vectors the plugin main process has
+   * already written and never reports the other side's absence as a failure.
+   */
+  #cannotEmbedHere() {
+    return Boolean(this.embedding?.isHost && typeof this.embedding.hostEmbed !== "function");
+  }
+
   async #ensureVectors({ budgetMs = 3000, force = false, onProgress = null, signal = null } = {}) {
+    if (this.#cannotEmbedHere()) {
+      // Keep the on-disk vectors and their reason untouched: the main process
+      // owns them (ADR 0003 §2).
+      this.pendingChunkCount = 0;
+      return;
+    }
     const exclude = this.embeddingSettings?.exclude ?? [];
     const deadline = this.now().getTime() + budgetMs;
     const bySha = new Map((this.vectors.chunks ?? []).map((row) => [row.sha, row]));
@@ -617,7 +674,7 @@ export class KnowledgeService {
     return neighbors;
   }
 
-  async #searchRanked({ query, limit, scope, includeConversations = false }) {
+  async #searchRanked({ query, limit, scope, includeConversations = false, embedQuery = null }) {
     await this.index.refresh();
     const budget = this.embedding && !this.backgroundRefreshed ? 3000 : 0;
     if (budget > 0) {
@@ -641,21 +698,36 @@ export class KnowledgeService {
       lexicalByNote.set(doc.path, entry);
     }
 
+    // Another process may have written the index since this one started (a
+    // host model is embedded there), so pick up its rows before comparing.
+    if (this.embedding?.settings.enabled && !this.vectors.vectors) {
+      await this.#loadVectorsFromDisk();
+    }
+
     // Vector channel. The query embed times out after 3 s on a loopback
-    // endpoint and 8 s otherwise (§6).
+    // endpoint and 8 s otherwise (§6). A caller that holds the embed function
+    // itself (`options.embedQuery`, ADR 0003 §2) supplies the vector instead:
+    // in `host` mode this process has no `pi`, so only the plugin's main
+    // process can compute it.
     let vectorByNote = new Map();
     let reason = this.embedding ? this.vectorReason ?? null : null;
-    if (this.embedding && !this.embedding.recentlyUnreachable()) {
+    // A host model's query vector can only arrive from the caller; without one
+    // the ranked search keeps its lexical and graph channels.
+    const canEmbedHere =
+      this.embedding && !this.embedding.recentlyUnreachable() && !this.#cannotEmbedHere();
+    if (this.embedding && (embedQuery || canEmbedHere)) {
       try {
-        const [queryVector] = await Promise.race([
-          this.embedding.embed([redactSensitiveContent(query)], { timeoutMs: this.embedding.queryTimeoutMs }),
-          new Promise((_, reject) =>
-            setTimeout(
-              () => reject(Object.assign(new Error("the query embed timed out"), { code: "EMBED_FAILED" })),
-              this.embedding.queryTimeoutMs,
-            ),
-          ),
-        ]);
+        const [queryVector] = embedQuery
+          ? [await embedQuery(redactSensitiveContent(query))]
+          : await Promise.race([
+              this.embedding.embed([redactSensitiveContent(query)], { timeoutMs: this.embedding.queryTimeoutMs }),
+              new Promise((_, reject) =>
+                setTimeout(
+                  () => reject(Object.assign(new Error("the query embed timed out"), { code: "EMBED_FAILED" })),
+                  this.embedding.queryTimeoutMs,
+                ),
+              ),
+            ]);
         const hits = this.vectors.search(queryVector, { limit: 50 }).filter(({ chunk }) => inScope(chunk.path));
         for (const { chunk, score } of hits) {
           const entry = vectorByNote.get(chunk.path) ?? { best: null, score: 0 };
@@ -668,7 +740,9 @@ export class KnowledgeService {
         reason = this.pendingChunkCount > 0 ? "pending" : null;
       } catch (error) {
         reason = error.code ?? "EMBED_FAILED";
-        this.embedding.markUnreachable();
+        // `markUnreachable` is the Ollama probe cache; a host rejection says
+        // nothing about that endpoint, so it must not poison the next search.
+        if (!this.embedding.isHost) this.embedding.markUnreachable();
         vectorByNote = new Map();
       }
     }
@@ -741,7 +815,12 @@ export class KnowledgeService {
     };
   }
 
-  async search({ query, scope, mode, limit, include } = {}) {
+  /**
+   * `options.embedQuery` lets a caller that holds `pi.embeddings.embed` supply
+   * the query vector (ADR 0003 §2). It is internal: the MCP tool surface never
+   * passes it, and the MCP process has no `pi` to build it from.
+   */
+  async search({ query, scope, mode, limit, include } = {}, { embedQuery = null } = {}) {
     let normalizedMode = mode ?? "ranked";
     if (!new Set(["ranked", "all", "any"]).has(normalizedMode)) {
       throw new Error('mode must be "ranked", "all", or "any".');
@@ -757,7 +836,7 @@ export class KnowledgeService {
     }
     const includeConversations = includesConversations(include);
     if (normalizedMode === "ranked") {
-      return this.#searchRanked({ query, limit: resultLimit, scope: normalizedScope, includeConversations });
+      return this.#searchRanked({ query, limit: resultLimit, scope: normalizedScope, includeConversations, embedQuery });
     }
 
     const terms = splitTerms(query);
@@ -1297,6 +1376,7 @@ export async function createKnowledgeService({
   vaultPath,
   config,
   now,
+  hostEmbed = null,
 } = {}) {
   const resolvedConfig = config ?? (pluginRoot ? await loadConfig(pluginRoot) : {});
   // Vault resolution: explicit argument, then PERSONAL_KNOWLEDGE_VAULT, then
@@ -1311,5 +1391,6 @@ export async function createKnowledgeService({
     config: resolvedConfig,
     now,
     pluginRoot: pluginRoot ?? null,
+    hostEmbed,
   }).initialize();
 }

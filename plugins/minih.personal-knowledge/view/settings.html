@@ -117,17 +117,26 @@
           <div class="field-group">
             <label id="label-settings-provider" for="settings-provider" class="field-label"></label>
             <select id="settings-provider" class="field-select">
+              <option id="opt-provider-host" value="host"></option>
               <option id="opt-provider-ollama" value="ollama"></option>
               <option id="opt-provider-openai" value="openai-compatible"></option>
             </select>
+            <div id="hint-settings-provider" class="field-hint"></div>
           </div>
-          <div class="field-group">
+          <div id="group-settings-model" class="field-group">
             <label id="label-settings-model" for="settings-model" class="field-label"></label>
             <input id="settings-model" type="text" class="field-input" autocomplete="off" spellcheck="false" />
           </div>
         </div>
 
-        <div class="field-group">
+        <!-- Host model (ADR 0003): the app's own embedding model -->
+        <div id="group-settings-host-model" class="field-group is-hidden">
+          <label id="label-settings-host-model" for="settings-host-model" class="field-label"></label>
+          <select id="settings-host-model" class="field-select"></select>
+          <div id="hint-settings-host-model" class="field-hint"></div>
+        </div>
+
+        <div id="group-settings-baseurl" class="field-group">
           <label id="label-settings-baseurl" for="settings-baseurl" class="field-label"></label>
           <input id="settings-baseurl" type="text" class="field-input" autocomplete="off" spellcheck="false" />
           <div id="hint-settings-baseurl" class="field-hint"></div>
@@ -151,6 +160,7 @@
           <span id="label-settings-allow-remote"></span>
         </label>
         <div id="settings-remote-warning" class="settings-warning is-hidden" role="note"></div>
+        <div id="settings-endpoint-hint" class="settings-warning is-hidden" role="note"></div>
 
         <div class="settings-readonly-box">
           <div class="stat-row">

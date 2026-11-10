@@ -1,10 +1,18 @@
 import { readFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
+import { loadEmbeddingSettings } from "../lib/embeddings.mjs";
 import { createReadOnlyState } from "../lib/read-only.mjs";
 import { createKnowledgeService } from "./knowledge-core.mjs";
+import {
+  MAIN_PROCESS_TOOLS,
+  TOOL_SCHEMAS,
+  renderConversationSearch,
+  renderKnowledgeSearch,
+} from "./tool-text.mjs";
 
 const serverDir = path.dirname(fileURLToPath(import.meta.url));
 const pluginRoot = path.resolve(serverDir, "..");
@@ -24,8 +32,40 @@ async function readPluginVersion() {
   return "0.0.0";
 }
 
+/**
+ * Whether the plugin's main process owns the two retrieval tools right now.
+ *
+ * In `host` mode the query vector can only be computed where `pi.embeddings`
+ * lives, so the main process registers those tools through
+ * `pi.agent.registerTool`. Serving them from here as well would put two tools
+ * with the same job in front of the model, and this one would lose the vector
+ * channel — so they are withheld from `tools/list` for the whole life of this
+ * process (ADR 0003 §2).
+ *
+ * The host reads `tools/list` once per connection and does not handle
+ * `notifications/tools/list_changed`, so the decision has to be made here, at
+ * startup: changing the provider takes effect for the agent after the plugin
+ * (or the app) is reloaded, which the settings panel says.
+ */
+async function hostModeOwnsRetrievalTools() {
+  try {
+    const settings = await loadEmbeddingSettings(embeddingSettingsPath());
+    return settings.enabled === true && settings.provider === "host";
+  } catch {
+    return false;
+  }
+}
+
+function embeddingSettingsPath() {
+  return (
+    process.env.PERSONAL_KNOWLEDGE_EMBEDDING_CONFIG ??
+    path.join(os.homedir(), ".personal-knowledge", "embedding.json")
+  );
+}
+
 const service = await createKnowledgeService({ pluginRoot });
 const manifest = { version: await readPluginVersion() };
+const mainProcessOwnsRetrieval = await hostModeOwnsRetrievalTools();
 
 const TOOL_DEFINITIONS = [
   {
@@ -47,53 +87,16 @@ const TOOL_DEFINITIONS = [
   {
     name: "knowledge_search",
     title: "Search Personal Knowledge",
-    description:
-      "Search Markdown notes and Obsidian Bases in the local knowledge vault with exact, deterministic term matching and safe snippets.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        query: { type: "string", minLength: 1 },
-        scope: { type: "string", description: "Optional vault-relative folder scope." },
-        mode: {
-          type: "string",
-          enum: ["ranked", "all", "any"],
-          default: "ranked",
-          description: "ranked fuses BM25F, local vectors, and the link graph (default); all/any keep exact literal matching.",
-        },
-        limit: { type: "integer", minimum: 1, maximum: 100 },
-        include: {
-          type: "array",
-          items: { type: "string", enum: ["conversations"] },
-          description:
-            "Add an excluded collection. \"conversations\" also searches archived conversation summaries (09 Conversations); they are left out by default.",
-        },
-      },
-      required: ["query"],
-      additionalProperties: false,
-    },
+    // Shared with the main-process tool (ADR 0003 §2) so both read the same.
+    description: TOOL_SCHEMAS.knowledge_search.description,
+    inputSchema: TOOL_SCHEMAS.knowledge_search.inputSchema,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
     name: "conversation_search",
     title: "Search Archived Conversations",
-    description:
-      "Search the archived conversation summaries of this project: session id, date, title, the computer that produced it, the goal, and the matching snippet. Use it for what was done before, why a decision was made, or where the last session stopped; read the transcript only when the exact wording or the operations matter.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        query: { type: "string", minLength: 1 },
-        scope: {
-          type: "string",
-          enum: ["project", "all"],
-          default: "project",
-          description: "project searches the current repository's conversations; all searches every project.",
-        },
-        cwd: { type: "string", description: "Current working directory, used to pick the project for scope \"project\"." },
-        limit: { type: "integer", minimum: 1, maximum: 8 },
-      },
-      required: ["query"],
-      additionalProperties: false,
-    },
+    description: TOOL_SCHEMAS.conversation_search.description,
+    inputSchema: TOOL_SCHEMAS.conversation_search.inputSchema,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
@@ -202,6 +205,11 @@ const TOOL_DEFINITIONS = [
   },
 ];
 
+/** The tools this process actually answers (see `hostModeOwnsRetrievalTools`). */
+const SERVED_TOOLS = mainProcessOwnsRetrieval
+  ? TOOL_DEFINITIONS.filter((tool) => !MAIN_PROCESS_TOOLS.includes(tool.name))
+  : TOOL_DEFINITIONS;
+
 // The read-only switch: env wins, otherwise the repo-map `readOnly` key,
 // re-read on mtime change so the settings panel flips it without a restart.
 const readOnlyState = createReadOnlyState({ env: process.env });
@@ -262,20 +270,8 @@ function renderToolResult(name, value) {
       .join("\n");
     return `${heading}${conversations}${notes}`;
   }
-  if (name === "knowledge_search") {
-    return value.results.length
-      ? value.results.map((item) => `${item.path} | score=${item.score}\n${item.snippet}`).join("\n\n")
-      : "No matching knowledge notes found.";
-  }
-  if (name === "conversation_search") {
-    const header = `Scope: ${value.scope}${value.project ? ` (${value.project})` : ""} · ${value.count} match(es)\n${value.caveat}`;
-    if (value.results.length === 0) return `${header}\n\nNo archived conversation matched.`;
-    const rows = value.results.map(
-      (item) =>
-        `\n## ${item.title}\nSession: ${item.sessionId}\nDate: ${item.date} · Device: ${item.device} · Project: ${item.project || "—"}\nGoal: ${item.goal || "—"}\nMatched: ${item.matchedFields.join(", ")}\nSnippet: ${item.snippet}`,
-    );
-    return `${header}${rows.join("\n")}`;
-  }
+  if (name === "knowledge_search") return renderKnowledgeSearch(value);
+  if (name === "conversation_search") return renderConversationSearch(value);
   if (name === "conversation_read") {
     const head = `# ${value.title || value.sessionId}\nSession: ${value.sessionId} · Part: ${value.part}${value.source ? ` · Source: ${value.source}` : ""}${
       value.part === "transcript" ? `\nTurns: ${value.turns?.join(", ") || "none"}` : ""
@@ -307,11 +303,21 @@ async function handleRequest(message) {
     return;
   }
   if (method === "tools/list") {
-    result(id, { tools: TOOL_DEFINITIONS });
+    result(id, { tools: SERVED_TOOLS });
     return;
   }
   if (method === "tools/call") {
     const name = params?.name;
+    if (mainProcessOwnsRetrieval && MAIN_PROCESS_TOOLS.includes(name)) {
+      // Named on purpose: a caller that reached this process anyway should be
+      // told where the tool lives, not just that it is unknown.
+      error(
+        id,
+        -32602,
+        `${name} is served by the plugin's main process in host mode (the embedding model runs there); it is not available on this MCP server`,
+      );
+      return;
+    }
     const handler = handlers[name];
     if (!handler) {
       error(id, -32602, `Unknown tool: ${name ?? ""}`);

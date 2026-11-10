@@ -56,6 +56,7 @@ const CHANNELS = new Set([
   "kg.profile.run",
   "kg.conversations.device",
   "kg.models.list",
+  "kg.models.listEmbedding",
   "kg.openSettings",
 ]);
 
@@ -126,6 +127,25 @@ async function currentDeviceName() {
 }
 
 /** The KnowledgeService for panel channels (vector index, notes count). */
+/**
+ * `pi.embeddings.embed`, bound to this process. It exists only here: the MCP
+ * server is a separate child process with no `pi` (ADR 0003), so a host model
+ * is called from the main process and nowhere else.
+ */
+function hostEmbed() {
+  // `embeddings.embed` is the whole surface behind `embeddings.run`; naming it
+  // here is also how the permission audit sees it is used.
+  const api = globalThis.pi?.embeddings;
+  if (typeof api?.embed !== "function") return null;
+  const embed = api.embed.bind(api);
+  return (input) => embed(input);
+}
+
+/** Whether this Desktop version can run an embedding model for the plugin. */
+function hostEmbeddingAvailable() {
+  return typeof globalThis.pi?.embeddings?.embed === "function";
+}
+
 async function ensurePanelService() {
   if (!state) throw new Error("plugin state is not initialized");
   if (!state.service) {
@@ -134,9 +154,29 @@ async function ensurePanelService() {
       pluginRoot,
       vaultPath: state.vaultPath,
       config: state.config,
+      hostEmbed: hostEmbed(),
     });
   }
   return state.service;
+}
+
+/**
+ * In `host` mode the vectors of the query have to be computed here, because the
+ * MCP server cannot reach `pi`. This embeds whatever the shared index still
+ * misses, in the background, with a bounded budget; the search itself keeps
+ * working through the lexical channel until it is done.
+ */
+async function maintainHostVectors() {
+  if (!state) return null;
+  const { loadEmbeddingSettings } = await loadEmbeddingLib();
+  const service = await ensurePanelService();
+  const settings = await loadEmbeddingSettings(embeddingSettingsPath()).catch(() => null);
+  if (!settings || settings.provider !== "host" || !settings.enabled) return null;
+  if (!hostEmbeddingAvailable()) return null;
+  const pending = await service.pendingVectorCount();
+  if (pending === 0) return null;
+  await service.ensureVectors({ budgetMs: 60_000 }).catch(() => {});
+  return pending;
 }
 
 function indexRunState() {
@@ -601,7 +641,7 @@ async function settingsGet() {
     settingsError = { code: error.code ?? "EMBEDDING_CONFIG_INVALID", message: error.message };
   }
   let apiKeyStatus = "not-required";
-  if (settings && settings.apiKeyEnv) {
+  if (settings && settings.apiKeyEnv && settings.provider !== "host") {
     apiKeyStatus = (await resolveApiKey(settings.apiKeyEnv, { home: os.homedir() })).status;
   }
   let index = null;
@@ -669,11 +709,17 @@ async function settingsTest(payload) {
   } catch (error) {
     return { ok: false, reason: error.code ?? "EMBEDDING_CONFIG_INVALID", message: error.message };
   }
-  const key = await resolveApiKey(settings.apiKeyEnv, { home: os.homedir() });
-  if (settings.apiKeyEnv && key.status !== "found") {
+  const isHost = settings.provider === "host";
+  const key = isHost ? { status: "not-required", value: null } : await resolveApiKey(settings.apiKeyEnv, { home: os.homedir() });
+  if (!isHost && settings.apiKeyEnv && key.status !== "found") {
     return { ok: false, reason: "EMBEDDING_KEY_MISSING", message: `environment variable ${settings.apiKeyEnv} has no value` };
   }
-  const client = new EmbeddingClient({ settings, apiKey: key.value, home: os.homedir() });
+  const client = new EmbeddingClient({
+    settings,
+    apiKey: key.value,
+    home: os.homedir(),
+    hostEmbed: isHost ? hostEmbed() : null,
+  });
   try {
     const [vector] = await client.embed(["personal-knowledge connection test"]);
     return { ok: true, dims: vector.length, latencyMs: Date.now() - started };
@@ -768,7 +814,21 @@ async function onPanelInvoke(channel, payload) {
   if (channel === "kg.promote.preview") return promotePreview(payload);
   if (channel === "kg.promote.apply") return promoteApply(payload);
   if (channel === "kg.settings.get") return settingsGet();
-  if (channel === "kg.settings.set") return settingsSet(payload);
+  if (channel === "kg.settings.set") {
+    const saved = await settingsSet(payload);
+    // A provider change decides whether this process owns the retrieval tools,
+    // and whether the model needs a reload to stop seeing two copies.
+    const tools = await syncKnowledgeTools().catch(() => null);
+    return {
+      ...saved,
+      tools: {
+        ...tools,
+        // The MCP server lists its tools from the configuration it read when
+        // it started; no API restarts that connection.
+        agentReloadRequired: Boolean(tools?.mcpListsRetrieval) !== (saved.settings?.provider !== "host"),
+      },
+    };
+  }
   if (channel === "kg.settings.test") return settingsTest(payload);
   if (channel === "kg.config.get") return configPayload();
   if (channel === "kg.config.set") {
@@ -811,6 +871,26 @@ async function onPanelInvoke(channel, payload) {
     return setProfileSettings(payload?.values ?? {});
   }
   if (channel === "kg.profile.status") return profileStatus();
+  if (channel === "kg.models.listEmbedding") {
+    const answer = { models: [], hostSupported: hostEmbeddingAvailable() };
+    if (!hostEmbeddingAvailable() || typeof globalThis.pi?.models?.list !== "function") return answer;
+    try {
+      // `kind` is the Desktop 1.5.0 contract; an older host ignores it and
+      // returns chat models, which are filtered out below.
+      const listed = await globalThis.pi.models.list({ kind: "embedding" });
+      answer.models = (Array.isArray(listed) ? listed : [])
+        .filter((model) => model?.kind === "embedding" || model?.kind === undefined)
+        .map((model) => ({
+          key: String(model?.key ?? ""),
+          label: String(model?.alias || model?.label || model?.modelId || model?.key || ""),
+          providerName: String(model?.providerName ?? ""),
+        }))
+        .filter((model) => model.key);
+    } catch {
+      answer.models = [];
+    }
+    return answer;
+  }
   if (channel === "kg.models.list") {
     // `models.list` is a read-only catalog of the user's configured models.
     if (typeof globalThis.pi?.models?.list !== "function") return { models: [] };
@@ -904,14 +984,142 @@ async function startProfileScheduler() {
   return profileScheduler;
 }
 
+/**
+ * The retrieval tools, registered in this process (ADR 0003 §2).
+ *
+ * `pi.embeddings.embed` exists only here, so in `host` mode a query can only be
+ * turned into a vector here — the MCP server withholds `knowledge_search` and
+ * `conversation_search` in that mode (it reads `embedding.json` at startup) and
+ * this process serves them instead, over the same `KnowledgeService`, index,
+ * and vector file.
+ *
+ * The two sets are named differently (`plugin_<id>_<tool>` here,
+ * `plugin_<id>_<serverId>_<tool>` on the MCP side), and keeping the model from
+ * seeing both depends on *when* each side changes:
+ *
+ *  - entering `host` mode registers here immediately, and the MCP server still
+ *    lists its copies until it reconnects, so both briefly exist;
+ *  - leaving `host` mode must NOT unregister here until the MCP server lists
+ *    them again, or the agent would be left with no retrieval tool at all.
+ *
+ * The host reads `tools/list` once per MCP connection and ignores
+ * `notifications/tools/list_changed`, and no plugin API restarts that
+ * connection, so the MCP side only changes when the plugin or the app is
+ * reloaded. Until then the safer of the two states is kept: a duplicate, never
+ * a gap.
+ */
+let knowledgeTools = null; // [name, ...] registered by this process
+
+/**
+ * Whether the MCP server lists the retrieval tools for this install: it
+ * decides at startup, so this mirrors what it saw when the plugin loaded.
+ */
+let mcpListsRetrievalTools = true;
+
+/** Whether the query vector must be computed here (host model or host-vector index). */
+async function needsHostQueryVectors() {
+  if (!hostEmbeddingAvailable()) return false;
+  try {
+    const { loadEmbeddingSettings } = await loadEmbeddingLib();
+    const settings = await loadEmbeddingSettings(embeddingSettingsPath());
+    return settings.enabled && settings.provider === "host";
+  } catch {
+    return false;
+  }
+}
+
+async function registerKnowledgeTools() {
+  if (knowledgeTools) return knowledgeTools;
+  const api = globalThis.pi?.agent;
+  // `agent.registerTool` is the surface behind `agent.tool.register`.
+  if (typeof api?.registerTool !== "function") return null;
+  const { TOOL_SCHEMAS, renderMainProcessTool, MAIN_PROCESS_TOOLS } = await import("./mcp/tool-text.mjs");
+  const registered = [];
+  for (const name of MAIN_PROCESS_TOOLS) {
+    const schema = TOOL_SCHEMAS[name];
+    await api.registerTool({
+      name,
+      description: schema.description,
+      risk: "low",
+      schema: schema.inputSchema,
+      execute: async (args) => runKnowledgeTool(name, args, renderMainProcessTool),
+    });
+    registered.push(name);
+  }
+  knowledgeTools = registered;
+  return knowledgeTools;
+}
+
+async function unregisterKnowledgeTools() {
+  const registered = knowledgeTools;
+  knowledgeTools = null;
+  if (!registered) return;
+  const api = globalThis.pi?.agent;
+  if (typeof api?.unregisterTool !== "function") return;
+  for (const name of registered) {
+    await api.unregisterTool(name).catch(() => {});
+  }
+}
+
+/**
+ * Run one of the two retrieval tools with the query vector computed here. The
+ * text the model reads is the same as the MCP tool's, so the two paths cannot
+ * answer differently.
+ */
+async function runKnowledgeTool(name, args, render) {
+  const input = args ?? {};
+  const service = await ensurePanelService();
+  const embedQuery = async (text) => {
+    const [vector] = await service.embedding.embed([text]);
+    return vector;
+  };
+  if (name === "knowledge_search") {
+    const value = await service.search(input, { embedQuery });
+    return render(name, value);
+  }
+  const value = await service.conversationSearch(input);
+  return render(name, value);
+}
+
+/**
+ * Keep the registered tools in step with the current provider, within the
+ * limit the MCP side imposes (see above): register as soon as host mode is
+ * on, and unregister on leaving it only when the MCP server is known to list
+ * the tools again — otherwise they stay until the plugin reloads.
+ */
+async function syncKnowledgeTools({ startup = false } = {}) {
+  const wanted = await needsHostQueryVectors();
+  if (startup) {
+    // The MCP server read `embedding.json` a moment ago on its own start; the
+    // file has not changed since unless the user edited it by hand.
+    mcpListsRetrievalTools = !wanted;
+  }
+  if (wanted && !knowledgeTools) {
+    await registerKnowledgeTools();
+    return { registered: true, mcpListsRetrieval: mcpListsRetrievalTools };
+  }
+  if (!wanted && knowledgeTools) {
+    if (mcpListsRetrievalTools) {
+      await unregisterKnowledgeTools();
+      return { registered: false, mcpListsRetrieval: true };
+    }
+    // The MCP server still withholds them: removing ours would leave the agent
+    // with no retrieval tool, so they stay until the plugin is reloaded.
+    return { registered: true, mcpListsRetrieval: false, deferred: true };
+  }
+  return { registered: Boolean(knowledgeTools), mcpListsRetrieval: mcpListsRetrievalTools, deferred: false };
+}
+
 async function onLoad() {
   // Warm the index so the first view render does not pay for the vault scan.
   await ensureState().catch(() => {});
   await startConversationSync().catch(() => null);
   await startProfileScheduler().catch(() => null);
+  await syncKnowledgeTools({ startup: true }).catch(() => null);
 }
 
 async function onUnload() {
+  await unregisterKnowledgeTools().catch(() => {});
   if (profileScheduler) {
     const scheduler = profileScheduler;
     profileScheduler = null;

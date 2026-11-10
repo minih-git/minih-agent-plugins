@@ -22,6 +22,11 @@ import {
 } from "./strings.js";
 import { EMBEDDING_DEFAULTS as DEFAULT_EMBEDDING_SETTINGS } from "./vendor/embedding-defaults.mjs";
 import { FIXTURE_GRAPH } from "./fixture.js";
+import {
+  describeEmbeddingError,
+  embeddingModelChoices,
+  inspectEndpointForm,
+} from "./embedding-form.mjs";
 
 const LEGACY_LANGUAGE_STORAGE_KEY = "kg-universe:lang";
 const INDEX_POLL_INTERVAL_MS = 1000;
@@ -49,11 +54,16 @@ export function buildObsidianLink(vaultName, filePath) {
 
 function normalizeEmbeddingConfig(raw) {
   const src = raw || DEFAULT_EMBEDDING_SETTINGS;
+  const provider =
+    src.provider === "openai-compatible" || src.provider === "host"
+      ? src.provider
+      : "ollama";
   return {
     enabled: Boolean(src.enabled),
-    provider: src.provider === "openai-compatible" ? "openai-compatible" : "ollama",
+    provider,
     baseUrl: String(src.baseUrl ?? DEFAULT_EMBEDDING_SETTINGS.baseUrl).trim(),
     model: String(src.model ?? DEFAULT_EMBEDDING_SETTINGS.model).trim(),
+    modelKey: String(src.modelKey ?? "").trim(),
     allowRemote: Boolean(src.allowRemote),
     apiKeyEnv: String(src.apiKeyEnv ?? "").trim(),
     exclude: Array.isArray(src.exclude)
@@ -69,6 +79,7 @@ function areEmbeddingConfigsEqual(a, b) {
     a.provider === b.provider &&
     a.baseUrl === b.baseUrl &&
     a.model === b.model &&
+    a.modelKey === b.modelKey &&
     a.allowRemote === b.allowRemote &&
     a.apiKeyEnv === b.apiKeyEnv &&
     a.exclude.length === b.exclude.length &&
@@ -127,6 +138,7 @@ export class RetrievalSettingsPanel {
     this.apiKeyStatus = "not-required";
     this.index = null;
     this.estimate = null;
+    this.hostModels = { models: [], reasonKey: null, selectable: false, hostSupported: null };
     this.bind();
   }
 
@@ -146,6 +158,7 @@ export class RetrievalSettingsPanel {
       "settings-apikey-env",
       "settings-exclude",
       "settings-allow-remote",
+      "settings-host-model",
     ]) {
       const el = $(id);
       el?.addEventListener("input", dirty);
@@ -154,14 +167,18 @@ export class RetrievalSettingsPanel {
   }
 
   formValues() {
+    const provider = $("settings-provider").value;
+    const isHost = provider === "host";
+    const hostKey = String($("settings-host-model")?.value ?? "");
     return {
       enabled: Boolean($("settings-enabled").checked),
-      provider:
-        $("settings-provider").value === "openai-compatible"
-          ? "openai-compatible"
-          : "ollama",
-      baseUrl: $("settings-baseurl").value.trim(),
-      model: $("settings-model").value.trim(),
+      provider: isHost ? "host" : provider === "openai-compatible" ? "openai-compatible" : "ollama",
+      // A host model has no endpoint of its own: the fields below belong to
+      // the custom-endpoint modes and are kept as they were (ADR 0003 §4.1).
+      baseUrl: isHost ? (this.savedSettings?.baseUrl ?? DEFAULT_EMBEDDING_SETTINGS.baseUrl) : $("settings-baseurl").value.trim(),
+      model: isHost ? (hostKey.split("/").slice(1).join("/") || "") : $("settings-model").value.trim(),
+      modelKey: isHost ? hostKey : "",
+      allowRemote: Boolean($("settings-allow-remote").checked),
       allowRemote: Boolean($("settings-allow-remote").checked),
       apiKeyEnv: $("settings-apikey-env").value.trim(),
       exclude: parseCommaList($("settings-exclude").value),
@@ -174,6 +191,8 @@ export class RetrievalSettingsPanel {
     $("settings-provider").value = norm.provider;
     $("settings-baseurl").value = norm.baseUrl;
     $("settings-model").value = norm.model;
+    this.renderHostModels(norm);
+    if ($("settings-host-model")) $("settings-host-model").value = norm.modelKey;
     $("settings-allow-remote").checked = norm.allowRemote;
     $("settings-apikey-env").value = norm.apiKeyEnv;
     $("settings-exclude").value = norm.exclude.join(", ");
@@ -185,6 +204,7 @@ export class RetrievalSettingsPanel {
       "settings-provider",
       "settings-baseurl",
       "settings-model",
+      "settings-host-model",
       "settings-apikey-env",
       "settings-exclude",
       "settings-allow-remote",
@@ -194,6 +214,75 @@ export class RetrievalSettingsPanel {
     ]) {
       const el = $(id);
       if (el) el.disabled = disabled;
+    }
+  }
+
+  /**
+   * Show a reason as a sentence the user can act on. The raw code is kept on
+   * the element's title and in the error's name, so a bug report still carries
+   * it, but the panel never shouts `EMBEDDING_NOT_LOOPBACK` at the user.
+   */
+  feedbackError(input) {
+    const { code, messageKey } = describeEmbeddingError(input);
+    const box = $("settings-feedback");
+    const text = messageKey ? this.t(messageKey) : String(input?.message ?? code ?? "");
+    if (box) {
+      box.textContent = text;
+      box.title = code ? `${this.t("embeddingErrorTitle")}: ${code}` : "";
+    }
+    this.feedback(text, true);
+    if (box) box.title = code ? `${this.t("embeddingErrorTitle")}: ${code}` : "";
+  }
+
+  async loadHostModels() {
+    if (!hasBridge()) {
+      this.hostModels = { models: [], reasonKey: null, selectable: false, hostSupported: null };
+      return;
+    }
+    try {
+      const answer = await invokeBridge("kg.models.listEmbedding", {}, BRIDGE_TIMEOUT_MS);
+      this.hostModels = embeddingModelChoices(answer);
+    } catch {
+      this.hostModels = embeddingModelChoices({ models: [], hostSupported: false });
+    }
+    this.renderHostModels(this.formValues());
+  }
+
+  /** Fill the model dropdown and say why it is empty when it is. */
+  renderHostModels(values) {
+    const select = $("settings-host-model");
+    if (!select) return;
+    const { models, reasonKey } = this.hostModels;
+    const current = String(values?.modelKey ?? select.value ?? "");
+    select.innerHTML = "";
+    for (const model of models) {
+      const option = document.createElement("option");
+      option.value = model.key;
+      option.textContent = model.optionLabel;
+      select.appendChild(option);
+    }
+    if (models.length === 0) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "—";
+      select.appendChild(option);
+    }
+    if (current) select.value = current;
+    const hint = $("hint-settings-host-model");
+    if (hint) {
+      hint.textContent = reasonKey ? this.t(reasonKey) : this.t("settingsHostModelHint");
+      hint.classList.toggle("settings-warning", Boolean(reasonKey));
+      hint.classList.toggle("is-hidden", false);
+    }
+    const hostOption = $("opt-provider-host");
+    if (hostOption) {
+      const unsupported = this.hostModels.hostSupported === false;
+      hostOption.disabled = unsupported;
+    }
+    if (this.hostModels.hostSupported === false && $("hint-settings-provider")) {
+      $("hint-settings-provider").textContent = this.t("settingsHostEmbeddingUnsupported");
+    } else if ($("hint-settings-provider")) {
+      $("hint-settings-provider").textContent = "";
     }
   }
 
@@ -208,6 +297,7 @@ export class RetrievalSettingsPanel {
 
   async load(populateForm = true) {
     this.bridgeAvailable = hasBridge();
+    await this.loadHostModels();
     $("settings-fixture-notice")?.classList.add("is-hidden");
     if (!this.bridgeAvailable) {
       this.savedSettings = null;
@@ -224,6 +314,7 @@ export class RetrievalSettingsPanel {
     }
     this.setControlsDisabled(true);
     try {
+      await this.loadHostModels();
       const res = await invokeBridge("kg.settings.get", {}, BRIDGE_TIMEOUT_MS);
       this.savedSettings = res?.settings ? normalizeEmbeddingConfig(res.settings) : null;
       this.baselineSnapshot = normalizeEmbeddingConfig(res?.settings || DEFAULT_EMBEDDING_SETTINGS);
@@ -231,16 +322,17 @@ export class RetrievalSettingsPanel {
       this.index = res?.index || null;
       this.estimate = res?.estimate || null;
       this.confirmingRemote = false;
-      if (populateForm) this.writeForm(this.baselineSnapshot);
+      if (populateForm) {
+        this.writeForm(this.baselineSnapshot);
+        this.renderHostModels(this.baselineSnapshot);
+      }
       if (res?.settingsError) {
-        const code = res.settingsError.code || "";
-        const msg = res.settingsError.message || "";
-        this.feedback(msg ? (code && !msg.startsWith(code) ? `${code} ${msg}` : msg) : code, true);
+        this.feedbackError(res.settingsError);
       } else {
         this.feedback("", false);
       }
     } catch (error) {
-      this.feedback(error?.message || String(error), true);
+      this.feedbackError(error);
     } finally {
       this.setControlsDisabled(false);
       this.renderDynamic();
@@ -249,9 +341,51 @@ export class RetrievalSettingsPanel {
 
   renderDynamic() {
     const values = this.formValues();
+    const isHost = values.provider === "host";
+
+    // Host mode hides everything that belongs to a direct endpoint.
+    for (const id of ["group-settings-baseurl", "settings-remote-warning"]) {
+      $(id)?.classList.toggle("is-hidden", isHost);
+    }
+    $("group-settings-host-model")?.classList.toggle("is-hidden", !isHost);
+    $("group-settings-model")?.classList.toggle("is-hidden", isHost);
+    for (const id of ["settings-apikey-env", "label-settings-apikey-env", "hint-settings-apikey-env"]) {
+      $(id)?.closest?.(".field-group")?.classList.toggle("is-hidden", isHost);
+    }
+    $("settings-allow-remote")?.closest?.(".checkbox-row")?.classList.toggle("is-hidden", isHost);
+
     const remoteWarn = $("settings-remote-warning");
     remoteWarn.textContent = this.t("settingsRemoteWarning");
-    remoteWarn.classList.toggle("is-hidden", !values.allowRemote);
+    remoteWarn.classList.toggle("is-hidden", isHost || !values.allowRemote);
+
+    // §4.3: an incomplete or suspicious address is explained as it is typed.
+    const endpoint = inspectEndpointForm(values);
+    const hint = $("settings-endpoint-hint");
+    if (hint) {
+      const text = !isHost && endpoint.hint ? this.t(endpoint.hint) : "";
+      hint.textContent = text;
+      hint.classList.toggle("is-hidden", !text);
+    }
+    $("settings-allow-remote")?.classList.toggle("needs-attention", Boolean(endpoint.highlightAllowRemote));
+    $("settings-allow-remote")?.closest?.(".checkbox-row")?.classList.toggle("needs-attention", Boolean(endpoint.highlightAllowRemote));
+
+    // Save and Test never send a request while the form is blocked.
+    const blocked = Boolean(endpoint.blockedReason) || (isHost && !values.modelKey);
+    for (const id of ["btn-settings-test", "btn-settings-save", "btn-settings-confirm"]) {
+      const el = $(id);
+      if (el) el.disabled = blocked || this.busy;
+    }
+    // The reason a button is disabled is stated; the raw code stays in the
+    // error text's details, not in a tooltip the user cannot read.
+    const blockKey = isHost && !values.modelKey
+      ? "settingsHostModelRequired"
+      : endpoint.blockedReason
+        ? describeEmbeddingError(endpoint.blockedReason).messageKey
+        : null;
+    for (const id of ["btn-settings-test", "btn-settings-save", "label-settings-test", "label-settings-save"]) {
+      const el = $(id);
+      if (el) el.title = blockKey ? this.t(blockKey) : "";
+    }
 
     const isDirty =
       this.bridgeAvailable &&
@@ -305,11 +439,13 @@ export class RetrievalSettingsPanel {
     $("settings-fixture-notice").textContent = t("settingsFixtureNotice");
     $("label-settings-enabled").textContent = t("settingsEnabledLabel");
     $("label-settings-provider").textContent = t("settingsProviderLabel");
+    $("opt-provider-host").textContent = t("settingsProviderHost");
     $("opt-provider-ollama").textContent = t("settingsProviderOllama");
     $("opt-provider-openai").textContent = t("settingsProviderOpenai");
     $("label-settings-baseurl").textContent = t("settingsBaseUrlLabel");
     $("settings-baseurl").placeholder = t("settingsBaseUrlPlaceholder");
     $("hint-settings-baseurl").textContent = t("settingsBaseUrlHint");
+    $("label-settings-host-model").textContent = t("settingsHostModelLabel");
     $("label-settings-model").textContent = t("settingsModelLabel");
     $("settings-model").placeholder = t("settingsModelPlaceholder");
     $("label-settings-apikey-env").textContent = t("settingsApiKeyEnvLabel");
@@ -330,6 +466,19 @@ export class RetrievalSettingsPanel {
   async save() {
     if (!this.bridgeAvailable || this.busy) return;
     const values = this.formValues();
+    const endpoint = inspectEndpointForm(values);
+    if (endpoint.blockedReason) {
+      // A blocked form never sends: the panel moves to the control the
+      // message is about, which is the checkbox for a remote address.
+      this.feedbackError(endpoint.blockedReason);
+      if (endpoint.focus) $(endpoint.focus)?.focus();
+      return;
+    }
+    if (values.provider === "host" && !values.modelKey) {
+      this.feedback(this.t("settingsHostModelRequired"), true);
+      $("settings-host-model")?.focus();
+      return;
+    }
     const savedRemote = Boolean(this.savedSettings?.allowRemote);
     if (values.allowRemote && !savedRemote && !this.confirmingRemote) {
       this.confirmingRemote = true;
@@ -342,12 +491,18 @@ export class RetrievalSettingsPanel {
     try {
       await invokeBridge("kg.settings.set", { embedding: values }, BRIDGE_TIMEOUT_MS);
       this.confirmingRemote = false;
-      this.showToast(this.t("toastSettingsSaved"));
+      // Switching to or from the in-app model changes which process serves the
+      // retrieval tools; the MCP server only picks that up on reconnect.
+      if (res?.tools?.agentReloadRequired) {
+        this.feedback(this.t("settingsReloadForAgent"), false);
+      } else {
+        this.showToast(this.t("toastSettingsSaved"));
+      }
       await this.load(true);
       await this.onSaved?.();
     } catch (error) {
       this.confirmingRemote = false;
-      this.feedback(error?.message || String(error), true);
+      this.feedbackError(error);
     } finally {
       this.busy = false;
       this.setControlsDisabled(false);
@@ -357,6 +512,12 @@ export class RetrievalSettingsPanel {
 
   async test() {
     if (!this.bridgeAvailable || this.busy) return;
+    const endpoint = inspectEndpointForm(this.formValues());
+    if (endpoint.blockedReason) {
+      this.feedbackError(endpoint.blockedReason);
+      if (endpoint.focus) $(endpoint.focus)?.focus();
+      return;
+    }
     const values = this.formValues();
     this.busy = true;
     this.setControlsDisabled(true);
@@ -365,15 +526,10 @@ export class RetrievalSettingsPanel {
       if (res?.ok) {
         this.feedback(this.t("settingsTestOk", { dims: res.dims ?? "—", latencyMs: res.latencyMs ?? "—" }), false);
       } else {
-        const reason = res?.reason ? String(res.reason) : "";
-        const msg = res?.message ? String(res.message) : "";
-        this.feedback(
-          msg ? (reason && !msg.startsWith(reason) ? `${reason} ${msg}` : msg) : reason || "Test failed",
-          true,
-        );
+        this.feedbackError(res?.reason ? { code: res.reason, message: res.message } : { message: res?.message });
       }
     } catch (error) {
-      this.feedback(error?.message || String(error), true);
+      this.feedbackError(error);
     } finally {
       this.busy = false;
       this.setControlsDisabled(false);
