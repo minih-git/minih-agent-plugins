@@ -176,3 +176,125 @@ test("the settings file path is replaced by the host, not by a baseUrl", async (
   assert.equal(loaded.modelKey, "minih-router/text-embedding-3-small");
   assert.equal(loaded.model, "text-embedding-3-small");
 });
+
+test("batches respect 64 entries, 8 KiB per text, and 256 KiB per call", async () => {
+  const { splitHostBatches, HOST_EMBED_BATCH, HOST_EMBED_MAX_BATCH_BYTES, HOST_EMBED_MAX_TEXT_BYTES } =
+    await import("../lib/embeddings.mjs");
+
+  // 64 × 8 KiB would be 512 KiB, so the byte ceiling has to split too.
+  const full = "x".repeat(HOST_EMBED_MAX_TEXT_BYTES);
+  const batches = splitHostBatches(Array.from({ length: 64 }, () => full));
+  assert.equal(batches.length, 2, "a full page of maximum texts needs two calls");
+  for (const batch of batches) {
+    assert.ok(batch.length <= HOST_EMBED_BATCH);
+    assert.ok(Buffer.byteLength(batch.join(""), "utf8") <= HOST_EMBED_MAX_BATCH_BYTES);
+  }
+  assert.equal(batches.flat().length, 64, "every text is kept");
+
+  // A CJK character is three bytes, not one.
+  const cjk = "知".repeat(1_000); // 3000 bytes
+  const cjkBatches = splitHostBatches(Array.from({ length: 100 }, () => cjk));
+  for (const batch of cjkBatches) {
+    assert.ok(Buffer.byteLength(batch.join(""), "utf8") <= HOST_EMBED_MAX_BATCH_BYTES);
+    assert.ok(batch.length <= HOST_EMBED_BATCH);
+  }
+  assert.equal(cjkBatches.flat().length, 100);
+});
+
+test("blank texts are never sent to the host", async () => {
+  const { splitHostBatches } = await import("../lib/embeddings.mjs");
+  assert.deepEqual(splitHostBatches(["", "   ", "\n\t", "real"]), [["real"]]);
+  assert.deepEqual(splitHostBatches(["", " "]), []);
+});
+
+test("the client embeds only what splitHostBatches produces", async () => {
+  const settings = validateEmbeddingSettings(HOST_SETTINGS);
+  const host = fakeHost({ dims: 2 });
+  const client = new EmbeddingClient({ settings, hostEmbed: host.embed });
+  const texts = ["a", "   ", "b", ""];
+  const vectors = await client.embed(texts);
+  assert.equal(vectors.length, 2, "the blank entries produce no vector");
+  assert.deepEqual(host.calls[0].texts, ["a", "b"]);
+});
+
+test("a rate limit is waited out instead of failing the run", async () => {
+  const settings = validateEmbeddingSettings(HOST_SETTINGS);
+  const sleeps = [];
+  const codes = [];
+  let attempt = 0;
+  const client = new EmbeddingClient({
+    settings,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
+    hostEmbed: async (input) => {
+      attempt += 1;
+      if (attempt === 1) throw Object.assign(new Error("slow down"), { code: "RATE_LIMITED" });
+      if (attempt === 2) throw Object.assign(new Error("provider busy"), { code: "PROVIDER_RATE_LIMITED" });
+      return { vectors: input.texts.map(() => [1, 0]), modelKey: input.modelKey, dims: 2 };
+    },
+  });
+  const vectors = await client.embed(["text"]);
+  assert.equal(vectors.length, 1, "the run survives two rate limits");
+  assert.equal(sleeps.length, 2, "it backed off twice");
+  assert.ok(sleeps[1] > sleeps[0], "the backoff grows");
+  void codes;
+});
+
+test("a rate limit that never clears is reported after a bounded number of attempts", async () => {
+  const { HOST_EMBED_MAX_ATTEMPTS } = await import("../lib/embeddings.mjs");
+  const settings = validateEmbeddingSettings(HOST_SETTINGS);
+  let calls = 0;
+  const client = new EmbeddingClient({
+    settings,
+    sleep: async () => {},
+    hostEmbed: async () => {
+      calls += 1;
+      throw Object.assign(new Error("rate limited"), { code: "RATE_LIMITED" });
+    },
+  });
+  await assert.rejects(client.embed(["text"]), (error) => error.code === "EMBEDDING_RATE_LIMITED");
+  assert.equal(calls, HOST_EMBED_MAX_ATTEMPTS);
+});
+
+test("a non-retryable host error is not retried", async () => {
+  const settings = validateEmbeddingSettings(HOST_SETTINGS);
+  let calls = 0;
+  const client = new EmbeddingClient({
+    settings,
+    sleep: async () => {},
+    hostEmbed: async () => {
+      calls += 1;
+      throw Object.assign(new Error("no model"), { code: "MODEL_NOT_FOUND" });
+    },
+  });
+  await assert.rejects(client.embed(["text"]), (error) => error.code === "MODEL_MISSING");
+  assert.equal(calls, 1);
+});
+
+test("calls are spaced to stay inside 120 per minute", async () => {
+  const { HOST_EMBED_RATE_PER_MINUTE } = await import("../lib/embeddings.mjs");
+  const settings = validateEmbeddingSettings(HOST_SETTINGS);
+  let clock = 1_000_000;
+  const sleeps = [];
+  const client = new EmbeddingClient({
+    settings,
+    now: () => new Date(clock),
+    sleep: async (ms) => {
+      sleeps.push(ms);
+      clock += ms;
+    },
+    hostEmbed: async (input) => ({ vectors: input.texts.map(() => [1, 0]), modelKey: input.modelKey, dims: 2 }),
+  });
+  // Each call embeds one text and the clock advances a little, so the window
+  // fills up and the calls past the allowance have to wait for it to roll.
+  for (let index = 0; index < HOST_EMBED_RATE_PER_MINUTE + 10; index += 1) {
+    await client.embed([`text ${index}`]);
+    clock += 100;
+  }
+  assert.ok(sleeps.length >= 1, "calls past the allowance waited");
+  assert.ok(sleeps.every((ms) => ms > 0 && ms <= 60_000), `unexpected waits: ${sleeps}`);
+  const now = clock;
+  const inWindow = client.hostCallTimes.filter((at) => at > now - 60_000);
+  assert.ok(inWindow.length <= HOST_EMBED_RATE_PER_MINUTE, `window holds ${inWindow.length}`);
+});

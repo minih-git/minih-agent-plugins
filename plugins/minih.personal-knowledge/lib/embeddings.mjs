@@ -24,8 +24,45 @@ const API_KEY_ENV_PATTERN = /^[A-Z_][A-Z0-9_]{0,63}$/;
 export const EMBED_BATCH = 32;
 /** `pi.embeddings.embed` accepts at most 64 texts per call (ADR 0003). */
 export const HOST_EMBED_BATCH = 64;
-/** A single text the host will accept. */
+/** A single text the host will accept, measured in UTF-8 bytes. */
 export const HOST_EMBED_MAX_TEXT_BYTES = 8 * 1024;
+/** …and a whole call: 64 × 8 KiB would be twice this, so batches split on bytes. */
+export const HOST_EMBED_MAX_BATCH_BYTES = 256 * 1024;
+/** The host allows 120 calls per plugin per minute. */
+export const HOST_EMBED_RATE_PER_MINUTE = 120;
+/** Attempts per batch before a rate limit is reported as a failure. */
+export const HOST_EMBED_MAX_ATTEMPTS = 4;
+/** Base of the linear backoff between those attempts. */
+export const HOST_EMBED_BACKOFF_MS = 1_000;
+
+/**
+ * Split texts into calls the host will accept: at most 64 entries, at most
+ * 8 KiB each (UTF-8), and at most 256 KiB per call. Blank texts are dropped —
+ * the host refuses them and they carry nothing to embed.
+ *
+ * A single text over 8 KiB is reported by the caller, not silently truncated.
+ */
+export function splitHostBatches(texts) {
+  const batches = [];
+  let current = [];
+  let bytes = 0;
+  for (const raw of texts ?? []) {
+    const text = String(raw ?? "");
+    if (text.trim() === "") continue;
+    const size = Buffer.byteLength(text, "utf8");
+    const wouldExceed =
+      current.length >= HOST_EMBED_BATCH || bytes + size > HOST_EMBED_MAX_BATCH_BYTES;
+    if (wouldExceed && current.length > 0) {
+      batches.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(text);
+    bytes += size;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
 
 /**
  * Host error code → the reason this plugin already reports for a direct
@@ -259,6 +296,7 @@ export class EmbeddingClient {
     fetchImpl = fetch,
     home = os.homedir(),
     hostEmbed = null,
+    sleep = null,
   } = {}) {
     this.settings = settings;
     this.apiKey = apiKey;
@@ -266,6 +304,8 @@ export class EmbeddingClient {
     this.fetch = fetchImpl;
     this.home = home;
     this.hostEmbed = hostEmbed;
+    this.sleep = sleep;
+    this.hostCallTimes = [];
     this.dims = null;
     this.unreachableSince = 0;
     // A host model has no endpoint of its own; the wait is the host's budget.
@@ -357,40 +397,112 @@ export class EmbeddingClient {
     this.unreachableSince = this.now().getTime();
   }
 
-  /** Embed texts in batches; returns one L2-normalized vector per text. */
+  /**
+   * Embed texts in batches; returns one L2-normalized vector per text (a
+   * blank text is skipped for a host model, which refuses them).
+   */
   async embed(texts, { timeoutMs = OLLAMA_TIMEOUT_MS } = {}) {
+    if (this.isHost) {
+      const vectors = [];
+      for (const batch of splitHostBatches(texts)) {
+        const produced = await this.#embedBatch(batch, timeoutMs);
+        vectors.push(...produced);
+      }
+      return vectors;
+    }
     const vectors = [];
-    const size = this.isHost ? HOST_EMBED_BATCH : EMBED_BATCH;
-    for (let i = 0; i < texts.length; i += size) {
-      const batch = texts.slice(i, i + size);
+    for (let i = 0; i < texts.length; i += EMBED_BATCH) {
+      const batch = texts.slice(i, i + EMBED_BATCH);
       vectors.push(...(await this.#embedBatch(batch, timeoutMs)));
     }
     return vectors;
   }
 
   /**
+   * Call the host, waiting out its rate limits (ADR 0003 §5).
+   *
+   * The host allows 120 calls per plugin per minute and answers `RATE_LIMITED`
+   * when that is used up; a provider answers `PROVIDER_RATE_LIMITED` when it is
+   * throttling on its own. Both are transient, so the run backs off instead of
+   * failing: `retryAfterMs` grows linearly and the attempt count is small, so a
+   * long index pass pauses rather than dies.
+   */
+  async #callHostWithBackoff(embed, input) {
+    const attempts = HOST_EMBED_MAX_ATTEMPTS;
+    let waited = 0;
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await this.#throttleHostCall(embed, input);
+      } catch (error) {
+        const code = String(error?.code ?? "");
+        const retryable = code === "RATE_LIMITED" || code === "PROVIDER_RATE_LIMITED";
+        if (!retryable || attempt >= attempts) throw error;
+        // Linear backoff: a heavy build spreads its calls over minutes.
+        const delay = HOST_EMBED_BACKOFF_MS * attempt;
+        waited += delay;
+        await this.#sleep(delay);
+        void waited;
+      }
+    }
+  }
+
+  /**
+   * Keep this plugin inside the host's per-minute allowance. Calls are spaced
+   * so at most `HOST_EMBED_RATE_PER_MINUTE` start in any minute; a caller that
+   * would exceed it waits instead of being rejected.
+   */
+  async #throttleHostCall(embed, input) {
+    const now = this.now().getTime();
+    const windowStart = now - 60_000;
+    this.hostCallTimes = (this.hostCallTimes ?? []).filter((at) => at > windowStart);
+    if (this.hostCallTimes.length >= HOST_EMBED_RATE_PER_MINUTE) {
+      const wait = this.hostCallTimes[0] + 60_000 - now;
+      if (wait > 0) await this.#sleep(wait);
+      const after = this.now().getTime();
+      this.hostCallTimes = this.hostCallTimes.filter((at) => at > after - 60_000);
+    }
+    this.hostCallTimes.push(this.now().getTime());
+    return embed(input);
+  }
+
+  /** `setTimeout`, injectable so tests do not wait in real time. */
+  #sleep(ms) {
+    if (typeof this.sleep === "function") return this.sleep(ms);
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
    * Embed one batch through the app's own model (`pi.embeddings.embed`). The
-   * host caps a batch at 64 texts and a single text at 8 KiB; the indexer
-   * already trims chunks, so an oversized text is reported rather than sent.
+   * host caps a batch at 64 texts, a single text at 8 KiB, and a call at
+   * 256 KiB — all measured in UTF-8 bytes — so `splitHostBatches` keeps every
+   * call inside all three.
    */
   async #embedThroughHost(batch) {
     const embed = this.hostEmbed ?? (typeof globalThis.pi?.embeddings?.embed === "function" ? globalThis.pi.embeddings.embed.bind(globalThis.pi.embeddings) : null);
     if (typeof embed !== "function") {
       throw transportError("EMBEDDING_HOST_UNAVAILABLE", "this Desktop version has no pi.embeddings.embed (needs Desktop 1.5.0)");
     }
-    for (const text of batch) {
+    // The host measures UTF-8 bytes, and it rejects a blank text outright.
+    // Chunks are trimmed by the indexer, so a blank one here means nothing to
+    // send: skip it rather than fail the whole run.
+    const texts = batch.filter((text) => String(text ?? "").trim() !== "");
+    if (texts.length === 0) return [];
+    for (const text of texts) {
       if (Buffer.byteLength(text, "utf8") > HOST_EMBED_MAX_TEXT_BYTES) {
         throw transportError("EMBED_FAILED", `one text exceeds the ${HOST_EMBED_MAX_TEXT_BYTES} byte limit of the app's embedding API`);
       }
     }
+    if (Buffer.byteLength(texts.join(""), "utf8") > HOST_EMBED_MAX_BATCH_BYTES) {
+      throw transportError("EMBED_FAILED", `one batch exceeds the ${HOST_EMBED_MAX_BATCH_BYTES} byte limit of the app's embedding API`);
+    }
     let result;
     try {
-      result = await embed({ modelKey: this.settings.modelKey, texts: batch });
+      result = await this.#callHostWithBackoff(embed, { modelKey: this.settings.modelKey, texts });
     } catch (error) {
       throw mapHostEmbeddingError(error);
     }
     const vectors = result?.vectors;
-    if (!Array.isArray(vectors) || vectors.length !== batch.length) {
+    if (!Array.isArray(vectors) || vectors.length !== texts.length) {
       throw transportError("EMBED_FAILED", "unexpected pi.embeddings.embed response shape");
     }
     return vectors.map((vector) => {

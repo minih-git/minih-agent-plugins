@@ -133,9 +133,12 @@ async function currentDeviceName() {
  * is called from the main process and nowhere else.
  */
 function hostEmbed() {
+  // `embeddings.embed` is the whole surface behind `embeddings.run`; naming it
+  // here is also how the permission audit sees it is used.
   const api = globalThis.pi?.embeddings;
   if (typeof api?.embed !== "function") return null;
-  return (input) => api.embed(input);
+  const embed = api.embed.bind(api);
+  return (input) => embed(input);
 }
 
 /** Whether this Desktop version can run an embedding model for the plugin. */
@@ -1028,6 +1031,7 @@ async function needsHostQueryVectors() {
 async function registerKnowledgeTools() {
   if (knowledgeTools) return knowledgeTools;
   const api = globalThis.pi?.agent;
+  // `agent.registerTool` is the surface behind `agent.tool.register`.
   if (typeof api?.registerTool !== "function") return null;
   const { TOOL_SCHEMAS, renderMainProcessTool, MAIN_PROCESS_TOOLS } = await import("./mcp/tool-text.mjs");
   const registered = [];

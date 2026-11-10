@@ -1,6 +1,6 @@
 # ADR 0003: Embeddings from the app's own models, and what the panel says first
 
-- Status: Proposed (2026-11-10)
+- Status: Accepted (2026-11-10); published as 0.6.0
 - Plugin: `minih.personal-knowledge`, 0.6.0
 - Related (Minih-Agent-Desktop): `plugin-embeddings` ADR (Desktop 1.5.0),
   `docs/spec/07-plugins/03-plugin-api.md` § embeddings, permission
@@ -133,6 +133,18 @@ Declaring an unknown permission makes today's hosts refuse the manifest, so P1
 ships the code and the panel with the host option disabled on a host that
 cannot honour it; P2 flips the manifest once Desktop 1.5.0 is published.
 
+### 5. Batches and the call budget
+
+`splitHostBatches` cuts on the host's three limits at once — 64 entries, 8 KiB
+per text (UTF-8 bytes, so a CJK character costs three), 256 KiB per call — and
+drops blank texts, which the host refuses and which carry nothing to embed. A
+full page of maximum-size texts therefore becomes two calls, not one.
+
+Calls are spaced so at most 120 start in any minute. A `RATE_LIMITED` or
+`PROVIDER_RATE_LIMITED` answer is transient: the call backs off linearly and
+retries up to four times before the run reports
+`EMBEDDING_RATE_LIMITED`. Other errors are never retried.
+
 ## Consequences
 
 - An existing install keeps the local Ollama; nothing changes until the user
@@ -149,9 +161,10 @@ cannot honour it; P2 flips the manifest once Desktop 1.5.0 is published.
 
 - `models.list({ kind: "embedding" })` must actually filter; the plugin filters
   again on its side for a host that ignores the argument.
-- The 64-text and 8 KiB-per-text limits are the plugin's reading of the plan;
-  if the host is stricter, the plugin should read the limits from the error
-  rather than guess.
+- The limits are the published ones (64 texts, 8 KiB per text, 256 KiB per
+  call, all UTF-8 bytes; 120 calls per minute). The plugin splits on all three
+  and spaces its calls inside the allowance; a host that tightens them should
+  say so in the error, which is reported verbatim.
 - A host that reports `dims` per call lets the plugin size its index; the plugin
   currently takes the first vector's length and validates every later batch
   against it.
