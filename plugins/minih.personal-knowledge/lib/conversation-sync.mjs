@@ -90,18 +90,8 @@ async function writeSyncState(filePath, state) {
   await rename(temporary, filePath);
 }
 
-/**
- * Vault config with the two private conversation folders ignored. L2 summaries
- * stay indexed; the transcript (`_raw`) and the daily roll-up (`_daily`) never
- * are (plan §6.2). `ignoreFolders` holds top-level folder names, which is also
- * how Obsidian's own ignore filter is keyed, so one entry serves both.
- */
-export function archiveConfig(config = {}) {
-  const ignore = new Set(config.ignoreFolders ?? []);
-  ignore.add(`${CONVERSATIONS_FOLDER}/${RAW_FOLDER}`);
-  ignore.add(`${CONVERSATIONS_FOLDER}/${DAILY_FOLDER}`);
-  return { ...config, ignoreFolders: [...ignore] };
-}
+// Kept here for existing imports; the shared index uses the same rule.
+export { archiveConfig } from "./conversation-layout.mjs";
 
 /** Keep the state file bounded: the newest sessions by `updatedAt`. */
 export function pruneSummaries(summaries, limit = MAX_TRACKED_SESSIONS) {

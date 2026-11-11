@@ -13,19 +13,23 @@ import path from "node:path";
  *   L3  `09 Conversations/_raw/<project>/<YYYY-MM>/<id8>[.pN].md`
  *   day `09 Conversations/_daily/<YYYY-MM-DD> <device>.md`
  *
- * The shared `VaultIndex` skips a top-level folder only when it is indented
- * literally under the vault root, so the two folders that must stay
- * private — `_raw` and `_daily` — are separate top-level folders next to the
- * projects, exactly as the plan puts them. Both names are added to
- * `ignoreFolders` and to Obsidian's `userIgnoreFilters` (ADR 0002 §4); the
- * in-memory index filters them by the leading underscore as well, so a user
- * who edits the config cannot accidentally index a transcript.
+ * The shared index always excludes the nested `_raw` and `_daily` subtrees.
+ * `archiveConfig` keeps that rule identical for the index and syncer; the
+ * same paths are also added to Obsidian's ignore filters (ADR 0002 §4).
  */
 
 export const CONVERSATIONS_FOLDER = "09 Conversations";
 export const RAW_FOLDER = "_raw";
 export const DAILY_FOLDER = "_daily";
 export const NO_PROJECT = "_无项目";
+
+/** Preserve user exclusions while keeping raw transcripts and roll-ups out. */
+export function archiveConfig(config = {}) {
+  const ignore = new Set(config.ignoreFolders ?? []);
+  ignore.add(`${CONVERSATIONS_FOLDER}/${RAW_FOLDER}`);
+  ignore.add(`${CONVERSATIONS_FOLDER}/${DAILY_FOLDER}`);
+  return { ...config, ignoreFolders: [...ignore] };
+}
 
 /** Hard ceiling for one L3 part: the plan's 512 KiB, counted in UTF-8 bytes. */
 export const RAW_PART_BYTES = 512 * 1024;

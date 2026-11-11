@@ -76,6 +76,7 @@ const USER_CENTER_ID = "memory:user-center";
 
 let state = null;
 let statePromise = null;
+let servicePromise = null;
 let startupController = null;
 let startupTimer = null;
 let startupTask = null;
@@ -160,17 +161,30 @@ function hostEmbeddingAvailable() {
 }
 
 async function ensurePanelService() {
-  await ensureState();
-  if (!state.service) {
-    const { createKnowledgeService } = await import("./mcp/knowledge-core.mjs");
-    state.service = await createKnowledgeService({
-      pluginRoot,
-      vaultPath: state.vaultPath,
-      config: state.config,
-      hostEmbed: hostEmbed(),
+  const loaded = await ensureState();
+  if (loaded.service) return loaded.service;
+  if (!servicePromise) {
+    const signal = startupController?.signal;
+    const pending = (async () => {
+      const { createKnowledgeService } = await import("./mcp/knowledge-core.mjs");
+      signal?.throwIfAborted();
+      const service = await createKnowledgeService({
+        pluginRoot,
+        vaultPath: loaded.vaultPath,
+        config: loaded.config,
+        index: loaded.index,
+        ontology: loaded.ontology,
+        hostEmbed: hostEmbed(),
+      });
+      signal?.throwIfAborted();
+      loaded.service = service;
+      return service;
+    })().finally(() => {
+      if (servicePromise === pending) servicePromise = null;
     });
+    servicePromise = pending;
   }
-  return state.service;
+  return servicePromise;
 }
 
 /**
@@ -312,14 +326,25 @@ async function dashboardPayload() {
 }
 
 function ensureState() {
-  if (state) return Promise.resolve(state);
+  startupController?.signal.throwIfAborted();
   if (statePromise) return statePromise;
+  if (state) return Promise.resolve(state);
   const signal = startupController?.signal;
-  const pending = buildState(signal).finally(() => {
+  const pending = initializeState(signal).finally(() => {
     if (statePromise === pending) statePromise = null;
   });
   statePromise = pending;
   return pending;
+}
+
+async function initializeState(signal) {
+  const loaded = await buildState(signal);
+  await startConversationSync(loaded, signal);
+  signal?.throwIfAborted();
+  await startProfileScheduler(signal);
+  signal?.throwIfAborted();
+  state = loaded;
+  return loaded;
 }
 
 async function buildState(signal) {
@@ -339,8 +364,7 @@ async function buildState(signal) {
   await index.refresh({ force: true, signal });
   const ontology = await loadOntology({ pluginRoot, index });
   signal?.throwIfAborted();
-  state = { index, ontology, redactSensitiveContent, vaultPath, config };
-  return state;
+  return { index, ontology, redactSensitiveContent, vaultPath, config };
 }
 
 async function loadMapping() {
@@ -966,6 +990,7 @@ async function onPanelInvoke(channel, payload) {
     };
   }
   if (channel === "kg.conversations.sync") {
+    await ensureState();
     if (!conversationSyncer) return { state: "stopped" };
     return conversationSyncer.syncOnce({ reason: "manual" });
   }
@@ -1031,7 +1056,7 @@ async function onPanelInvoke(channel, payload) {
  * `transcript` through it. This check is the one place in this file that names
  * the surface (an audit reads the entry file), so it stays fully qualified.
  */
-async function startConversationSync(signal) {
+async function startConversationSync(loaded, signal) {
   if (conversationSyncer) return conversationSyncer;
   // `changes` is the feed this feature is built on; it is the one hard
   // requirement. `summary` and `transcript` are used by the syncer when the
@@ -1042,8 +1067,6 @@ async function startConversationSync(signal) {
   // reads, so the surface this feature depends on is named, not aliased.
   if (typeof conversations.changes !== "function") return null;
   const { ConversationSyncer, archiveConfig } = await import("./lib/conversation-sync.mjs");
-  const loaded = await ensureState().catch(() => null);
-  if (!loaded) return null;
   const { redactSensitiveContent } = await import("./lib/redact.mjs");
   const device = await currentDeviceName();
   signal?.throwIfAborted();
@@ -1225,19 +1248,12 @@ async function onLoad() {
   startupController = controller;
   startupTimer = setImmediate(() => {
     startupTimer = null;
-    startupTask = warmVault(controller.signal).catch((error) => {
+    startupTask = ensureState().catch((error) => {
       if (!controller.signal.aborted) console.error("Personal Knowledge background startup failed:", error);
     });
   });
 }
 
-async function warmVault(signal) {
-  await ensureState();
-  signal.throwIfAborted();
-  await startConversationSync(signal);
-  signal.throwIfAborted();
-  await startProfileScheduler(signal);
-}
 
 async function onUnload() {
   startupController?.abort();
@@ -1246,6 +1262,7 @@ async function onUnload() {
   await startupTask;
   startupTask = null;
   await statePromise?.catch(() => {});
+  await servicePromise?.catch(() => {});
   await unregisterKnowledgeTools().catch(() => {});
   if (profileScheduler) {
     const scheduler = profileScheduler;
@@ -1262,6 +1279,7 @@ async function onUnload() {
   panelStores = null;
   state = null;
   statePromise = null;
+  servicePromise = null;
   startupController = null;
 }
 

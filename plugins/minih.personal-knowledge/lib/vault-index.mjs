@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
+import { archiveConfig } from "./conversation-layout.mjs";
 import { parseFrontmatter } from "./frontmatter.mjs";
 import { bodyLinkTargets, frontmatterLinkTargets } from "./links.mjs";
 import { chunkNote, headingOutline } from "./sections.mjs";
@@ -45,9 +46,9 @@ function titleFor(relativePath, metadata) {
 export class VaultIndex {
   constructor({ root, config = {}, now = () => new Date() }) {
     this.root = root;
-    this.config = config;
+    this.config = archiveConfig(config);
     this.now = now;
-    this.ignored = new Set(config.ignoreFolders ?? []);
+    this.ignored = new Set(this.config.ignoreFolders);
     this.notes = new Map();
     this.basenames = new Map();
     this.backlinks = new Map();

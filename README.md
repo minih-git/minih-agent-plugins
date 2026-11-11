@@ -40,7 +40,7 @@ keeping its own `LICENSE` and notice files inside its directory.
 
 | Plugin | Version | Author | License | Upstream |
 | --- | --- | --- | --- | --- |
-| `minih.personal-knowledge` (`Personal Knowledge`) | 0.7.0 | minih-git | MIT | this repository |
+| `minih.personal-knowledge` (`Personal Knowledge`) | 0.7.1 | minih-git | MIT | this repository |
 | `minih.selection-translate` (`Selection Translate`) | 0.3.2 | minih-git | MIT | this repository |
 | `minih.cache-keepwarm` (`Cache keep-warm`) | 0.1.0 | minih-git | MIT | this repository |
 | `pi.file-manager` (`File Manager`) | 0.9.0 | Tioit-Wang | not declared by the author | not published by the author |
@@ -71,6 +71,13 @@ Obsidian stays optional — the vault is read as plain Markdown, nothing is
 written for the dashboard, and "copy Obsidian link" remains as a secondary
 action. It adds one permission, `shell.openExternal`, for http(s) links found
 in a note. The design is `docs/design/obsidian-independence.md` in the plugin.
+
+0.7.1 fixes startup for large or cloud-backed vaults: plugin activation and
+MCP discovery no longer wait for a vault scan. Raw transcripts and daily
+roll-ups stay out of every index, a failed scan can recover the archive and
+profile scheduler on retry, and concurrent settings requests share one service
+and the view's index. It keeps the same permissions, Desktop requirement, and
+stored formats. See `docs/design/background-startup.md` in the plugin.
 
 The redistributed ones are listed with `trust: "community"` and
 `verified: false`: the `verified` badge is a claim about a publisher this
