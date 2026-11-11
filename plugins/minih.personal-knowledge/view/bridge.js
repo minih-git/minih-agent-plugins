@@ -4,8 +4,28 @@
  */
 
 import { BRIDGE_TIMEOUT_MS } from "./strings.js";
+import { createVaultWaiter } from "./vault-loading.mjs";
+
+const VAULT_CHANNELS = new Set([
+  "kg.graph", "kg.note", "kg.copyLink", "kg.copyPath", "kg.dashboard",
+  "kg.promote.preview", "kg.promote.apply", "kg.settings.get", "kg.settings.set",
+  "kg.index.status", "kg.index.rebuild", "kg.routing.get", "kg.profile.run", "kg.conversations.sync",
+]);
+let connectedBefore = Boolean(globalThis.window?.pluginBridge?.invoke);
+const readiness = createVaultWaiter({
+  request: (payload, signal) => callBridge("kg.status", payload, BRIDGE_TIMEOUT_MS, signal),
+  onStatus: (status) => globalThis.window?.dispatchEvent(new CustomEvent("kg:loading", { detail: status })),
+});
+globalThis.window?.addEventListener("pagehide", () => readiness.dispose(), { once: true });
+
 
 export async function invokeBridge(channel, payload = {}, timeoutMs = BRIDGE_TIMEOUT_MS) {
+  if (VAULT_CHANNELS.has(channel)) await readiness.wait();
+  return callBridge(channel, payload, timeoutMs, readiness.signal);
+}
+
+async function callBridge(channel, payload, timeoutMs, signal) {
+  signal.throwIfAborted();
   const bridge = window.pluginBridge;
   if (!bridge || typeof bridge.invoke !== "function") {
     const error = new Error("pluginBridge unavailable");
@@ -13,7 +33,10 @@ export async function invokeBridge(channel, payload = {}, timeoutMs = BRIDGE_TIM
     throw error;
   }
   let timerId = null;
+  let abort;
   const timeoutPromise = new Promise((_, reject) => {
+    abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
     timerId = setTimeout(() => {
       const error = new Error(`Bridge call timed out after ${Math.round(timeoutMs / 1000)}s`);
       error.code = "BRIDGE_TIMEOUT";
@@ -24,11 +47,14 @@ export async function invokeBridge(channel, payload = {}, timeoutMs = BRIDGE_TIM
     return await Promise.race([bridge.invoke(channel, payload), timeoutPromise]);
   } finally {
     if (timerId !== null) clearTimeout(timerId);
+    signal.removeEventListener("abort", abort);
   }
 }
 
 export function hasBridge() {
-  return Boolean(window.pluginBridge && typeof window.pluginBridge.invoke === "function");
+  // A disconnected installed page stays a host page, never a demo preview.
+  connectedBefore ||= Boolean(globalThis.window?.pluginBridge && typeof window.pluginBridge.invoke === "function");
+  return connectedBefore;
 }
 
 /** Deterministic 32-bit PRNG (mulberry32) for star fields and fixtures. */

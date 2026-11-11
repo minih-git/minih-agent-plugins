@@ -9,6 +9,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>知识库设置 · Personal Knowledge Settings</title>
   <link rel="stylesheet" href="./settings-panel.css" />
+  <link rel="stylesheet" href="./loading.css" />
 </head>
 <body class="theme-dark">
   <div id="settings-app" class="settings-app">
@@ -32,6 +33,13 @@
     </header>
 
     <div id="panel-stub-notice" class="panel-notice is-hidden" role="status"></div>
+
+    <section id="vault-loading" class="vault-loading is-hidden" role="status" aria-live="polite">
+      <p id="vault-loading-text" class="vault-loading-text"></p>
+      <p id="vault-loading-hint" class="vault-loading-hint"></p>
+      <progress id="vault-loading-progress"></progress>
+      <button id="vault-loading-retry" class="is-hidden" type="button"></button>
+    </section>
 
     <main class="sections-stack">
       <!-- 1. Vault -->

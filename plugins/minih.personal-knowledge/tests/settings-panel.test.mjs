@@ -123,7 +123,9 @@ test("kg.config: env locks its field, unedited keys survive, backup written, tem
   assert.equal(got.values.vaultPath, vault);
   assert.equal(got.locked.vaultPath, "PERSONAL_KNOWLEDGE_VAULT");
   assert.equal(got.vault.exists, true);
-  assert.equal(got.vault.notes, 2);
+  assert.equal(got.vault.notes, null, "configuration is available before the background index");
+  await backend.onPanelInvoke("kg.graph", {});
+  assert.equal((await backend.onPanelInvoke("kg.config.get", {})).vault.notes, 2);
 
   // set: preserve keys the panel does not edit (projects/topicRoutes survive).
   const before = JSON.parse(await readFile(configPath, "utf8"));

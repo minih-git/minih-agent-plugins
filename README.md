@@ -40,7 +40,7 @@ keeping its own `LICENSE` and notice files inside its directory.
 
 | Plugin | Version | Author | License | Upstream |
 | --- | --- | --- | --- | --- |
-| `minih.personal-knowledge` (`Personal Knowledge`) | 0.7.1 | minih-git | MIT | this repository |
+| `minih.personal-knowledge` (`Personal Knowledge`) | 0.7.2 | minih-git | MIT | this repository |
 | `minih.selection-translate` (`Selection Translate`) | 0.3.2 | minih-git | MIT | this repository |
 | `minih.cache-keepwarm` (`Cache keep-warm`) | 0.1.0 | minih-git | MIT | this repository |
 | `pi.file-manager` (`File Manager`) | 0.9.0 | Tioit-Wang | not declared by the author | not published by the author |
@@ -78,6 +78,12 @@ roll-ups stay out of every index, a failed scan can recover the archive and
 profile scheduler on retry, and concurrent settings requests share one service
 and the view's index. It keeps the same permissions, Desktop requirement, and
 stored formats. See `docs/design/background-startup.md` in the plugin.
+
+0.7.2 also fixes the first view load: the page polls real vault progress before
+requesting its graph, so cloud hydration is not held inside a 30-second bridge
+call. Read failures show the real error with retry, never demo data. File reads
+use a bounded parallel batch, and vault configuration stays available while
+indexing. No permission or data-format changes are needed.
 
 The redistributed ones are listed with `trust: "community"` and
 `verified: false`: the `verified` badge is a claim about a publisher this

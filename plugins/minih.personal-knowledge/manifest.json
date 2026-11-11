@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "minih.personal-knowledge",
   "name": "Personal Knowledge",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Use a local Markdown knowledge vault (Obsidian-compatible) as verified, time-aware long-term context: scoped retrieval, guarded write-back, project routing, the Knowledge Universe view, and an archived history of your conversations.",
   "author": "minih-git",
   "license": "MIT",
