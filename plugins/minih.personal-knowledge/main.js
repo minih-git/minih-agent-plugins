@@ -75,6 +75,10 @@ const PROFILE_VALUES = new Set(["enabled", "modelKey"]);
 const USER_CENTER_ID = "memory:user-center";
 
 let state = null;
+let statePromise = null;
+let startupController = null;
+let startupTimer = null;
+let startupTask = null;
 let panelStores = null;
 let conversationSyncer = null;
 let profileScheduler = null;
@@ -156,7 +160,7 @@ function hostEmbeddingAvailable() {
 }
 
 async function ensurePanelService() {
-  if (!state) throw new Error("plugin state is not initialized");
+  await ensureState();
   if (!state.service) {
     const { createKnowledgeService } = await import("./mcp/knowledge-core.mjs");
     state.service = await createKnowledgeService({
@@ -307,8 +311,19 @@ async function dashboardPayload() {
   return buildDashboard({ index });
 }
 
-async function ensureState() {
-  if (state) return state;
+function ensureState() {
+  if (state) return Promise.resolve(state);
+  if (statePromise) return statePromise;
+  const signal = startupController?.signal;
+  const pending = buildState(signal).finally(() => {
+    if (statePromise === pending) statePromise = null;
+  });
+  statePromise = pending;
+  return pending;
+}
+
+async function buildState(signal) {
+  signal?.throwIfAborted();
   const [{ VaultIndex }, { loadOntology }, { redactSensitiveContent }] = await Promise.all([
     import("./lib/vault-index.mjs"),
     import("./lib/ontology.mjs"),
@@ -321,8 +336,9 @@ async function ensureState() {
   const info = await stat(vaultPath);
   if (!info.isDirectory()) throw new Error(`Knowledge vault is not a directory: ${vaultPath}`);
   const index = new VaultIndex({ root: await realpath(vaultPath), config });
-  await index.refresh({ force: true });
+  await index.refresh({ force: true, signal });
   const ontology = await loadOntology({ pluginRoot, index });
+  signal?.throwIfAborted();
   state = { index, ontology, redactSensitiveContent, vaultPath, config };
   return state;
 }
@@ -1015,7 +1031,7 @@ async function onPanelInvoke(channel, payload) {
  * `transcript` through it. This check is the one place in this file that names
  * the surface (an audit reads the entry file), so it stays fully qualified.
  */
-async function startConversationSync() {
+async function startConversationSync(signal) {
   if (conversationSyncer) return conversationSyncer;
   // `changes` is the feed this feature is built on; it is the one hard
   // requirement. `summary` and `transcript` are used by the syncer when the
@@ -1030,6 +1046,7 @@ async function startConversationSync() {
   if (!loaded) return null;
   const { redactSensitiveContent } = await import("./lib/redact.mjs");
   const device = await currentDeviceName();
+  signal?.throwIfAborted();
   syncDevices = { name: device };
   conversationSyncer = new ConversationSyncer({
     pi: globalThis.pi,
@@ -1061,9 +1078,10 @@ async function profileStatus() {
  * the switch is on, never in read-only mode, and never faster than
  * `candidateDue` allows; the timer stops with the plugin.
  */
-async function startProfileScheduler() {
+async function startProfileScheduler(signal) {
   if (profileScheduler) return profileScheduler;
   const { ProfileCandidateScheduler } = await import("./lib/profile-candidates.mjs");
+  signal?.throwIfAborted();
   profileScheduler = new ProfileCandidateScheduler({
     settings: async () => (await profileStatus()).settings,
     run: () => profileRun({}, { manual: false }),
@@ -1200,14 +1218,34 @@ async function syncKnowledgeTools({ startup = false } = {}) {
 }
 
 async function onLoad() {
-  // Warm the index so the first view render does not pay for the vault scan.
-  await ensureState().catch(() => {});
-  await startConversationSync().catch(() => null);
-  await startProfileScheduler().catch(() => null);
-  await syncKnowledgeTools({ startup: true }).catch(() => null);
+  // Tool registration is part of readiness; vault I/O is not.
+  await syncKnowledgeTools({ startup: true });
+  if (startupController) return;
+  const controller = new AbortController();
+  startupController = controller;
+  startupTimer = setImmediate(() => {
+    startupTimer = null;
+    startupTask = warmVault(controller.signal).catch((error) => {
+      if (!controller.signal.aborted) console.error("Personal Knowledge background startup failed:", error);
+    });
+  });
+}
+
+async function warmVault(signal) {
+  await ensureState();
+  signal.throwIfAborted();
+  await startConversationSync(signal);
+  signal.throwIfAborted();
+  await startProfileScheduler(signal);
 }
 
 async function onUnload() {
+  startupController?.abort();
+  if (startupTimer) clearImmediate(startupTimer);
+  startupTimer = null;
+  await startupTask;
+  startupTask = null;
+  await statePromise?.catch(() => {});
   await unregisterKnowledgeTools().catch(() => {});
   if (profileScheduler) {
     const scheduler = profileScheduler;
@@ -1223,6 +1261,8 @@ async function onUnload() {
   indexRun = null;
   panelStores = null;
   state = null;
+  statePromise = null;
+  startupController = null;
 }
 
 module.exports = { name: manifest.id, version: manifest.version, onLoad, onUnload, onPanelInvoke };
