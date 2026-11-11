@@ -148,13 +148,13 @@ function lineChangeSummary(before, after) {
 }
 
 export class KnowledgeService {
-  constructor({ vaultPath, config = {}, now = () => new Date(), pluginRoot = null, ontology = null, hostEmbed = null }) {
+  constructor({ vaultPath, config = {}, now = () => new Date(), pluginRoot = null, index = null, ontology = null, hostEmbed = null }) {
     this.vaultPath = path.resolve(vaultPath);
     this.config = config;
     this.now = now;
     this.pluginRoot = pluginRoot;
     this.rootRealpath = null;
-    this.index = null;
+    this.index = index;
     this.ontology = ontology;
     /** `pi.embeddings.embed`, when this process is allowed to call it. */
     this.hostEmbed = hostEmbed;
@@ -164,8 +164,11 @@ export class KnowledgeService {
     const info = await stat(this.vaultPath);
     if (!info.isDirectory()) throw new Error(`Knowledge vault is not a directory: ${this.vaultPath}`);
     this.rootRealpath = await realpath(this.vaultPath);
-    this.index = new VaultIndex({ root: this.rootRealpath, config: this.config, now: this.now });
-    await this.index.refresh({ force: true });
+    // The panel reuses the initialized graph index; standalone MCP owns one.
+    if (!this.index) {
+      this.index = new VaultIndex({ root: this.rootRealpath, config: this.config, now: this.now });
+      await this.index.refresh({ force: true });
+    }
     if (!this.ontology && this.pluginRoot) {
       this.ontology = await loadOntology({ pluginRoot: this.pluginRoot, index: this.index });
     }
@@ -1376,6 +1379,8 @@ export async function createKnowledgeService({
   vaultPath,
   config,
   now,
+  index = null,
+  ontology = null,
   hostEmbed = null,
 } = {}) {
   const resolvedConfig = config ?? (pluginRoot ? await loadConfig(pluginRoot) : {});
@@ -1391,6 +1396,8 @@ export async function createKnowledgeService({
     config: resolvedConfig,
     now,
     pluginRoot: pluginRoot ?? null,
+    index,
+    ontology,
     hostEmbed,
   }).initialize();
 }

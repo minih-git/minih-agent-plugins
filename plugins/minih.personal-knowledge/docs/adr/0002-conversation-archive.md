@@ -96,7 +96,7 @@ in four places, each of which the user can inspect:
 
 | Where | What |
 | --- | --- |
-| `repo-map.json` `ignoreFolders` | `09 Conversations/_raw`, `09 Conversations/_daily` (the syncer appends these; the index matches a nested path as a prefix) |
+| Shared index exclusions | `09 Conversations/_raw`, `09 Conversations/_daily` (`VaultIndex` always applies the layout's `archiveConfig`; user exclusions are preserved and nested paths match as prefixes) |
 | `.obsidian/app.json` `userIgnoreFilters` | `09 Conversations/_raw` appended; every other key stays byte-identical, and no `.obsidian` folder is created when the vault has none |
 | `lib/conversation-sync.mjs` | writes only under `09 Conversations/`, atomically (temp file + rename) |
 | `mcp/knowledge-core.mjs` | the search paths filter `09 Conversations` unless `include: ["conversations"]` |

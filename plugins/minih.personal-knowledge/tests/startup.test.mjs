@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { VaultIndex } from "../lib/vault-index.mjs";
+import { KnowledgeService } from "../mcp/knowledge-core.mjs";
 import { isolatedHome } from "./helpers/home.mjs";
 
 const home = await isolatedHome();
@@ -114,4 +115,114 @@ test("the real index stops an in-flight scan and can retry", async () => {
   assert.equal(index.notes.size, 0);
   await index.refresh({ force: true });
   assert.ok(index.note("Note.md"));
+});
+
+test("retrying after a failed startup also recovers conversation sync", async (t) => {
+  const plugin = backend(t);
+  globalThis.pi = {
+    conversations: { changes: async () => ({ enabled: false, items: [], nextCursor: null }) },
+  };
+  const original = VaultIndex.prototype.refresh;
+  const originalError = console.error;
+  const logged = deferred();
+  console.error = () => logged.resolve();
+  VaultIndex.prototype.refresh = async () => { throw new Error("temporary scan failure"); };
+  t.after(() => { VaultIndex.prototype.refresh = original; console.error = originalError; });
+  await plugin.onLoad();
+  await logged.promise;
+  VaultIndex.prototype.refresh = original;
+  await plugin.onPanelInvoke("kg.note", { path: "Note.md" });
+  const synced = await plugin.onPanelInvoke("kg.conversations.sync", {});
+  assert.equal(synced.state, "disabled", "the recovered syncer reads the host archive switch");
+});
+
+test("manual conversation sync can retry a failed background startup", async (t) => {
+  const plugin = backend(t);
+  globalThis.pi = {
+    conversations: { changes: async () => ({ enabled: false, items: [], nextCursor: null }) },
+  };
+  const original = VaultIndex.prototype.refresh;
+  const originalError = console.error;
+  const logged = deferred();
+  console.error = () => logged.resolve();
+  VaultIndex.prototype.refresh = async () => { throw new Error("temporary scan failure"); };
+  t.after(() => { VaultIndex.prototype.refresh = original; console.error = originalError; });
+  await plugin.onLoad();
+  await logged.promise;
+  VaultIndex.prototype.refresh = original;
+  assert.equal((await plugin.onPanelInvoke("kg.conversations.sync", {})).state, "disabled");
+});
+
+test("concurrent settings requests reuse the startup index and service", async (t) => {
+  const plugin = backend(t);
+  const original = VaultIndex.prototype.refresh;
+  const indexes = new Set();
+  VaultIndex.prototype.refresh = async function (options) {
+    indexes.add(this);
+    return original.call(this, options);
+  };
+  t.after(() => { VaultIndex.prototype.refresh = original; });
+  await plugin.onLoad();
+  await plugin.onPanelInvoke("kg.note", { path: "Note.md" });
+  const [config, status] = await Promise.all([
+    plugin.onPanelInvoke("kg.config.get", {}),
+    plugin.onPanelInvoke("kg.index.status", {}),
+    plugin.onPanelInvoke("kg.routing.get", {}),
+  ]);
+  assert.ok(config);
+  assert.equal(status.notes, 1);
+  assert.equal(indexes.size, 1, "all settings channels use the already initialized index");
+});
+
+test("archive transcripts and daily notes stay excluded without user ignore rules", async () => {
+  const { mkdtemp } = await import("node:fs/promises");
+  const root = await mkdtemp(path.join(home, "archive-exclusion-"));
+  await writeFile(path.join(root, "Note.md"), "# Note\n");
+  for (const folder of ["_raw", "_daily"]) {
+    const dir = path.join(root, "09 Conversations", folder);
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "private.md"), "# Private archive\n");
+  }
+  const index = new VaultIndex({ root, config: { ignoreFolders: [] } });
+  await index.refresh();
+  assert.deepEqual(index.paths(), ["Note.md"]);
+  const service = await new KnowledgeService({ vaultPath: root }).initialize();
+  assert.deepEqual(service.index.paths(), ["Note.md"]);
+});
+
+test("a failed panel service initialization can retry using the ready index", async (t) => {
+  const plugin = backend(t);
+  const original = KnowledgeService.prototype.initialize;
+  t.after(() => { KnowledgeService.prototype.initialize = original; });
+  await plugin.onLoad();
+  await plugin.onPanelInvoke("kg.note", { path: "Note.md" });
+  KnowledgeService.prototype.initialize = async () => { throw new Error("temporary service failure"); };
+  await assert.rejects(plugin.onPanelInvoke("kg.index.status", {}), /temporary service failure/);
+  KnowledgeService.prototype.initialize = original;
+  assert.equal((await plugin.onPanelInvoke("kg.index.status", {})).notes, 1);
+});
+
+test("unload drains panel service initialization without publishing a stale result", async (t) => {
+  const plugin = backend(t);
+  const original = KnowledgeService.prototype.initialize;
+  const entered = deferred();
+  const release = deferred();
+  KnowledgeService.prototype.initialize = async function () {
+    entered.resolve();
+    await release.promise;
+    return original.call(this);
+  };
+  t.after(() => { KnowledgeService.prototype.initialize = original; release.resolve(); });
+  await plugin.onLoad();
+  await plugin.onPanelInvoke("kg.note", { path: "Note.md" });
+  const request = plugin.onPanelInvoke("kg.index.status", {});
+  const rejected = assert.rejects(request, { name: "AbortError" });
+  await entered.promise;
+  const unloading = plugin.onUnload();
+  release.resolve();
+  await Promise.all([rejected, unloading]);
+  KnowledgeService.prototype.initialize = original;
+  await plugin.onLoad();
+  await plugin.onPanelInvoke("kg.note", { path: "Note.md" });
+  assert.equal((await plugin.onPanelInvoke("kg.index.status", {})).notes, 1);
 });

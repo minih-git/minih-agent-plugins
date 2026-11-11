@@ -63,7 +63,18 @@ function embeddingSettingsPath() {
   );
 }
 
-const service = await createKnowledgeService({ pluginRoot });
+// Protocol readiness never waits for vault hydration. Only tool calls share
+// this initialization, and a failed attempt remains retryable.
+let servicePromise = null;
+function serviceFor() {
+  if (!servicePromise) {
+    servicePromise = createKnowledgeService({ pluginRoot }).catch((error) => {
+      servicePromise = null;
+      throw error;
+    });
+  }
+  return servicePromise;
+}
 const manifest = { version: await readPluginVersion() };
 const mainProcessOwnsRetrieval = await hostModeOwnsRetrievalTools();
 
@@ -214,18 +225,22 @@ const SERVED_TOOLS = mainProcessOwnsRetrieval
 // re-read on mtime change so the settings panel flips it without a restart.
 const readOnlyState = createReadOnlyState({ env: process.env });
 
+async function assertWriteAllowed(args) {
+  if (args?.dryRun === false && (await readOnlyState.isReadOnly())) {
+    throw new Error(`knowledge_write is read-only: ${readOnlyState.refusalReason()}.`);
+  }
+}
+
 const handlers = {
-  knowledge_context: (args) => service.context(args),
-  knowledge_search: (args) => service.search(args),
-  knowledge_read: (args) => service.read(args),
-  knowledge_stale: (args) => service.stale(args),
-  knowledge_links: (args) => service.links(args),
-  conversation_search: (args) => service.conversationSearch(args),
-  conversation_read: (args) => service.conversationRead(args),
-  knowledge_write: async (args) => {
-    if (args?.dryRun === false && (await readOnlyState.isReadOnly())) {
-      throw new Error(`knowledge_write is read-only: ${readOnlyState.refusalReason()}.`);
-    }
+  knowledge_context: (service, args) => service.context(args),
+  knowledge_search: (service, args) => service.search(args),
+  knowledge_read: (service, args) => service.read(args),
+  knowledge_stale: (service, args) => service.stale(args),
+  knowledge_links: (service, args) => service.links(args),
+  conversation_search: (service, args) => service.conversationSearch(args),
+  conversation_read: (service, args) => service.conversationRead(args),
+  knowledge_write: async (service, args) => {
+    await assertWriteAllowed(args);
     return service.write(args);
   },
 };
@@ -324,7 +339,10 @@ async function handleRequest(message) {
       return;
     }
     try {
-      const value = await handler(params?.arguments ?? {});
+      const args = params?.arguments ?? {};
+      if (name === "knowledge_write") await assertWriteAllowed(args);
+      const service = await serviceFor();
+      const value = await handler(service, args);
       result(id, {
         content: [{ type: "text", text: renderToolResult(name, value) }],
         structuredContent: value,
