@@ -15,6 +15,7 @@ import {
   nodeSeverity,
 } from "./strings.js";
 import { invokeBridge, hasBridge } from "./bridge.js";
+import { bindVaultLoading } from "./loading-ui.js";
 import { FIXTURE_GRAPH, FIXTURE_NOTES } from "./fixture.js";
 import { buildModel, computeVisibility, galaxyDisplayName, nodeDisplayName } from "./model.js";
 import { ChartView } from "./chart.js";
@@ -149,48 +150,62 @@ function showToast(message, isError = false) {
 
 // ---- payload loading ----
 
+let graphLoading = false;
+let loadingPanel;
+
 async function loadGraph() {
+  if (graphLoading) return false;
+  graphLoading = true;
   const banner = $("bridge-error-banner");
-  let payload = null;
-  state.fixtureMode = false;
-  if (!hasBridge()) {
-    state.fixtureMode = true;
-    payload = structuredClone(FIXTURE_GRAPH);
-    applyUniverseLayout(payload);
-    banner.classList.add("is-hidden");
-  } else {
-    try {
-      payload = await invokeBridge("kg.graph", { includeMemory: true }, BRIDGE_TIMEOUT_MS);
-      if (!payload || !Array.isArray(payload.nodes)) throw new Error("invalid graph payload");
-      if (!payload.layoutApplied) {
-        applyUniverseLayout(payload);
-      }
-      banner.classList.add("is-hidden");
-    } catch (error) {
-      state.fixtureMode = true;
-      payload = structuredClone(FIXTURE_GRAPH);
-      applyUniverseLayout(payload);
-      $("bridge-error-text").textContent =
-        error?.code === "BRIDGE_TIMEOUT"
-          ? t("bridgeTimeoutError")
-          : t("bridgeCallError", { reason: error?.message || String(error) });
+  $("btn-retry-bridge").disabled = true;
+  banner.classList.add("is-hidden");
+  try {
+    const fixtureMode = !hasBridge();
+    const payload = fixtureMode
+      ? structuredClone(FIXTURE_GRAPH)
+      : await invokeBridge("kg.graph", { includeMemory: true }, BRIDGE_TIMEOUT_MS);
+    if (!payload || !Array.isArray(payload.nodes)) throw new Error("invalid graph payload");
+    if (!payload.layoutApplied) applyUniverseLayout(payload);
+    state.fixtureMode = fixtureMode;
+    state.payload = payload;
+    state.vaultName = payload.vaultName || state.vaultName;
+    state.model = buildModel(payload);
+    setDrawerFixtures(FIXTURE_NOTES);
+    view.drawer?.setFixtureMode(fixtureMode);
+    $("fixture-badge").classList.toggle("is-hidden", !fixtureMode);
+    $("vault-badge").textContent = state.vaultName;
+    const memoryOk = payload.memory?.status === "ok";
+    $("memory-toggle-row").classList.toggle("is-hidden", !memoryOk);
+    if (!memoryOk) state.layers.memory = false;
+    initTimelapseBounds();
+    refreshVisibility();
+    applyTranslations();
+    loadingPanel.update({ state: payload.nodes.length ? "ready" : "empty" });
+    return true;
+  } catch (error) {
+    if (error?.name === "AbortError") return false;
+    const message = error?.code === "BRIDGE_TIMEOUT" || error?.code === "TIMEOUT"
+      ? t("bridgeTimeoutError") : t("bridgeCallError", { reason: error?.message || String(error) });
+    if (state.model) {
+      loadingPanel.update({ state: "ready" });
+      $("bridge-error-text").textContent = message;
       banner.classList.remove("is-hidden");
+    } else {
+      loadingPanel.update({ state: "error", error: { message } });
     }
+    return false;
+  } finally {
+    graphLoading = false;
+    $("btn-retry-bridge").disabled = false;
   }
-  state.payload = payload;
-  state.vaultName = payload.vaultName || state.vaultName;
-  state.model = buildModel(payload);
-  setDrawerFixtures(FIXTURE_NOTES);
-  view.drawer?.setFixtureMode(state.fixtureMode);
-  $("fixture-badge").classList.toggle("is-hidden", !state.fixtureMode);
-  $("vault-badge").textContent = state.vaultName;
-  // The memory toggle exists only when memory data arrived (§8).
-  const memoryOk = payload.memory?.status === "ok";
-  $("memory-toggle-row").classList.toggle("is-hidden", !memoryOk);
-  if (!memoryOk) state.layers.memory = false;
-  initTimelapseBounds();
-  refreshVisibility();
-  applyTranslations();
+}
+
+async function reloadGraph() {
+  if (!await loadGraph()) return;
+  view.chart.setModel(state.model, t);
+  view.three?.setModel(state.model, t);
+  setMode(state.mode, { fromFallback: true });
+  view.chart.resize();
 }
 
 // ---- visibility & rendering ----
@@ -206,6 +221,7 @@ function refreshVisibility() {
 }
 
 function render() {
+  if (!state.model) return;
   const shared = {
     visibility: state.visibility,
     layers: state.layers,
@@ -268,6 +284,7 @@ function ensureThreeView() {
 }
 
 function setMode(mode, { fromFallback = false } = {}) {
+  if (!state.model) return;
   if (!canSwitchTo(mode, { webglAvailable: state.webglAvailable })) return;
   state.mode = mode;
   if (!fromFallback) rememberMode(mode);
@@ -594,6 +611,7 @@ function applyTranslations() {
   $("fixture-badge").textContent = t("fixtureBadge");
   populateFilterOptions();
   view.drawer?.applyTranslations?.();
+  loadingPanel?.update();
   updateHeader();
   render();
 }
@@ -645,17 +663,16 @@ async function boot() {
     }
   };
 
-  view.drawer = new NoteDrawer({ t, showToast, fixtureMode: true });
+  view.drawer = new NoteDrawer({ t, showToast, fixtureMode: !hasBridge() });
   view.drawer.onNavigate = (node) => {
     if (state.focusGalaxyId !== node.galaxy) enterGalaxy(node.galaxy);
     selectNode(node);
   };
 
+  loadingPanel = bindVaultLoading(t, () => { void reloadGraph(); });
   bindUi();
-  await loadGraph();
-  view.chart.setModel(state.model, t);
-  setMode(state.mode, { fromFallback: true });
-  view.chart.resize();
+  applyTranslations();
+  await reloadGraph();
 }
 
 function bindUi() {
@@ -731,13 +748,7 @@ function bindUi() {
     }
   });
 
-  $("btn-retry-bridge").addEventListener("click", async () => {
-    $("bridge-error-banner").classList.add("is-hidden");
-    await loadGraph();
-    view.chart.setModel(state.model, t);
-    view.three?.setModel(state.model, t);
-    render();
-  });
+  $("btn-retry-bridge").addEventListener("click", () => { void reloadGraph(); });
   $("btn-dismiss-error").addEventListener("click", () => $("bridge-error-banner").classList.add("is-hidden"));
 
   window.addEventListener("keydown", (event) => {

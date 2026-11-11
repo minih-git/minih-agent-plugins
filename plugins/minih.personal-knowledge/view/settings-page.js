@@ -20,6 +20,7 @@
  */
 
 import { invokeBridge, hasBridge } from "./bridge.js";
+import { bindVaultLoading } from "./loading-ui.js";
 import {
   STRINGS,
   BRIDGE_TIMEOUT_MS,
@@ -572,6 +573,7 @@ const state = {
 };
 
 let retrievalPanel = null;
+let loadingPanel = null;
 
 function resolveLanguage(pref) {
   if (pref === "zh-CN" || pref === "en") return pref;
@@ -995,8 +997,8 @@ async function loadHealthGraph() {
     if (!state.vaultConfig?.values?.vaultPath && payload?.vaultName) {
       state.vaultName = payload.vaultName;
     }
-  } catch {
-    state.graphPayload = FIXTURE_GRAPH;
+  } catch (error) {
+    loadingPanel?.update({ state: "error", error: { message: error?.message || String(error) } });
   }
   renderHealthList();
 }
@@ -1194,7 +1196,7 @@ async function loadDashboard() {
     state.dashboard = await invokeBridge("kg.dashboard", {}, BRIDGE_TIMEOUT_MS);
     setFeedback("dashboard-feedback", "", false);
   } catch (error) {
-    state.dashboard = { activeProjects: [], reviewDue: [] };
+    loadingPanel?.update({ state: "error", error: { message: error?.message || String(error) } });
     setFeedback("dashboard-feedback", t("dashboardUnavailable", { reason: error?.message || String(error) }), true);
   }
   renderDashboard();
@@ -1318,8 +1320,8 @@ async function loadRouting() {
   }
   try {
     state.routing = await invokeBridge("kg.routing.get", {}, BRIDGE_TIMEOUT_MS);
-  } catch {
-    state.routing = { projects: [], topicRoutes: [], defaultNotes: [] };
+  } catch (error) {
+    loadingPanel?.update({ state: "error", error: { message: error?.message || String(error) } });
   }
   renderRoutingSection();
 }
@@ -1975,6 +1977,7 @@ async function boot() {
     showToast,
     onSaved: () => loadIndexStatus(),
   });
+  loadingPanel = bindVaultLoading(t, () => { void reloadAll(); });
   bindUi();
   await reloadAll();
 }

@@ -1,7 +1,7 @@
 {
   "name": "@minih-plugin/minih.personal-knowledge",
   "private": true,
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Use a local Markdown knowledge vault (Obsidian-compatible) as verified, time-aware long-term context: scoped retrieval, guarded write-back, and project routing.",
   "scripts": {
     "build": "node scripts/build.mjs",

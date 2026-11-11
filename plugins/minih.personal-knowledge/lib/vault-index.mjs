@@ -17,6 +17,7 @@ import { chunkNote, headingOutline } from "./sections.mjs";
  */
 
 const SCAN_THROTTLE_MS = 1000;
+const READ_CONCURRENCY = 8;
 
 function sha256(text) {
   return createHash("sha256").update(text, "utf8").digest("hex");
@@ -58,13 +59,17 @@ export class VaultIndex {
   }
 
   /** Throttled scan; concurrent callers share one pass. */
-  async refresh({ force = false, signal } = {}) {
+  async refresh({ force = false, signal, onProgress } = {}) {
     signal?.throwIfAborted();
     const moment = this.now().getTime();
     if (!force && this.scanPromise === null && moment - this.lastScanAt < SCAN_THROTTLE_MS) return;
     if (this.scanPromise) return this.scanPromise;
-    this.lastScanAt = moment;
-    this.scanPromise = this.#scan(signal).finally(() => {
+    this.scanPromise = this.#scan(signal, onProgress).then(() => {
+      this.lastScanAt = this.now().getTime();
+    }, (error) => {
+      this.lastScanAt = 0;
+      throw error;
+    }).finally(() => {
       this.scanPromise = null;
     });
     return this.scanPromise;
@@ -111,22 +116,38 @@ export class VaultIndex {
     return note.linkTargets.filter((target) => !this.resolvedLinks.get(`${relativePath}→${target}`));
   }
 
-  async #scan(signal) {
+  async #scan(signal, onProgress) {
     const files = [];
+    onProgress?.({ phase: "discover", completed: 0, total: 0 });
     await this.#walk(this.root, files, signal);
-    const seen = new Set(files);
-    for (const relative of files) {
-      signal?.throwIfAborted();
-      const absolute = path.join(this.root, ...relative.split("/"));
-      const info = await stat(absolute);
-      const existing = this.notes.get(relative);
-      if (existing && existing.mtimeMs === info.mtimeMs && existing.size === info.size) continue;
-      await this.#readOne(relative, info, signal);
-    }
+    onProgress?.({ phase: "read", completed: 0, total: files.length });
+    const controller = new AbortController();
+    const readSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    let next = 0;
+    let completed = 0;
+    let failure = null;
+    await Promise.all(Array.from({ length: Math.min(READ_CONCURRENCY, files.length) }, async () => {
+      try {
+        for (let position = next++; position < files.length; position = next++) {
+          readSignal.throwIfAborted();
+          const relative = files[position];
+          const info = await stat(path.join(this.root, ...relative.split("/")));
+          readSignal.throwIfAborted();
+          const existing = this.notes.get(relative);
+          if (!existing || existing.mtimeMs !== info.mtimeMs || existing.size !== info.size) {
+            await this.#readOne(relative, info, readSignal);
+          }
+          onProgress?.({ phase: "read", completed: ++completed, total: files.length });
+        }
+      } catch (error) {
+        failure ??= error;
+        controller.abort(error);
+      }
+    }));
+    if (failure) throw failure;
     signal?.throwIfAborted();
-    for (const relative of [...this.notes.keys()]) {
-      if (!seen.has(relative)) this.notes.delete(relative);
-    }
+    // Preserve traversal order regardless of which cloud read finished first.
+    this.notes = new Map(files.filter((relative) => this.notes.has(relative)).map((relative) => [relative, this.notes.get(relative)]));
     this.#derive();
   }
 

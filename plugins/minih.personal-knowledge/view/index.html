@@ -9,6 +9,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Knowledge Universe · 知识宇宙</title>
   <link rel="stylesheet" href="./styles.css" />
+  <link rel="stylesheet" href="./loading.css" />
 </head>
 <body>
   <div id="universe-app" class="universe-app">
@@ -23,6 +24,13 @@
       <button id="btn-retry-bridge" type="button" class="ghost-btn"></button>
       <button id="btn-dismiss-error" type="button" class="ghost-btn"></button>
     </div>
+
+    <section id="vault-loading" class="vault-loading is-hidden" role="status" aria-live="polite">
+      <p id="vault-loading-text" class="vault-loading-text"></p>
+      <p id="vault-loading-hint" class="vault-loading-hint"></p>
+      <progress id="vault-loading-progress"></progress>
+      <button id="vault-loading-retry" class="is-hidden" type="button"></button>
+    </section>
 
     <!-- Top corners: title/count or breadcrumb · search · mode/layers/settings -->
     <header class="hud-top">

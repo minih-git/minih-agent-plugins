@@ -1,0 +1,23 @@
+.vault-loading {
+  padding: 22px 24px;
+  border: 1px solid var(--border, var(--glass-border, #7b8ba33d));
+  border-radius: 14px;
+  background: var(--surface, var(--glass, #18202c));
+  color: var(--ink, #edf1f7);
+  text-align: left;
+}
+.universe-app > .vault-loading {
+  position: absolute;
+  z-index: 10;
+  left: 50%;
+  top: 48%;
+  transform: translate(-50%, -50%);
+  width: min(400px, calc(100% - 48px));
+  box-sizing: border-box;
+}
+.settings-app > .vault-loading { margin: 16px 0; }
+.vault-loading-text { margin: 0; font-size: 16px; font-weight: 600; }
+.vault-loading-hint { margin: 10px 0 0; font-size: 13px; line-height: 1.6; opacity: .8; overflow-wrap: anywhere; }
+.vault-loading progress { width: 100%; height: 6px; margin-top: 16px; accent-color: var(--accent, #7bacdb); }
+.vault-loading button { margin-top: 16px; border: 1px solid var(--border, var(--glass-border, #7b8ba370)); border-radius: 6px; padding: 6px 14px; color: inherit; background: transparent; cursor: pointer; }
+.vault-loading.is-error { border-color: var(--danger-border, #d2837180); }

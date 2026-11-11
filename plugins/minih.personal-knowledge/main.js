@@ -39,6 +39,7 @@ const manifest = require("./manifest.json");
 
 /** Channels the page may call. Anything else is refused, not forwarded. */
 const CHANNELS = new Set([
+  "kg.status",
   "kg.graph",
   "kg.note",
   "kg.copyLink",
@@ -80,6 +81,9 @@ let servicePromise = null;
 let startupController = null;
 let startupTimer = null;
 let startupTask = null;
+let refreshTask = null;
+let readinessError = null;
+let readinessProgress = { phase: "discover", completed: 0, total: 0 };
 let panelStores = null;
 let conversationSyncer = null;
 let profileScheduler = null;
@@ -295,9 +299,8 @@ async function indexStatusPayload() {
 }
 
 async function configPayload() {
-  const service = await ensurePanelService();
-  await service.index.refresh();
-  const notesCount = service.index.paths().filter((p) => p.endsWith(".md")).length;
+  // Editing the vault location must stay possible even while it is loading.
+  const notesCount = state ? state.index.paths().filter((p) => p.endsWith(".md")).length : null;
   const { config } = await panelStoresFor();
   return config.get({ notesCount });
 }
@@ -319,10 +322,45 @@ async function routingPayload() {
 async function dashboardPayload() {
   const { buildDashboard } = await import("./lib/dashboard.mjs");
   const { index } = await ensureState();
-  // A user asking for the dashboard wants the vault as it is now, not as it
-  // was within the refresh throttle.
-  await index.refresh({ force: true });
+  await index.refresh();
   return buildDashboard({ index });
+}
+
+function recordReadinessError(error) {
+  readinessError = { code: String(error?.code ?? "VAULT_LOAD_FAILED"), message: String(error?.message ?? error) };
+}
+
+function updateReadinessProgress(progress) {
+  if (!startupController?.signal.aborted) readinessProgress = progress;
+}
+
+async function refreshVault() {
+  const loaded = await ensureState();
+  const signal = startupController?.signal;
+  await loaded.index.refresh({ signal, onProgress: updateReadinessProgress });
+  readinessProgress = { ...readinessProgress, phase: "services" };
+  const memory = await collectMemory(projectNotes(loaded));
+  signal?.throwIfAborted();
+  loaded.preparedMemory = memory;
+  readinessProgress = { ...readinessProgress, phase: "ready" };
+}
+
+/** Fast polling endpoint: no filesystem scan is awaited across the bridge. */
+function vaultStatus(payload) {
+  startupController?.signal.throwIfAborted();
+  if (payload?.retry === true) readinessError = null;
+  if (!readinessError) {
+    if (payload?.refresh === true && !refreshTask) {
+      refreshTask = refreshVault().catch((error) => {
+        if (!startupController?.signal.aborted) recordReadinessError(error);
+      }).finally(() => { refreshTask = null; });
+    } else if (!state && !statePromise) {
+      // ensureState records errors for this endpoint before rejecting.
+      void ensureState().catch(() => {});
+    }
+  }
+  const current = readinessError ? "error" : state && !statePromise && !refreshTask ? "ready" : "loading";
+  return { ...readinessProgress, state: current, ...(readinessError ? { error: readinessError } : {}) };
 }
 
 function ensureState() {
@@ -330,7 +368,12 @@ function ensureState() {
   if (statePromise) return statePromise;
   if (state) return Promise.resolve(state);
   const signal = startupController?.signal;
-  const pending = initializeState(signal).finally(() => {
+  readinessError = null;
+  readinessProgress = { phase: "discover", completed: 0, total: 0 };
+  const pending = initializeState(signal).catch((error) => {
+    if (!signal?.aborted) recordReadinessError(error);
+    throw error;
+  }).finally(() => {
     if (statePromise === pending) statePromise = null;
   });
   statePromise = pending;
@@ -339,11 +382,13 @@ function ensureState() {
 
 async function initializeState(signal) {
   const loaded = await buildState(signal);
+  readinessProgress = { ...readinessProgress, phase: "services" };
   await startConversationSync(loaded, signal);
   signal?.throwIfAborted();
   await startProfileScheduler(signal);
   signal?.throwIfAborted();
   state = loaded;
+  readinessProgress = { ...readinessProgress, phase: "ready" };
   return loaded;
 }
 
@@ -361,7 +406,7 @@ async function buildState(signal) {
   const info = await stat(vaultPath);
   if (!info.isDirectory()) throw new Error(`Knowledge vault is not a directory: ${vaultPath}`);
   const index = new VaultIndex({ root: await realpath(vaultPath), config });
-  await index.refresh({ force: true, signal });
+  await index.refresh({ force: true, signal, onProgress: updateReadinessProgress });
   const ontology = await loadOntology({ pluginRoot, index });
   signal?.throwIfAborted();
   return { index, ontology, redactSensitiveContent, vaultPath, config };
@@ -519,19 +564,24 @@ function attachMemory(payload, memory) {
   payload.memory = { status: "ok", count: memory.count };
 }
 
-async function graph(payload) {
-  const { buildGraphPayload } = await import("./lib/graph.mjs");
-  const { index, ontology } = await ensureState();
-  await index.refresh();
-  const projectNodes = index
-    .paths()
+function projectNotes({ index, ontology }) {
+  return index.paths()
     .filter((relative) => relative.endsWith(".md"))
     .map((relative) => index.note(relative))
     .filter((record) => ontology.resolveClass(record.metadata.type) === "project");
+}
+
+async function graph(payload) {
+  const { buildGraphPayload } = await import("./lib/graph.mjs");
+  const loaded = await ensureState();
+  const { index, ontology } = loaded;
+  // kg.status already refreshed and prepared the requested graph snapshot.
+  if (!loaded.preparedMemory) await index.refresh();
   const includeMemory = payload?.includeMemory === true;
   const memory = includeMemory
-    ? await collectMemory(projectNodes)
+    ? loaded.preparedMemory ?? await collectMemory(projectNotes(loaded))
     : { status: "unsupported", count: 0, byProject: new Map(), userEntries: [] };
+  if (includeMemory) loaded.preparedMemory = null;
   const result = buildGraphPayload({
     index,
     ontology,
@@ -934,6 +984,7 @@ async function profileRun(payload, { manual = true } = {}) {
 
 async function onPanelInvoke(channel, payload) {
   if (!CHANNELS.has(channel)) throw refusal(`unknown channel: ${channel}`);
+  if (channel === "kg.status") return vaultStatus(payload);
   if (channel === "kg.graph") return graph(payload);
   if (channel === "kg.note") return note(payload);
   if (channel === "kg.copyLink") return copyLink(payload);
@@ -1262,6 +1313,7 @@ async function onUnload() {
   await startupTask;
   startupTask = null;
   await statePromise?.catch(() => {});
+  await refreshTask;
   await servicePromise?.catch(() => {});
   await unregisterKnowledgeTools().catch(() => {});
   if (profileScheduler) {
@@ -1280,6 +1332,9 @@ async function onUnload() {
   state = null;
   statePromise = null;
   servicePromise = null;
+  refreshTask = null;
+  readinessError = null;
+  readinessProgress = { phase: "discover", completed: 0, total: 0 };
   startupController = null;
 }
 
