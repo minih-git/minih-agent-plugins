@@ -57,12 +57,13 @@ export class VaultIndex {
   }
 
   /** Throttled scan; concurrent callers share one pass. */
-  async refresh({ force = false } = {}) {
+  async refresh({ force = false, signal } = {}) {
+    signal?.throwIfAborted();
     const moment = this.now().getTime();
     if (!force && this.scanPromise === null && moment - this.lastScanAt < SCAN_THROTTLE_MS) return;
     if (this.scanPromise) return this.scanPromise;
     this.lastScanAt = moment;
-    this.scanPromise = this.#scan().finally(() => {
+    this.scanPromise = this.#scan(signal).finally(() => {
       this.scanPromise = null;
     });
     return this.scanPromise;
@@ -109,17 +110,19 @@ export class VaultIndex {
     return note.linkTargets.filter((target) => !this.resolvedLinks.get(`${relativePath}→${target}`));
   }
 
-  async #scan() {
+  async #scan(signal) {
     const files = [];
-    await this.#walk(this.root, files);
+    await this.#walk(this.root, files, signal);
     const seen = new Set(files);
     for (const relative of files) {
+      signal?.throwIfAborted();
       const absolute = path.join(this.root, ...relative.split("/"));
       const info = await stat(absolute);
       const existing = this.notes.get(relative);
       if (existing && existing.mtimeMs === info.mtimeMs && existing.size === info.size) continue;
-      await this.#readOne(relative, info);
+      await this.#readOne(relative, info, signal);
     }
+    signal?.throwIfAborted();
     for (const relative of [...this.notes.keys()]) {
       if (!seen.has(relative)) this.notes.delete(relative);
     }
@@ -131,12 +134,13 @@ export class VaultIndex {
     return this.versionCounter ?? 0;
   }
 
-  async #readOne(relative, preloadedInfo = null) {
+  async #readOne(relative, preloadedInfo = null, signal) {
     const absolute = path.join(this.root, ...relative.split("/"));
     let info = preloadedInfo;
     try {
       info = info ?? (await stat(absolute));
-      const raw = await readFile(absolute, "utf8");
+      const raw = await readFile(absolute, { encoding: "utf8", signal });
+      signal?.throwIfAborted();
       this.notes.set(relative, this.#build(relative, raw, info));
     } catch (error) {
       if (error?.code === "ENOENT") this.notes.delete(relative);
@@ -197,9 +201,11 @@ export class VaultIndex {
     }
   }
 
-  async #walk(current, output) {
+  async #walk(current, output, signal) {
+    signal?.throwIfAborted();
     const entries = await readdir(current, { withFileTypes: true });
     for (const entry of entries) {
+      signal?.throwIfAborted();
       if (entry.name.startsWith(".")) continue;
       const absolute = path.join(current, entry.name);
       const relative = path.relative(this.root, absolute).split(path.sep).join("/");
@@ -210,7 +216,7 @@ export class VaultIndex {
         continue;
       }
       if (entry.isDirectory()) {
-        await this.#walk(absolute, output);
+        await this.#walk(absolute, output, signal);
         continue;
       }
       if (entry.isFile() && /\.(md|base)$/i.test(entry.name)) output.push(relative);
