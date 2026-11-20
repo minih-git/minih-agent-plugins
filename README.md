@@ -35,14 +35,15 @@ https://gitea.hungraim.com/minih/minih-agent-plugins/raw/branch/main/catalog.jso
 
 One of them was built by someone else and is redistributed here unmodified,
 keeping its own `LICENSE` and notice files inside its directory.
-`minih.personal-knowledge`, `minih.selection-translate` and
-`minih.cache-keepwarm` are authored in this repository.
+`minih.personal-knowledge`, `minih.selection-translate`,
+`minih.cache-keepwarm` and `minih.inbox-mail` are authored in this repository.
 
 | Plugin | Version | Author | License | Upstream |
 | --- | --- | --- | --- | --- |
 | `minih.personal-knowledge` (`Personal Knowledge`) | 0.7.2 | minih-git | MIT | this repository |
 | `minih.selection-translate` (`Selection Translate`) | 0.3.2 | minih-git | MIT | this repository |
 | `minih.cache-keepwarm` (`Cache keep-warm`) | 0.1.0 | minih-git | MIT | this repository |
+| `minih.inbox-mail` (`Inbox mail`) | 0.1.0 | minih-git | MIT | this repository |
 | `pi.file-manager` (`File Manager`) | 0.9.0 | Tioit-Wang | not declared by the author | not published by the author |
 
 `minih.personal-knowledge` 0.5.0 adds the conversation archive (ADR 0002 in
@@ -84,6 +85,13 @@ requesting its graph, so cloud hydration is not held inside a 30-second bridge
 call. Read failures show the real error with retry, never demo data. File reads
 use a bounded parallel batch, and vault configuration stays available while
 indexing. No permission or data-format changes are needed.
+
+`minih.inbox-mail` is authored here but not published yet: it needs Desktop
+v1.8.0 or newer (`engines.minihAgent` is `>=1.8.0`), the first release with the
+host capabilities it is built on — `credentials.use` with an `imap` slot,
+`net.tcp`, `notify.center` and `scheduler`. It gets a package, a catalog entry
+and a `releases.json` row when that version ships, so a user on an older Desktop
+cannot install a plugin that cannot run.
 
 The redistributed ones are listed with `trust: "community"` and
 `verified: false`: the `verified` badge is a claim about a publisher this

@@ -1,0 +1,198 @@
+{
+  "schemaVersion": 1,
+  "id": "minih.inbox-mail",
+  "name": "Inbox mail",
+  "version": "0.1.0",
+  "description": "Watch one mailbox over IMAP and put only what matters in the notification centre: one alert for a message from an important sender, matching your keywords or marked urgent, and one rolling digest for the rest. Read-only, no model calls.",
+  "author": "minih-git",
+  "categories": [
+    "productivity"
+  ],
+  "license": "MIT",
+  "repository": "https://github.com/minih-git/minih-agent-plugins",
+  "i18n": {
+    "en": {
+      "name": "Inbox mail",
+      "description": "Watch one mailbox over IMAP and put only what matters in the notification centre: one alert for a message from an important sender, matching your keywords or marked urgent, and one rolling digest for the rest. Read-only, no model calls.",
+      "safetyNotes": "Reads one mailbox you choose in Settings, read-only, and nothing else. It connects only to the IMAP server of the provider you picked, over implicit TLS, and the app performs the sign-in itself: your password or authorization code stays in the app's credential store and is never handed to this plugin, which only ever learns whether the slot is filled. On the wire it selects the inbox, keeps the mailbox's UID cursor, and for a new message fetches only envelope fields and a few headers (sender, subject, date, Message-ID, urgency flags) with BODY.PEEK, which does not mark anything as read; message bodies are never downloaded and attachments are never touched. It keeps one small file in its own data folder: the UIDVALIDITY number, the highest UID already handled, the Message-IDs already reported (at most 200), the queue for the current digest and the last error. No message text is copied into it. It writes entries into the notification centre: one alert for a message from someone on your important-sender list, matching one of your keywords, or flagged urgent by its own headers, and one rolling digest for everything else. Notifications carry the sender, the subject and the time, never the body. It does not send mail, create drafts, delete, move or copy messages, or change read state, and it uploads nothing: the only network destination is the mail server you chose. No model is called at any point, so nothing you receive is sent to an AI provider."
+    },
+    "zh-CN": {
+      "name": "邮箱收件",
+      "description": "在后台盯住一个 IMAP 邮箱，只把该看的邮件放进通知中心：重要发件人、关键词命中或标记紧急的邮件各发一条提醒，其余合并成一条滚动汇总。只读，不调用模型。",
+      "safetyNotes": "只读一个你在设置里选择的邮箱，别的一概不碰。只连接你所选服务商的 IMAP 服务器（隐式 TLS），登录由应用自己完成：密码或授权码留在应用的凭据库里，不会交给插件，插件只知道凭据槽是否已填写。在协议上只选中收件箱并维护 UID 游标；新邮件只取信封字段和少量头部（发件人、主题、时间、Message-ID、紧急标记），一律使用 BODY.PEEK，不会把邮件标为已读；正文从不下载，附件从不读取。在插件自己的数据目录里存一个小文件：UIDVALIDITY、已处理的最大 UID、已提醒过的 Message-ID（最多 200 条）、当前汇总批次和最近一次错误；不会把邮件内容抄进去。只往通知中心写条目：重要发件人、关键词命中、或自身头部标记为紧急的邮件各发一条提醒，其余合并成一条滚动汇总；通知里只有发件人、主题和时间，没有正文。不发信、不写草稿、不删除/移动/复制邮件、不改已读状态，也不上传任何东西：唯一的网络目的地是你选的邮件服务器。全程不调用模型，收到的邮件不会被发送给任何 AI 服务商。"
+    }
+  },
+  "safetyNotes": "Reads one mailbox you choose in Settings, read-only, and nothing else. It connects only to the IMAP server of the provider you picked, over implicit TLS, and the app performs the sign-in itself: your password or authorization code stays in the app's credential store and is never handed to this plugin, which only ever learns whether the slot is filled. On the wire it selects the inbox, keeps the mailbox's UID cursor, and for a new message fetches only envelope fields and a few headers (sender, subject, date, Message-ID, urgency flags) with BODY.PEEK, which does not mark anything as read; message bodies are never downloaded and attachments are never touched. It keeps one small file in its own data folder: the UIDVALIDITY number, the highest UID already handled, the Message-IDs already reported (at most 200), the queue for the current digest and the last error. No message text is copied into it. It writes entries into the notification centre: one alert for a message from someone on your important-sender list, matching one of your keywords, or flagged urgent by its own headers, and one rolling digest for everything else. Notifications carry the sender, the subject and the time, never the body. It does not send mail, create drafts, delete, move or copy messages, or change read state, and it uploads nothing: the only network destination is the mail server you chose. No model is called at any point, so nothing you receive is sent to an AI provider.",
+  "main": "main.js",
+  "activationEvents": [
+    "onStartup"
+  ],
+  "permissions": [
+    "credentials.use",
+    "net.tcp",
+    "notify.center",
+    "scheduler"
+  ],
+  "engines": {
+    "minihAgent": ">=1.8.0"
+  },
+  "net": {
+    "tcp": [
+      {
+        "host": "imap.qq.com",
+        "port": 993,
+        "tls": true
+      },
+      {
+        "host": "imap.163.com",
+        "port": 993,
+        "tls": true
+      },
+      {
+        "host": "imap.126.com",
+        "port": 993,
+        "tls": true
+      },
+      {
+        "host": "imap.gmail.com",
+        "port": 993,
+        "tls": true
+      },
+      {
+        "host": "imap.exmail.qq.com",
+        "port": 993,
+        "tls": true
+      },
+      {
+        "host": "outlook.office365.com",
+        "port": 993,
+        "tls": true
+      }
+    ]
+  },
+  "contributes": {
+    "credentials": [
+      {
+        "id": "mailbox",
+        "title": {
+          "en": "Mailbox account",
+          "zh-CN": "邮箱账号"
+        },
+        "kind": "imap",
+        "fields": [
+          {
+            "key": "username",
+            "label": {
+              "en": "Email address",
+              "zh-CN": "邮箱地址"
+            }
+          },
+          {
+            "key": "password",
+            "label": {
+              "en": "IMAP authorization code or app password",
+              "zh-CN": "IMAP 授权码或应用专用密码"
+            },
+            "secret": true
+          }
+        ],
+        "scope": {
+          "domains": [
+            "imap.qq.com",
+            "imap.163.com",
+            "imap.126.com",
+            "imap.gmail.com",
+            "imap.exmail.qq.com",
+            "outlook.office365.com"
+          ]
+        }
+      }
+    ],
+    "commands": [
+      {
+        "id": "check-now",
+        "title": "Check the mailbox now",
+        "keywords": [
+          "mail",
+          "inbox",
+          "email"
+        ],
+        "category": "Mail"
+      }
+    ],
+    "schedules": [
+      {
+        "id": "poll",
+        "title": {
+          "en": "Fallback inbox poll",
+          "zh-CN": "邮箱兜底轮询"
+        },
+        "every": "15m",
+        "runWhen": "always"
+      }
+    ],
+    "settings": [
+      {
+        "key": "provider",
+        "title": "Mailbox provider",
+        "description": "Which mail service the account belongs to. The plugin only connects to the servers of the provider you pick.",
+        "type": "select",
+        "default": "qq",
+        "enum": [
+          {
+            "label": "QQ Mail",
+            "value": "qq"
+          },
+          {
+            "label": "NetEase 163",
+            "value": "netease163"
+          },
+          {
+            "label": "NetEase 126",
+            "value": "netease126"
+          },
+          {
+            "label": "Gmail",
+            "value": "gmail"
+          },
+          {
+            "label": "Tencent Exmail",
+            "value": "tencentExmail"
+          },
+          {
+            "label": "Outlook / Hotmail (needs OAuth2, unavailable)",
+            "value": "outlook"
+          }
+        ]
+      },
+      {
+        "key": "importantSenders",
+        "title": "Important senders",
+        "description": "One per line or comma-separated: a full address (boss@example.com), a domain (@example.com) or a word that appears in the sender's name. A message from one of them gets its own alert.",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "keywords",
+        "title": "Important keywords",
+        "description": "One per line or comma-separated. A new message whose subject or sender name contains one of them gets its own alert.",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "digestMinutes",
+        "title": "Digest interval, in minutes",
+        "description": "How long the rest of the new mail is collected before it becomes one digest entry. A single entry is updated instead of added again.",
+        "type": "number",
+        "default": 30
+      },
+      {
+        "key": "unreadOnly",
+        "title": "Only report unread mail",
+        "description": "When on, messages that are already read in the mailbox are ignored, which keeps a second device's reading from producing alerts.",
+        "type": "boolean",
+        "default": false
+      }
+    ]
+  }
+}
