@@ -107,7 +107,7 @@ notification, runs one check immediately.
   changing the collector.
 - A mailbox server you type in yourself.
 - Outlook/Hotmail, which needs XOAUTH2 in the host.
-- Publishing to the marketplace: this plugin needs Desktop 1.8.0, so it is not in
-  `catalog.json` until that version ships.
 
-Requires Minih-Agent-Desktop 1.8.0 or newer.
+Published in this repository's catalog as `minih.inbox-mail` 0.1.0. It needs
+Minih-Agent-Desktop 1.8.0 or newer — the first release with `credentials.use`
+for an `imap` slot, `net.tcp`, `notify.center` and `scheduler`.

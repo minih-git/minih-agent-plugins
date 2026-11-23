@@ -80,7 +80,12 @@ function compareVersions(left, right) {
  * else's release. Everything else keeps the `community` default, because this
  * catalog re-publishes their bytes unchanged.
  */
-const FIRST_PARTY = new Set(["minih.personal-knowledge", "minih.selection-translate", "minih.cache-keepwarm"]);
+const FIRST_PARTY = new Set([
+  "minih.personal-knowledge",
+  "minih.selection-translate",
+  "minih.cache-keepwarm",
+  "minih.inbox-mail",
+]);
 
 const PROVENANCE = {};
 

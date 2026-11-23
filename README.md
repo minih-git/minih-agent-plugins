@@ -86,12 +86,16 @@ call. Read failures show the real error with retry, never demo data. File reads
 use a bounded parallel batch, and vault configuration stays available while
 indexing. No permission or data-format changes are needed.
 
-`minih.inbox-mail` is authored here but not published yet: it needs Desktop
-v1.8.0 or newer (`engines.minihAgent` is `>=1.8.0`), the first release with the
-host capabilities it is built on — `credentials.use` with an `imap` slot,
-`net.tcp`, `notify.center` and `scheduler`. It gets a package, a catalog entry
-and a `releases.json` row when that version ships, so a user on an older Desktop
-cannot install a plugin that cannot run.
+`minih.inbox-mail` 0.1.0 is the resident assistant's first information source:
+it watches one IMAP mailbox and writes what arrives into the notification
+centre — one alert for a message from an important sender, matching one of your
+keywords or marked urgent by its own headers, and one rolling digest for the
+rest. No model is called and no message body is fetched, so collecting,
+deciding and notifying are free and read-only. It needs Desktop v1.8.0 or newer
+(`engines.minihAgent` is `>=1.8.0`), the first release with the host
+capabilities it is built on — `credentials.use` with an `imap` slot, `net.tcp`,
+`notify.center` and `scheduler` — so the catalog never offers it to a Desktop
+that cannot run it.
 
 The redistributed ones are listed with `trust: "community"` and
 `verified: false`: the `verified` badge is a claim about a publisher this
