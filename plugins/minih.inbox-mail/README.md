@@ -1,8 +1,8 @@
 # Inbox mail
 
-Watches up to **five** mailboxes and does two things with them: puts only the mail
-you care about into the app's notification centre, and shows all of them in one
-**Inbox** panel in the sidebar. Nothing here calls a model.
+Watches your mailboxes — as many as you add — and does two things with them: puts
+only the mail you care about into the app's notification centre, and shows all of
+them in one **Inbox** panel in the sidebar. Nothing here calls a model.
 
 A mailbox is either one of the providers listed below or **a mail server you type
 in yourself** — IMAP or POP3, implicit TLS or STARTTLS — which is what makes a
@@ -28,8 +28,8 @@ message; read state and the star change only when you click them.
    does not work for third-party clients, and an app password is the safer thing
    anyway: it can be revoked without changing your login.
 2. **Open the Inbox panel in the sidebar → "Add mailbox"**, then fill the host's
-   form with your full email address and that code. Repeat for up to five
-   mailboxes; the same dialog also works in Settings → Plugins → Inbox mail.
+   form with your full email address and that code. Repeat for each mailbox you
+   want; the same dialog also works in Settings → Plugins → Inbox mail.
 3. The provider is inferred from the address (`qq.com`/`foxmail.com`, `163.com`,
    `126.com`, `gmail.com`/`googlemail.com`). A company address cannot be inferred,
    so the panel asks you to pick one — or, if your mail service is not in the list
@@ -74,11 +74,13 @@ live.
 ## The Inbox panel
 
 - **Mailboxes** — one card per account with its address, its provider (changeable
-  in place for a preset), its state (connecting / connected / reconnecting / error
-  with the reason / waiting for a provider), an "open the web mailbox" shortcut
-  when there is one, and a remove button that asks once before it acts. An account
-  with its own server shows `Custom server mail.example.com:993 · IMAP · SSL`
-  instead of a provider menu: that endpoint lives in the account, not here.
+  in place for a preset), its state (connecting / connected / error with the
+  reason / waiting for a provider), an "open the web mailbox" shortcut when there
+  is one, and a remove button that asks once before it acts. An account with its
+  own server shows `Custom server mail.example.com:993 · IMAP · SSL` instead of a
+  provider menu: that endpoint lives in the account, not here. The panel states how
+  many accounts you have and never a ceiling: the slot declares no limit (the app
+  keeps its own safety bound of 100).
 - **One list** — every account's mail, newest first, grouped into **Important**
   (the same rule as the alerts) and **Other**, with a filter per mailbox. Each row
   shows sender, subject, time, account, unread and star state where the protocol
@@ -173,19 +175,23 @@ gets one entry telling you to pick one in the panel.
 
 ## How it waits
 
-An IMAP account asks its server to push new mail (`IDLE`) and renews that request
-every 25 minutes, because a server drops a longer one. If the server does not
-offer `IDLE`, it falls back to a poll every 15 minutes. When a connection drops,
-the next attempt waits 5 seconds, then 10, then 20, up to five minutes. A mailbox
+Every account is **polled**, never connected: once every three minutes the plugin
+opens one short session per account — connect, select the inbox, look for new
+headers, log out — and closes it again before moving on. That is also true for an
+IMAP server that offers `IDLE`, because the app allows one plugin eight TCP
+connections while this one now has no account ceiling: a socket per mailbox would
+not fit. Sessions are staggered (account *n* starts 1.5 s after account *n − 1*) and
+at most four exist at once, so the plugin stays well inside that ceiling however
+many mailboxes you add. Opening a message or changing a star is one more short
+session of its own, through the same budget.
+
+When a poll fails, that account waits 5 seconds, then 10, then 20, up to five
+minutes, on its own schedule — a broken mailbox never delays another one. A mailbox
 whose `UIDVALIDITY` changed starts a fresh baseline instead of replaying itself.
+POP3 accounts follow the same rhythm and their server's `LOGIN-DELAY`.
 
-One connection per IMAP mailbox, and the panel's own work runs on that connection
-between two IDLEs, so five mailboxes cost five of the app's eight allowed
-connections — never a sixth for opening a message. A POP3 account costs one
-connection only for the seconds a poll or an opened message lasts.
-
-**Check the mailboxes now**, from the command palette or from the link on any
-notification, runs one check across every connected account.
+**Check the mailboxes now**, from the command palette, the panel or the link on any
+notification, polls every account immediately instead of waiting for the interval.
 
 ## Upgrading from 0.1.0
 

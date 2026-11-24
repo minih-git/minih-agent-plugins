@@ -1,56 +1,47 @@
 "use strict";
 
 /**
- * Keeping one mailbox watched: connect, wait, collect, notify, repeat.
+ * Keeping one IMAP mailbox watched: poll, collect, notify, sleep.
  *
- * Since 0.2.0 there is one of these per account, each with its own state object
- * and its own credential instance, so adding or removing a mailbox starts or
- * stops exactly one loop and cannot disturb another one's cursor.
+ * There is no IDLE here, and no connection that outlives one poll. The host
+ * allows eight TCP connections per plugin while the credential slot now has no
+ * account limit, so a socket per mailbox is not affordable: every account is
+ * *polled* instead, every three minutes, on a short session that is closed again
+ * before the next account starts —
  *
- * The shape of this file is the answer to four failure modes that a mail
- * watcher gets wrong by default:
+ *   connect → CAPABILITY → (ID) → SELECT INBOX → SEARCH/FETCH new headers → LOGOUT
  *
- * - **Reconnect storms.** A dropped connection is retried with exponential
- *   backoff, and a successful `SELECT` resets the delay, so a server that is up
- *   but flaky costs one attempt per interval rather than one per event loop tick.
- * - **The lost window.** Between "the server accepted the socket" and "IDLE is
- *   running" new mail can arrive and produce no `EXISTS` a client is listening
- *   for. Every cycle therefore ends with a `UID SEARCH` above the stored cursor
- *   and every `EXISTS` seen while not idling is remembered and honoured on the
- *   next idle, rather than dropped because nobody was waiting.
- * - **The unread archive.** On a first connection, or after the server changes
- *   `UIDVALIDITY`, the cursor is baselined at `UIDNEXT - 1`: the plugin starts
- *   watching from now and does not announce a mailbox it has never seen.
- * - **The extra socket.** Opening a message or marking it read needs a command
- *   while the connection is committed to `IDLE`. Rather than dial a second
- *   connection (the host allows eight per plugin, and five accounts already use
- *   five), a user-triggered job is queued and run by this loop in the gap
- *   between two IDLEs. That keeps the plugin at one socket per account and makes
- *   "at most one command in flight" true by construction.
+ * Three things make that safe in practice:
  *
- * Everything here is injected — the socket, the clock, the timers, the state
- * file, the notifier — so the tests drive a scripted server and a fake clock and
- * assert on the exact commands the plugin sent.
+ * - **One gate for every session.** A poll, a message body and a flag change all
+ *   go through `lib/gate.js`, so no more than four connections exist at once and
+ *   a body fetch cannot starve the round that is running.
+ * - **Staggered starts.** The first poll of account *n* waits `n × staggerMs`, so
+ *   five accounts added at once do not connect in the same second.
+ * - **Per-account backoff.** A failing mailbox backs off 5 s doubling to five
+ *   minutes on its own schedule; it never delays another account.
+ *
+ * What survives from the connected design is the part that is about mail rather
+ * than sockets: the UID cursor, the baseline on first sight (or after a
+ * `UIDVALIDITY` change), header-only `BODY.PEEK` fetches, the importance rule, the
+ * digest queue, and "do not report the same message twice".
+ *
+ * Everything here is injected — the socket, the clock, the timers, the state file,
+ * the notifier, the gate — so the tests drive a scripted server and a fake clock.
  */
 
 const mime = require("./mime");
 const rules = require("./rules");
 const store = require("./store");
 
-/** IMAP servers drop an IDLE that lasts longer than 30 minutes; renew well before. */
-const IDLE_RENEW_MS = 25 * 60 * 1000;
+/** Every account is checked this often. Fixed on purpose: no new setting. */
+const DEFAULT_POLL_MS = 3 * 60 * 1000;
+/** Accounts start this far apart, so a round does not open five sockets at once. */
+const DEFAULT_STAGGER_MS = 1_500;
 /** Enough messages per cycle to make progress, few enough to stay responsive. */
 const MAX_FETCH_PER_CYCLE = 25;
-/** Rounds per wake, so one wake on a mailbox full of new mail still terminates. */
+/** Rounds per poll, so one poll on a mailbox full of new mail still terminates. */
 const MAX_ROUNDS_PER_CYCLE = 4;
-/**
- * How long a panel action waits for the account to be between two IDLEs.
- *
- * A body fetch or a flag change is a click the user is watching: twenty seconds
- * is long enough for a reconnect on a slow link and short enough that the panel
- * can say "not connected yet" instead of spinning.
- */
-const JOB_TIMEOUT_MS = 20_000;
 
 function parseInternalDate(value) {
   if (typeof value !== "string") return null;
@@ -86,102 +77,29 @@ function toMessage(item, uidValidity) {
 
 function createWatcher(deps) {
   const options = {
-    idleRenewMs: deps.idleRenewMs ?? IDLE_RENEW_MS,
+    pollMs: deps.pollMs ?? DEFAULT_POLL_MS,
+    staggerMs: deps.staggerMs ?? DEFAULT_STAGGER_MS,
     maxFetch: deps.maxFetch ?? MAX_FETCH_PER_CYCLE,
-    // 5 s doubling to five minutes: a first retry is quick enough to feel like a
-    // reconnect and a long outage stops costing a handshake every few seconds.
     backoffBaseMs: deps.backoffBaseMs ?? 5_000,
     backoffMaxMs: deps.backoffMaxMs ?? 5 * 60 * 1000,
-    jobTimeoutMs: deps.jobTimeoutMs ?? JOB_TIMEOUT_MS,
   };
   const state = deps.state;
   const accountId = deps.account?.instanceId ?? "";
-  let session = null;
+  const gate = deps.gate ?? null;
   let stopped = true;
-  let loopPromise = null;
-  let waiter = null;
-  /** An `EXISTS` seen when nobody was idling; honoured on the next idle. */
-  let existsPending = false;
-  /** Callers waiting for the next completed cycle, which a command needs to answer. */
-  let cycleWaiters = [];
-  /**
-   * A wake reason that arrived while nothing was waiting.
-   *
-   * A signal has to survive the gap between two waits: a command, a schedule
-   * tick or a dropped socket lands whenever it lands, and a watcher that only
-   * listened while it was parked would sleep through it — for 25 minutes on an
-   * IDLE, which is exactly the case an unload must not deadlock on.
-   */
-  let pendingWake = null;
-  /** User-triggered work waiting for the loop to be between two IDLEs. */
-  let jobs = [];
-  let providerAtConnect = null;
+  let timer = null;
+  /** The poll in flight, so a poke cannot open a second session. */
+  let active = null;
+  /** Sessions for this account, one after another. */
+  let sessionChain = Promise.resolve();
+  let pokePending = false;
+  let failures = 0;
   let phase = "stopped";
   let lastError = null;
   let lastCheckAt = null;
 
   const now = () => deps.now();
-
-  function signal(reason) {
-    const entry = waiter;
-    if (!entry) {
-      if (reason === "poke" || reason === "closed") pendingWake = reason;
-      return;
-    }
-    waiter = null;
-    deps.timers.clearTimeout(entry.timer);
-    entry.resolve(reason);
-  }
-
-  /**
-   * Sleep until the timeout, a poke, an `EXISTS`, or `stop()`.
-   *
-   * The wake reason matters: a renewed IDLE must not skip the search that the
-   * other reasons imply.
-   */
-  function waitFor(ms) {
-    return new Promise((resolve) => {
-      if (stopped) {
-        resolve("stop");
-        return;
-      }
-      if (pendingWake) {
-        const reason = pendingWake;
-        pendingWake = null;
-        resolve(reason);
-        return;
-      }
-      const entry = {
-        resolve,
-        timer: deps.timers.setTimeout(() => {
-          if (waiter === entry) waiter = null;
-          resolve("timeout");
-        }, ms),
-      };
-      waiter = entry;
-    });
-  }
-
-  function settleCycle(handled) {
-    const waiters = cycleWaiters;
-    cycleWaiters = [];
-    for (const resolve of waiters) resolve(handled);
-  }
-
-  /** Resolve with the next cycle's count, or `null` if none arrives in time. */
-  function awaitNextCycle(ms) {
-    return new Promise((resolve) => {
-      const timer = deps.timers.setTimeout(() => {
-        cycleWaiters = cycleWaiters.filter((entry) => entry !== waiter);
-        resolve(null);
-      }, ms);
-      const waiter = (handled) => {
-        deps.timers.clearTimeout(timer);
-        resolve(handled);
-      };
-      cycleWaiters.push(waiter);
-    });
-  }
+  const limited = (fn) => (gate ? gate.run(fn) : fn());
 
   function recordError(error) {
     lastError = error?.code ? `${error.code}: ${error.message}` : String(error?.message ?? error);
@@ -197,22 +115,12 @@ function createWatcher(deps) {
     }
   }
 
-  /** Baseline or continue the cursor for the mailbox just selected. */
-  async function reconcile(box) {
-    providerAtConnect = deps.provider();
-    if (store.cursorFor(state, box.uidValidity)) return;
-    const fallback = Number.isInteger(box.uidNext) ? box.uidNext - 1 : await session.maxUid();
-    store.setCursor(state, box.uidValidity, Math.max(0, fallback));
-    await save();
-    deps.log("info", `watching from UID ${state.cursor.maxUid} (uidValidity ${box.uidValidity})`);
-  }
-
   /**
    * Post one notification.
    *
-   * The host can refuse a row (its own rate limit, a closed centre), and a
-   * refused row must not take the watcher down with it: the mail is still
-   * handled, and the next one might work.
+   * The host can refuse a row (its own rate limit, a closed centre), and a refused
+   * row must not take the watcher down with it: the mail is still handled, and the
+   * next one might work.
    */
   async function notify(kind, payload, reasons) {
     try {
@@ -220,6 +128,15 @@ function createWatcher(deps) {
     } catch (error) {
       deps.log("warn", `could not post a ${kind}: ${error?.message ?? error}`);
     }
+  }
+
+  /** Baseline or continue the cursor for the mailbox just selected. */
+  async function reconcile(session, box) {
+    if (store.cursorFor(state, box.uidValidity)) return;
+    const fallback = Number.isInteger(box.uidNext) ? box.uidNext - 1 : await session.maxUid();
+    store.setCursor(state, box.uidValidity, Math.max(0, fallback));
+    await save();
+    deps.log("info", `watching from UID ${state.cursor.maxUid} (uidValidity ${box.uidValidity})`);
   }
 
   /** Classify one batch, remember it for the panel, and post what it earned. */
@@ -275,11 +192,10 @@ function createWatcher(deps) {
   }
 
   /** One collection pass: everything above the cursor, in bounded rounds. */
-  async function collect(settings) {
+  async function collect(session, settings, uidValidity) {
     let handled = 0;
     for (let round = 0; round < MAX_ROUNDS_PER_CYCLE; round += 1) {
       const afterUid = state.cursor?.maxUid ?? 0;
-      const uidValidity = state.cursor?.uidValidity ?? 0;
       const uids = await session.searchNew({ afterUid, unseen: settings.unreadOnly });
       if (!uids.length) break;
       const batch = uids.slice(0, options.maxFetch);
@@ -292,6 +208,47 @@ function createWatcher(deps) {
       handled += items.length;
       if (uids.length <= batch.length) break;
     }
+    return handled;
+  }
+
+  /**
+   * One prepared session, closed again whatever happens.
+   *
+   * The gate is held for the whole session, not just the handshake: the host's
+   * ceiling is about open sockets, and a session that was opened but not yet
+   * closed still counts.
+   */
+  function withSession(run) {
+    // Sessions for one account run one at a time: a body fetch waits for the poll
+    // in flight instead of opening a second socket to the same mailbox. The gate
+    // still caps the different accounts (`lib/gate.js`).
+    const start = () => limited(async () => {
+      const session = await deps.connect();
+      try {
+        const capabilities = await session.capabilities();
+        if (capabilities.includes("ID")) {
+          // NetEase answers `SELECT` with "Unsafe Login" until a client identifies
+          // itself; a refused ID is not fatal for providers that do not want one.
+          await session.identify(deps.clientId ?? {}).catch((error) => {
+            deps.log("info", `ID refused: ${error?.message ?? error}`);
+          });
+        }
+        const box = await session.select("INBOX");
+        await reconcile(session, box);
+        return await run(session, box);
+      } finally {
+        await session.close().catch(() => undefined);
+      }
+    });
+    const queued = sessionChain.then(start, start);
+    sessionChain = queued.then(() => undefined, () => undefined);
+    return queued;
+  }
+
+  /** One poll: everything one short session can settle. */
+  async function poll() {
+    const settings = deps.settings();
+    const handled = await withSession((session, box) => collect(session, settings, box.uidValidity));
     lastCheckAt = now();
     state.lastCheckAt = lastCheckAt;
     state.lastError = null;
@@ -302,222 +259,150 @@ function createWatcher(deps) {
     return handled;
   }
 
-  /** A different provider for this account invalidates its connection. */
-  function providerMoved() {
-    return providerAtConnect !== null && deps.provider() !== providerAtConnect;
-  }
-
-  /**
-   * Hand the connection to one queued job, if any.
-   *
-   * Run sequentially and awaited: the job may issue a `FETCH` or a `STORE`, and
-   * the loop must not enter `IDLE` in the middle of it. A job that throws is the
-   * caller's error, never the connection's — the loop keeps watching.
-   */
-  async function drainJobs(current) {
-    while (!stopped && jobs.length) {
-      const entry = jobs.shift();
-      if (entry.done) continue;
-      entry.done = true;
-      deps.timers.clearTimeout(entry.timer);
+  async function runCycle() {
+    if (active) return active.then((handled) => handled, () => 0);
+    const run = (async () => {
       try {
-        const value = await entry.job(current);
-        entry.resolve(value);
-      } catch (error) {
-        entry.reject(error);
-      }
-    }
-  }
-
-  /** Everything one authenticated connection does, until it ends or is stopped. */
-  async function runConnected(current) {
-    const settings = deps.settings();
-    phase = "connected";
-    const capabilities = await current.capabilities();
-    if (capabilities.includes("ID")) {
-      // NetEase answers `SELECT` with "Unsafe Login" until a client identifies
-      // itself; a refused ID is not fatal for providers that do not want one.
-      await current.identify(deps.clientId ?? {}).catch((error) => {
-        deps.log("info", `ID refused: ${error?.message ?? error}`);
-      });
-    }
-    const box = await current.select("INBOX");
-    await reconcile(box);
-    const canIdle = capabilities.includes("IDLE");
-    if (!canIdle) deps.log("info", "server does not advertise IDLE; polling on the schedule instead");
-
-    for (;;) {
-      if (stopped) return;
-      if (providerMoved()) {
-        deps.log("info", "the provider for this account changed; reconnecting");
-        return;
-      }
-      settleCycle(await collect(deps.settings()));
-      if (stopped) return;
-      await drainJobs(current);
-      if (stopped) return;
-      if (!canIdle) {
-        // A server without IDLE is polled: a timeout is the next poll, and a
-        // poke is the schedule tick or the user asking, but neither is a reason
-        // to tear down a healthy connection.
-        if ((await waitFor(options.idleRenewMs)) === "stop") return;
-        continue;
-      }
-      await current.idleStart();
-      const reason = existsPending ? "exists" : await waitFor(options.idleRenewMs);
-      existsPending = false;
-      await current.idleStop();
-      if (reason === "stop") return;
-      // Only a renewal skips the search; every other reason means something may
-      // have arrived, which the next `collect` settles authoritatively.
-      if (reason === "timeout") continue;
-    }
-  }
-
-  async function loop() {
-    let failures = 0;
-    while (!stopped) {
-      let current = null;
-      try {
-        current = await deps.connect();
-        session = current;
+        const handled = await poll();
         failures = 0;
-        current.onExists(() => {
-          existsPending = true;
-          phase = "connected";
-          signal("exists");
-        });
-        current.onClose(() => {
-          signal("closed");
-        });
-        await runConnected(current);
+        phase = "connected";
+        return handled;
       } catch (error) {
         failures += 1;
-        if (!stopped) {
-          phase = "error";
-          recordError(error);
-          deps.log("warn", `mailbox connection ended: ${error?.code ?? ""} ${error?.message ?? error}`.trim());
-        }
+        phase = "error";
+        recordError(error);
+        deps.log("warn", `mailbox poll ended: ${error?.code ?? ""} ${error?.message ?? error}`.trim());
+        throw error;
       } finally {
-        session = null;
-        if (current) await current.close().catch(() => undefined);
+        active = null;
       }
-      if (stopped) break;
-      phase = "waiting";
-      const delay = Math.min(options.backoffMaxMs, options.backoffBaseMs * 2 ** Math.max(0, failures - 1));
-      await waitFor(delay);
+    })();
+    active = run;
+    return run;
+  }
+
+  function stopTimer() {
+    if (timer) deps.timers.clearTimeout(timer);
+    timer = null;
+  }
+
+  function schedule(ms) {
+    stopTimer();
+    if (stopped) return;
+    timer = deps.timers.setTimeout(() => {
+      timer = null;
+      void tick();
+    }, Math.max(0, Math.trunc(ms)));
+    if (typeof timer?.unref === "function") timer.unref();
+  }
+
+  async function tick() {
+    if (stopped) return;
+    let failed = false;
+    let handled = 0;
+    try {
+      handled = await runCycle();
+    } catch {
+      failed = true;
     }
-    phase = "stopped";
+    if (stopped) return;
+    const backoff = failures > 0
+      ? Math.min(options.backoffMaxMs, options.backoffBaseMs * 2 ** (failures - 1))
+      : 0;
+    // A poke that arrived while the session was open, or a batch that produced
+    // notifications, is not a reason to wait the whole interval again.
+    const delay = pokePending || (!failed && handled > 0)
+      ? Math.min(options.pollMs, options.staggerMs)
+      : Math.max(options.pollMs, backoff);
+    pokePending = false;
+    schedule(delay);
   }
 
   return {
     get status() {
       return {
         accountId,
+        protocol: "imap",
         phase,
-        watched: phase === "connected" || phase === "waiting" || phase === "error",
+        watched: phase === "connected" || phase === "connecting",
         lastCheckAt,
         lastDigestAt: state.lastDigestAt,
         lastError,
+        pendingDigest: state.pending.length,
+        pollIntervalMs: options.pollMs,
         uidValidity: state.cursor?.uidValidity ?? null,
         maxUid: state.cursor?.maxUid ?? null,
-        pendingDigest: state.pending.length,
       };
     },
 
     start() {
-      if (!stopped) return loopPromise;
+      if (!stopped) return;
       stopped = false;
       phase = "connecting";
-      existsPending = false;
-      pendingWake = null;
-      loopPromise = loop();
-      return loopPromise;
+      pokePending = false;
+      // First poll staggered by the account's position, so a restart of five
+      // accounts is five sessions a second apart rather than five at once.
+      schedule(Math.max(0, deps.staggerMs ?? options.staggerMs));
     },
 
-    /** Wake the loop for a schedule tick, a settings change or a command. */
+    /** A settings change or a panel click: poll soon, on this account's schedule. */
     poke() {
       if (stopped) {
         this.start();
         return;
       }
-      signal("poke");
-      void flushDigest(deps.settings(), false);
+      if (active) {
+        pokePending = true;
+        return;
+      }
+      schedule(0);
     },
 
-    /**
-     * Run one command on this account's own connection.
-     *
-     * The job is queued, not started here: the loop owns the socket and hands it
-     * over only between two IDLEs, which is the only moment an IMAP command can
-     * be issued without interleaving with the server's wait. The promise settles
-     * when the job settles, or rejects with `ACCOUNT_OFFLINE` when no connection
-     * appears inside `jobTimeoutMs` — the panel turns that into "not connected
-     * yet, try again".
-     */
-    runJob(job, options2 = {}) {
-      if (stopped) this.start();
-      const timeoutMs = options2.timeoutMs ?? options.jobTimeoutMs;
-      return new Promise((resolve, reject) => {
-        const entry = { job, resolve, reject, done: false, timer: null };
-        entry.timer = deps.timers.setTimeout(() => {
-          const index = jobs.indexOf(entry);
-          if (index >= 0) jobs.splice(index, 1);
-          const error = new Error("the mailbox is not connected yet");
-          error.code = "ACCOUNT_OFFLINE";
-          reject(error);
-        }, timeoutMs);
-        if (typeof entry.timer?.unref === "function") entry.timer.unref();
-        jobs.push(entry);
-        // Wake the loop out of IDLE so the job runs on the next gap.
-        signal("poke");
-      });
-    },
-
-    /**
-     * A user-initiated check.
-     *
-     * While the plugin is idling it cannot issue a command — IMAP allows only one
-     * at a time — so it wakes the loop and waits for the cycle that wake causes,
-     * rather than answering "done" before anything happened.
-     */
+    /** The user asked now: poll now, and report what the poll did. */
     async checkNow() {
       if (stopped) this.start();
-      if (!session) {
-        signal("poke");
+      stopTimer();
+      try {
+        const handled = await runCycle();
+        if (!stopped) schedule(options.pollMs);
+        return { ...this.status, checked: true, handled };
+      } catch {
+        if (!stopped) schedule(Math.max(options.pollMs, options.backoffBaseMs));
         return { ...this.status, checked: false, handled: 0 };
       }
-      if (session.idling) {
-        const next = awaitNextCycle(15_000);
-        signal("poke");
-        const handled = await next;
-        return { ...this.status, checked: handled !== null, handled: handled ?? 0 };
-      }
-      return { ...this.status, checked: true, handled: await collect(deps.settings()) };
+    },
+
+    /**
+     * Run one command on a session of its own.
+     *
+     * Opening a message and changing a flag used to ride the IDLE connection.
+     * Now they get a short session through the same gate, which is what keeps the
+     * plugin inside the host's ceiling when there are more accounts than sockets.
+     */
+    withSession(run) {
+      return withSession(run);
+    },
+
+    /** Post anything the digest queue is holding, if its interval has passed. */
+    async flushDue() {
+      return flushDigest(deps.settings(), false);
     },
 
     async stop() {
       stopped = true;
-      signal("stop");
-      const queued = jobs;
-      jobs = [];
-      for (const entry of queued) {
-        if (entry.done) continue;
-        entry.done = true;
-        deps.timers.clearTimeout(entry.timer);
-        const error = new Error("the account was stopped");
-        error.code = "ACCOUNT_STOPPED";
-        entry.reject(error);
-      }
-      // The loop owns its connection: closing it here as well would race the one
-      // the loop is already performing in its `finally`.
-      await Promise.resolve(loopPromise).catch(() => undefined);
-      loopPromise = null;
-      session = null;
-      settleCycle(null);
+      stopTimer();
+      pokePending = false;
+      await Promise.resolve(active).catch(() => undefined);
       phase = "stopped";
     },
   };
 }
 
-module.exports = { JOB_TIMEOUT_MS, createWatcher };
+module.exports = {
+  DEFAULT_POLL_MS,
+  DEFAULT_STAGGER_MS,
+  MAX_FETCH_PER_CYCLE,
+  MAX_ROUNDS_PER_CYCLE,
+  createWatcher,
+  toMessage,
+};

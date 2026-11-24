@@ -192,7 +192,7 @@ function renderStatic() {
   nodes.check.textContent = table.check;
   nodes.add.textContent = table.add;
   nodes.accountsTitle.textContent = table.accounts;
-  nodes.accountsHint.textContent = table.addHint;
+  nodes.accountsHint.textContent = table.accountsHint(state.snapshot?.accounts.length ?? 0);
   nodes.accountsEmpty.textContent = table.emptyAccounts;
   nodes.messagesEmpty.textContent = table.emptyMessages;
   nodes.importantTitle.textContent = table.groupImportant;

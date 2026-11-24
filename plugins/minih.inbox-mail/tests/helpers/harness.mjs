@@ -1,5 +1,5 @@
 /**
- * The plugin's watcher, wired to a fake server and a fake clock.
+ * The plugin's polling watcher, wired to a fake server and a fake clock.
  *
  * Nothing here reaches a real mailbox, and nothing waits for real minutes: the
  * timings are milliseconds, so a test that would otherwise take half an hour runs
@@ -12,6 +12,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 const require = createRequire(import.meta.url);
 const { createSession } = require("../../lib/session.js");
+const { createGate } = require("../../lib/gate.js");
 const { createWatcher } = require("../../lib/watcher.js");
 const { normalizeSettings } = require("../../lib/settings.js");
 const store = require("../../lib/store.js");
@@ -31,8 +32,6 @@ export async function waitFor(predicate, { timeout = 3000, label = "condition" }
 export function createHarness(server, options = {}) {
   const settings = normalizeSettings({ ...options.settings });
   const overrides = {};
-  /** The provider this harness account is set to; a change reconnects. */
-  let provider = options.provider ?? "qq";
   const state = options.state ?? store.emptyState();
   const notifications = [];
   const errors = [];
@@ -41,6 +40,7 @@ export function createHarness(server, options = {}) {
   const control = { refuse: options.refuse ?? false };
   /** When each connect was attempted, so a test can measure the backoff. */
   const attemptTimes = [];
+  const gate = options.gate ?? createGate(options.maxConcurrent ?? 4);
 
   const watcher = createWatcher({
     connect: async () => {
@@ -57,7 +57,6 @@ export function createHarness(server, options = {}) {
       persisted.push(JSON.parse(JSON.stringify(next)));
     },
     settings: () => ({ ...settings, ...overrides }),
-    provider: () => provider,
     account: { instanceId: options.instanceId ?? "acc_00000001", label: options.label ?? "owner@example.com" },
     notify: {
       alert: (message, reasons) => notifications.push({ kind: "alert", message, reasons }),
@@ -69,9 +68,13 @@ export function createHarness(server, options = {}) {
     now: () => Date.now(),
     timers: { setTimeout, clearTimeout },
     clientId: { name: "test", vendor: "minih", version: "0.0.0" },
+    gate,
+    // Long by default, so only an explicit check polls; every test that cares
+    // about the interval measures it through the watcher's own status.
+    pollMs: options.pollMs ?? 60_000,
+    staggerMs: options.staggerMs ?? 0,
     backoffBaseMs: options.backoffBaseMs ?? 5,
     backoffMaxMs: options.backoffMaxMs ?? 20,
-    idleRenewMs: options.idleRenewMs ?? 20,
     maxFetch: options.maxFetch ?? 25,
   });
 
@@ -80,9 +83,7 @@ export function createHarness(server, options = {}) {
     state,
     settings,
     overrides,
-    setProvider(next) {
-      provider = next;
-    },
+    gate,
     control,
     attemptTimes,
     notifications,
@@ -97,4 +98,13 @@ export function createHarness(server, options = {}) {
       await watcher.stop();
     },
   };
+}
+
+/** Assert that a condition is not met, for the "nothing happened" cases. */
+export async function stays(predicate, { ms = 40, label = "condition" } = {}) {
+  const started = Date.now();
+  while (Date.now() - started < ms) {
+    if (await predicate()) throw new Error(`${label} happened`);
+    await sleep(2);
+  }
 }

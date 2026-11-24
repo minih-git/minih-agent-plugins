@@ -11,7 +11,9 @@ const TEXT = {
     title: "Inbox",
     accounts: "Mailboxes",
     add: "Add mailbox",
-    addHint: "Up to 5 mailboxes.",
+    // The panel states how many accounts there are, never a ceiling: this plugin
+    // has none, and "up to 5" would be a rule the host does not enforce.
+    accountsHint: (count) => (count === 1 ? "1 account" : `${count} accounts`),
     remove: "Remove",
     removeConfirm: "Remove this mailbox?",
     removeYes: "Remove",
@@ -73,7 +75,7 @@ const TEXT = {
     messages: (count) => (count === 1 ? "1 message" : `${count} messages`),
     unreadCount: (count) => `${count} unread`,
     codes: {
-      CREDENTIAL_LIMIT: "This plugin already holds 5 mailboxes. Remove one before adding another.",
+      CREDENTIAL_LIMIT: "The app will not hold more mailboxes here. Remove one before adding another.",
       CREDENTIAL_DIALOG_BUSY: "A mailbox dialog was just closed. Wait about 30 seconds before trying again.",
       CREDENTIAL_DIALOG_UNAVAILABLE: "Bring the app window to the front, then try again.",
       CREDENTIAL_NOT_CONFIGURED: "That mailbox has no authorization code yet.",
@@ -113,7 +115,7 @@ const TEXT = {
     title: "收件箱",
     accounts: "邮箱账号",
     add: "添加邮箱",
-    addHint: "最多 5 个邮箱。",
+    accountsHint: (count) => `${count} 个账号`,
     remove: "移除",
     removeConfirm: "确定移除这个邮箱？",
     removeYes: "移除",
@@ -170,7 +172,7 @@ const TEXT = {
     messages: (count) => `${count} 封邮件`,
     unreadCount: (count) => `${count} 封未读`,
     codes: {
-      CREDENTIAL_LIMIT: "这个插件已经有 5 个邮箱了。请先移除一个再添加。",
+      CREDENTIAL_LIMIT: "应用已经不能再存更多邮箱了。请先移除一个再添加。",
       CREDENTIAL_DIALOG_BUSY: "上一个邮箱对话框刚关闭，请等 30 秒左右再试。",
       CREDENTIAL_DIALOG_UNAVAILABLE: "请把应用窗口切到前台后再试。",
       CREDENTIAL_NOT_CONFIGURED: "这个邮箱还没填授权码。",

@@ -242,7 +242,34 @@ async function panel(plugin, channel, payload) {
 
 function readState(host) {
   const file = join(host.dataPath, "accounts.json");
-  return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
+  if (!existsSync(file)) return null;
+  try {
+    return JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    // A poll saves the whole file atomically enough for the app, but a test can
+    // catch it mid-write; "not yet" is the honest answer.
+    return null;
+  }
+}
+
+/**
+ * Wait until each instance has completed one poll.
+ *
+ * There is no long-lived connection any more, so "the mailbox is being watched"
+ * is no longer the same as "the server is idling": what proves a poll happened is
+ * the cursor (IMAP) or the baseline (POP3) in the plugin's own file.
+ */
+async function waitForPolls(host, instanceIds = ["acc_1"]) {
+  await waitFor(
+    () => {
+      const saved = readState(host);
+      return instanceIds.every((id) => {
+        const account = saved?.accounts?.[id];
+        return Boolean(account?.cursor || account?.pop3?.baselined);
+      });
+    },
+    { label: `the first poll of ${instanceIds.join(", ")}` },
+  );
 }
 
 test("two mailboxes are watched on one connection each and listed together", async () => {
@@ -254,7 +281,7 @@ test("two mailboxes are watched on one connection each and listed together", asy
   });
   const plugin = await loadWith(host);
   try {
-    await waitFor(() => personal.idling && work.idling, { label: "both mailboxes idling" });
+    await waitForPolls(host, ["acc_1", "acc_2"]);
     const { snapshot } = await panel(plugin, "inbox.snapshot");
     assert.equal(snapshot.accounts.length, 2);
     assert.deepEqual(
@@ -286,7 +313,7 @@ test("an alert names its account, and de-duplication is per account", async () =
   });
   const plugin = await loadWith(host);
   try {
-    await waitFor(() => personal.idling && work.idling, { label: "both mailboxes idling" });
+    await waitForPolls(host, ["acc_1", "acc_2"]);
     const entry = {
       uid: 1,
       from: { name: "Boss", address: "boss@example.com" },
@@ -295,6 +322,7 @@ test("an alert names its account, and de-duplication is per account", async () =
     };
     personal.deliver(message(entry));
     work.deliver(message(entry));
+    host.emit("plugin:settingsChanged", {});
     await waitFor(() => host.notifications.length === 2, { label: "one alert per account" });
     const keys = host.notifications.map((row) => row.dedupeKey);
     assert.equal(new Set(keys).size, 2, "the same Message-ID in two mailboxes is two rows");
@@ -315,7 +343,7 @@ test("opening a message downloads that one body, capped, and writes none of it",
   const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
   const plugin = await loadWith(host);
   try {
-    await waitFor(() => server.idling, { label: "IDLE" });
+    await waitForPolls(host);
     server.deliver(
       message({
         uid: 1,
@@ -324,6 +352,7 @@ test("opening a message downloads that one body, capped, and writes none of it",
         raw: rawMessage({ subject: "季度报告", text: "见附件", html: "<p>见<b>附件</b></p>" }),
       }),
     );
+    host.emit("plugin:settingsChanged", {});
     await waitFor(async () => (await panel(plugin, "inbox.snapshot")).snapshot.messages.length === 1, {
       label: "the message list",
     });
@@ -355,7 +384,7 @@ test("a body larger than the cap is reported as truncated", async () => {
   const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
   const plugin = await loadWith(host);
   try {
-    await waitFor(() => server.idling, { label: "IDLE" });
+    await waitForPolls(host);
     server.sizeOverride = 2 * 1024 * 1024;
     server.deliver(
       message({
@@ -364,6 +393,7 @@ test("a body larger than the cap is reported as truncated", async () => {
         raw: "Subject: big\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nbody",
       }),
     );
+    host.emit("plugin:settingsChanged", {});
     await waitFor(async () => (await panel(plugin, "inbox.snapshot")).snapshot.messages.length === 1, {
       label: "the message list",
     });
@@ -383,8 +413,9 @@ test("marking read sends exactly one STORE, and the panel list follows", async (
   const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
   const plugin = await loadWith(host);
   try {
-    await waitFor(() => server.idling, { label: "IDLE" });
+    await waitForPolls(host);
     server.deliver(message({ uid: 1, messageId: "<m@example.com>" }));
+    host.emit("plugin:settingsChanged", {});
     await waitFor(async () => (await panel(plugin, "inbox.snapshot")).snapshot.messages.length === 1, {
       label: "the message list",
     });
@@ -418,7 +449,7 @@ test("a flag the panel invents is refused, and nothing is sent", async () => {
   const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
   const plugin = await loadWith(host);
   try {
-    await waitFor(() => server.idling, { label: "IDLE" });
+    await waitForPolls(host);
     const result = await panel(plugin, "inbox.setFlag", { accountId: "acc_1", key: "<x>", flag: "deleted" });
     assert.equal(result.ok, false);
     assert.equal(result.code, "INVALID_ARGUMENT");
@@ -434,8 +465,9 @@ test("a body the server refuses comes back as a coded error, not an empty messag
   const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
   const plugin = await loadWith(host);
   try {
-    await waitFor(() => server.idling, { label: "IDLE" });
+    await waitForPolls(host);
     server.deliver(message({ uid: 1, messageId: "<bad@example.com>" }));
+    host.emit("plugin:settingsChanged", {});
     await waitFor(async () => (await panel(plugin, "inbox.snapshot")).snapshot.messages.length === 1, {
       label: "the message list",
     });
@@ -468,7 +500,7 @@ test("a company domain waits for a provider pick, and says so once", async () =>
 
     const picked = await panel(plugin, "inbox.setProvider", { instanceId: "acc_1", providerId: "tencentExmail" });
     assert.equal(picked.ok, true);
-    await waitFor(() => server.idling, { label: "the connection after the pick" });
+    await waitForPolls(host);
     assert.equal(host.state.connects[0].host, "imap.exmail.qq.com");
     const after = (await panel(plugin, "inbox.snapshot")).snapshot;
     assert.equal(after.accounts[0].provider.id, "tencentExmail");
@@ -507,11 +539,11 @@ test("adding a mailbox asks the host and starts watching the new instance", asyn
   });
   const plugin = await loadWith(host);
   try {
-    await waitFor(() => personal.idling, { label: "the first mailbox" });
+    await waitForPolls(host);
     const result = await panel(plugin, "inbox.addAccount");
     assert.equal(result.ok, true);
     assert.equal(result.instanceId, "acc_101");
-    await waitFor(() => added.idling, { label: "the added mailbox" });
+    await waitForPolls(host, ["acc_1", "acc_101"]);
     const snapshot = (await panel(plugin, "inbox.snapshot")).snapshot;
     assert.equal(snapshot.accounts.length, 2);
     assert.equal(snapshot.accounts.find((account) => account.instanceId === "acc_101").provider.id, "gmail");
@@ -551,9 +583,10 @@ test("removing a mailbox closes its connection and forgets only its state", asyn
   });
   const plugin = await loadWith(host);
   try {
-    await waitFor(() => personal.idling && work.idling, { label: "both mailboxes" });
+    await waitForPolls(host, ["acc_1", "acc_2"]);
     personal.deliver(message({ uid: 1, messageId: "<keep@example.com>" }));
     work.deliver(message({ uid: 1, messageId: "<drop@example.com>" }));
+    host.emit("plugin:settingsChanged", {});
     await waitFor(() => readState(host)?.accounts?.acc_2?.messages?.length === 1, { label: "both lists" });
 
     const result = await panel(plugin, "inbox.removeAccount", { instanceId: "acc_2" });
@@ -581,11 +614,11 @@ test("a mailbox added in Settings is picked up from credentials:changed", async 
   });
   const plugin = await loadWith(host);
   try {
-    await waitFor(() => personal.idling, { label: "the first mailbox" });
+    await waitForPolls(host);
     // The host is what added this one; the plugin only hears about it.
     host.accounts.push({ instanceId: "acc_2", username: "someone@126.com" });
     host.emit("credentials:changed", { slotId: "mailbox" });
-    await waitFor(() => added.idling, { label: "the mailbox added in Settings" });
+    await waitForPolls(host, ["acc_1", "acc_2"]);
     const snapshot = (await panel(plugin, "inbox.snapshot")).snapshot;
     assert.equal(snapshot.accounts.length, 2);
     assert.equal(snapshot.accounts.find((account) => account.instanceId === "acc_2").provider.id, "netease126");
@@ -628,7 +661,7 @@ test("the 0.1.0 state is adopted once, then the old file is gone", async () => {
     // Restart on the same data directory: the migration must not run again.
     await plugin.onUnload();
     plugin = await loadWith(host);
-    await waitFor(() => server.idling, { label: "the second run's connection" });
+    await waitForPolls(host);
     const again = readState(host);
     assert.deepEqual(again.accounts.acc_1.cursor, { uidValidity: 7, maxUid: 42 });
     assert.equal(again.accounts.acc_1.seen.length, 1);
@@ -649,7 +682,7 @@ test("a 0.1.0 file is left alone when there are two accounts to choose from", as
   writeFileSync(join(host.dataPath, "inbox-mail.json"), JSON.stringify({ cursor: { uidValidity: 7, maxUid: 9 } }), "utf8");
   const plugin = await loadWith(host);
   try {
-    await waitFor(() => personal.idling && work.idling, { label: "both mailboxes" });
+    await waitForPolls(host, ["acc_1", "acc_2"]);
     // Guessing would silence one mailbox; leaving the file is the honest choice.
     assert.equal(existsSync(join(host.dataPath, "inbox-mail.json")), true);
     // Neither cursor is the legacy one: the watchers baseline from the server.
@@ -674,7 +707,7 @@ test("the command checks every account and says how many it looked at", async ()
   });
   const plugin = await loadWith(host);
   try {
-    await waitFor(() => personal.idling && work.idling, { label: "both mailboxes" });
+    await waitForPolls(host, ["acc_1", "acc_2"]);
     personal.add(message({ uid: 1, from: { name: "Boss", address: "boss@example.com" } }));
     await host.commands.get("check-now").run();
     await waitFor(() => host.toasts.length === 1, { label: "a toast" });
@@ -704,7 +737,7 @@ test("web mailbox and message links are opened by the host, never inside the pan
   const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
   const plugin = await loadWith(host);
   try {
-    await waitFor(() => server.idling, { label: "IDLE" });
+    await waitForPolls(host);
     const webmail = await panel(plugin, "inbox.openWebmail", { instanceId: "acc_1" });
     assert.equal(webmail.ok, true);
     assert.equal(host.opened[0], "https://mail.qq.com/");
@@ -733,7 +766,7 @@ test("unloading closes every connection and unsubscribes everything", async () =
   });
   const plugin = await loadWith(host);
   try {
-    await waitFor(() => personal.idling && work.idling, { label: "both mailboxes" });
+    await waitForPolls(host, ["acc_1", "acc_2"]);
     await plugin.onUnload();
     assert.ok(host.state.closed >= 2, "both sockets were closed");
     for (const event of ["schedule:fire", "plugin:settingsChanged", "credentials:changed", "net:tcp:data", "net:tcp:close", "net:tcp:error"]) {
@@ -754,16 +787,17 @@ test("unloading closes every connection and unsubscribes everything", async () =
   }
 });
 
-test("settings changes wake the watchers without dropping their connections", async () => {
+test("a settings change pokes the pollers instead of waiting for the interval", async () => {
   const server = createFakeServer({ uidNext: 1 });
   const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
   const plugin = await loadWith(host);
   try {
-    await waitFor(() => server.idling, { label: "IDLE" });
+    await waitForPolls(host);
     const before = host.state.connects.length;
     host.emit("plugin:settingsChanged", {});
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    assert.equal(host.state.connects.length, before, "a settings change is not a reconnect");
+    await waitFor(() => host.state.connects.length > before, { label: "the poked poll" });
+    // The poll is a session of its own, so the cursor is kept and nothing is lost.
+    assert.deepEqual(readState(host).accounts.acc_1.cursor, { uidValidity: 7, maxUid: 0 });
   } finally {
     await plugin.onUnload();
     rmSync(host.dataPath, { recursive: true, force: true });
@@ -784,7 +818,7 @@ test("a mailbox with its own server connects by credential instance only", async
   });
   const plugin = await loadWith(host);
   try {
-    await waitFor(() => server.idling, { label: "the custom mailbox" });
+    await waitForPolls(host);
     const snapshot = (await panel(plugin, "inbox.snapshot")).snapshot;
     const account = snapshot.accounts[0];
     assert.equal(account.provider.id, "custom");
@@ -795,12 +829,13 @@ test("a mailbox with its own server connects by credential instance only", async
     assert.equal(account.webmail, null, "no web page is guessed for a server we do not know");
     // The endpoint is not named by the plugin: the instance carries it, and the
     // host injects that instance's password into that endpoint alone.
-    assert.equal(host.state.connects.length, 1);
+    assert.ok(host.state.connects.length >= 1);
     assert.equal(host.state.connects[0].credentialRef, "mailbox#acc_1");
     assert.equal(host.state.connects[0].endpoint, null);
-    // After that it is the ordinary IMAP session, IDLE included.
-    assert.equal(server.idling, true);
+    // After that it is the ordinary IMAP session — opened, used, logged out.
     assert.equal(server.sentLines[0], "A1 CAPABILITY");
+    assert.equal(server.sentLines.some((line) => line.endsWith("LOGOUT")), true);
+    assert.equal(server.sentLines.some((line) => /IDLE|DONE/.test(line)), false, "no IDLE any more");
   } finally {
     await plugin.onUnload();
     rmSync(host.dataPath, { recursive: true, force: true });
@@ -821,7 +856,7 @@ test("a preset provider still names its endpoint, and a custom account cannot be
   });
   const plugin = await loadWith(host);
   try {
-    await waitFor(() => server.idling, { label: "the custom mailbox" });
+    await waitForPolls(host);
     const picked = await panel(plugin, "inbox.setProvider", { instanceId: "acc_1", providerId: "tencentExmail" });
     assert.equal(picked.ok, false);
     assert.equal(picked.code, "CUSTOM_SERVER_ACCOUNT");

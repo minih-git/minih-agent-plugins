@@ -2,6 +2,18 @@
 
 ## 0.3.0
 
+- **No mailbox limit.** The credential slot declares `multiple: {}` — no `max` —
+  so the number of accounts is decided by the host's own safety bound (100) rather
+  than by this plugin. Requires the 1.10.0 manifest rule that allows `max` to be
+  omitted.
+- **Every account is polled, not connected.** The IDLE connection, its 25-minute
+  renewal and the 15-minute fallback schedule are gone: once every three minutes
+  each account opens one short session (connect → select → new headers → log out),
+  at most four sessions exist at once through one shared gate, and starts are
+  staggered 1.5 s apart. Opening a message or changing a star is one more short
+  session. That is what makes an unlimited account list fit inside the host's
+  eight-connection ceiling, and it removes the `scheduler` permission and the
+  `poll` schedule contribution.
 - **A mail server you type in yourself.** The `mailbox` credential slot declares
   `userEndpoint: { protocols: ["imap", "pop3"] }`, so the host's account dialog
   gains a "custom server" section — protocol, server, encryption, port — and the

@@ -37,8 +37,6 @@ const FILE = "accounts.json";
 /** The 0.1.0 state file, read once during the upgrade. */
 const LEGACY_FILE = "inbox-mail.json";
 const ROOT_VERSION = 2;
-/** The host's own ceiling for one `multiple` slot, and the manifest's. */
-const MAX_ACCOUNTS = 5;
 
 function emptyRoot() {
   return { version: ROOT_VERSION, accounts: {}, providers: {} };
@@ -121,7 +119,6 @@ function adoptLegacy(root, instanceId, legacyState, providerId) {
 module.exports = {
   FILE,
   LEGACY_FILE,
-  MAX_ACCOUNTS,
   ROOT_VERSION,
   accountState,
   adoptLegacy,

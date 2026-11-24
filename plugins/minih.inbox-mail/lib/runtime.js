@@ -26,6 +26,7 @@
 
 const body = require("./body");
 const accountsFile = require("./accounts");
+const { createGate } = require("./gate");
 const messages = require("./messages");
 const pop3 = require("./pop3");
 const { createPop3Watcher } = require("./pop3-watcher");
@@ -40,6 +41,16 @@ const SLOT_ID = "mailbox";
 const BODY_LIMIT = 1024 * 1024;
 /** A body fetch is interactive: it must finish before the panel's own timeout. */
 const BODY_TIMEOUT_MS = 20_000;
+/**
+ * Sessions this plugin may have open at once.
+ *
+ * The host allows eight per plugin; four leaves room for the app's own work and is
+ * still more throughput than any mailbox needs. Every poll, message body and flag
+ * change goes through this one gate (`lib/gate.js`).
+ */
+const MAX_CONNECTIONS = 4;
+/** Accounts start their first poll this far apart. */
+const STAGGER_MS = 1_500;
 
 function coded(code, message) {
   return Object.assign(new Error(message), { code });
@@ -50,6 +61,7 @@ function createRuntime(deps) {
   const root = deps.root;
   const log = deps.log ?? (() => {});
   const accounts = new Map();
+  const gate = deps.gate ?? createGate(MAX_CONNECTIONS);
   let loaded = false;
 
   const accountStateOf = (instanceId) => accountsFile.accountState(root, instanceId);
@@ -255,17 +267,18 @@ function createRuntime(deps) {
       log,
       now: () => Date.now(),
       timers: { setTimeout, clearTimeout },
+      // One budget for every session this plugin opens, and one start offset per
+      // account so a restart does not connect every mailbox in the same second.
+      gate,
+      staggerMs: [...accounts.keys()].indexOf(record.instanceId) * STAGGER_MS,
     };
-    // One protocol, one watcher: IMAP is pushed and keeps a connection, POP3 is
-    // polled and must not keep one. The panel and the notifications are the same
-    // code for both, which is why the two watchers share this shape.
+    // One protocol, one watcher: both poll, but IMAP and POP3 speak differently.
+    // The panel and the notifications are the same code for both, which is why the
+    // two watchers share this shape.
     record.watcher = record.protocol === "pop3"
       ? createPop3Watcher({ ...shared, connect: () => connectPop3(snapshot) })
       : createWatcher({
           ...shared,
-          // An account whose server the user edited must reconnect: the key is
-          // the endpoint, not a provider id that stayed the same.
-          provider: () => snapshot.connectionKey,
           connect: () => connectImap(snapshot),
           clientId: deps.clientId,
         });
@@ -463,7 +476,9 @@ function createRuntime(deps) {
         accounts: list.map((record) => accountView(record, locale)),
         providers: providers.catalogue(locale),
         messages: messageViews(),
-        limits: { maxAccounts: accountsFile.MAX_ACCOUNTS, messagesPerAccount: store.MESSAGES_LIMIT },
+        // No account ceiling: the manifest declares no `max`, and the host keeps
+        // its own safety bound. What is bounded here is one account's list.
+        limits: { messagesPerAccount: store.MESSAGES_LIMIT },
         empty: list.length === 0,
       };
     },
@@ -548,9 +563,8 @@ function createRuntime(deps) {
       // number of that session first.
       const fetched = record.protocol === "pop3"
         ? await record.watcher.fetchBody(envelope.key, { maxBytes: BODY_LIMIT, timeoutMs: BODY_TIMEOUT_MS })
-        : await record.watcher.runJob(
-            (session) => session.fetchMessage(envelope.uid, { maxBytes: BODY_LIMIT, timeoutMs: BODY_TIMEOUT_MS }),
-            {},
+        : await record.watcher.withSession((session) =>
+            session.fetchMessage(envelope.uid, { maxBytes: BODY_LIMIT, timeoutMs: BODY_TIMEOUT_MS }),
           );
       const parsed = body.parseMessage(fetched.body);
       if (Array.isArray(fetched.flags) && fetched.flags.length) {
@@ -599,7 +613,7 @@ function createRuntime(deps) {
       const envelope = store.findEnvelope(state, String(input?.key ?? ""));
       if (!envelope) throw coded("MESSAGE_NOT_FOUND", "this message is not in the list");
       if (!record.watcher) throw coded("ACCOUNT_OFFLINE", "this mailbox is not connected yet");
-      const result = await record.watcher.runJob((session) => session.storeFlags(envelope.uid, change), {});
+      const result = await record.watcher.withSession((session) => session.storeFlags(envelope.uid, change));
       const flags = Array.isArray(result?.flags) && result.flags.length
         ? store.setFlags(state, envelope.key, result.flags)
         : store.setFlags(state, envelope.key, store.applyFlag(envelope.flags, flag));

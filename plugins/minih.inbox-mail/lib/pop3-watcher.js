@@ -31,8 +31,10 @@ const mime = require("./mime");
 const rules = require("./rules");
 const store = require("./store");
 
-/** POP3's own polite default: five minutes. */
-const DEFAULT_POLL_MS = 5 * 60 * 1000;
+/** Every account is checked this often, POP3 included. */
+const DEFAULT_POLL_MS = 3 * 60 * 1000;
+/** Accounts start this far apart, so a restart does not connect all at once. */
+const DEFAULT_STAGGER_MS = 1_500;
 /** How many new messages one session reads headers for. */
 const MAX_FETCH_PER_CYCLE = 25;
 /** A `LOGIN-DELAY` this large is a typo or a hostile server; a day is enough. */
@@ -82,6 +84,7 @@ function toMessage(headers, entry) {
 function createPop3Watcher(deps) {
   const options = {
     pollMs: deps.pollMs ?? DEFAULT_POLL_MS,
+    staggerMs: deps.staggerMs ?? DEFAULT_STAGGER_MS,
     maxFetch: deps.maxFetch ?? MAX_FETCH_PER_CYCLE,
     backoffBaseMs: deps.backoffBaseMs ?? 5_000,
     backoffMaxMs: deps.backoffMaxMs ?? 5 * 60 * 1000,
@@ -91,10 +94,14 @@ function createPop3Watcher(deps) {
   };
   const state = deps.state;
   const accountId = deps.account?.instanceId ?? "";
+  const gate = deps.gate ?? null;
+  const limited = (fn) => (gate ? gate.run(fn) : fn());
   let stopped = true;
   let timer = null;
   /** The cycle in flight, so a poke cannot open a second session. */
   let active = null;
+  /** Sessions for this account, one after another. */
+  let sessionChain = Promise.resolve();
   let pokePending = false;
   let failures = 0;
   let phase = "stopped";
@@ -135,12 +142,21 @@ function createPop3Watcher(deps) {
 
   /** One short session, always closed — a POP3 connection left open locks the maildrop. */
   async function withConnection(run) {
-    const client = await deps.connect();
-    try {
-      return await run(client);
-    } finally {
-      await Promise.resolve(client.close?.()).catch(() => undefined);
-    }
+    // The gate is held for the whole session: a socket that is open but not yet
+    // closed counts against the host's ceiling (`lib/gate.js`). Sessions for one
+    // account also run one at a time — POP3 locks the maildrop, so a second
+    // connection to the same account would only be refused.
+    const start = () => limited(async () => {
+      const client = await deps.connect();
+      try {
+        return await run(client);
+      } finally {
+        await Promise.resolve(client.close?.()).catch(() => undefined);
+      }
+    });
+    const queued = sessionChain.then(start, start);
+    sessionChain = queued.then(() => undefined, () => undefined);
+    return queued;
   }
 
   /**
@@ -333,7 +349,8 @@ function createPop3Watcher(deps) {
       stopped = false;
       phase = "connecting";
       pokePending = false;
-      schedule(0);
+      // Staggered by the account's position, like the IMAP watcher.
+      schedule(Math.max(0, deps.staggerMs ?? options.staggerMs));
     },
 
     /** A schedule tick, a settings change or a panel click: poll soon. */

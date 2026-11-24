@@ -9,10 +9,12 @@
  * therefore starts at `CAPABILITY` and owns everything after it:
  *
  *   CAPABILITY, ID, SELECT INBOX, UID SEARCH, UID FETCH with BODY.PEEK,
- *   UID STORE of `\Seen` / `\Flagged`, IDLE, DONE, LOGOUT.
+ *   UID STORE of `\Seen` / `\Flagged`, LOGOUT.
  *
  * There is no `APPEND`, no `COPY`, no `EXPUNGE` and no `STORE` other than the two
- * flags above: nothing here deletes, moves, copies or sends mail.
+ * flags above: nothing here deletes, moves, copies or sends mail. There is no
+ * IDLE either: this plugin polls, so every session is short and ends with
+ * `LOGOUT` (`lib/watcher.js`).
  *
  * `STORE` exists because the user asked for it: the Inbox panel offers "mark as
  * read" and "add star", and each of those is one click that sends exactly one
@@ -26,11 +28,7 @@
  * opened is a `BODY.PEEK[]` for the same reason.
  *
  * Commands are serialised: IMAP allows one command in flight, and a plugin that
- * pipelined them would have to match untagged responses to two commands at
- * once. IDLE is the exception it has to be — it holds the connection with no
- * tag outstanding until `DONE` — so it is entered and left through its own two
- * methods, and any other command while idling is refused rather than silently
- * interleaved.
+ * pipelined them would have to match untagged responses to two commands at once.
  */
 
 const { createParser, kindOf, parseTagged, parseUntagged } = require("./protocol");
@@ -58,9 +56,9 @@ function quote(value) {
 /**
  * Resolve or reject with one deadline.
  *
- * A server that stops answering must not leave the plugin waiting forever: the
- * IDLE acknowledgement, `DONE` and `LOGOUT` all go through here, and a timeout is
- * a broken connection that the watcher reconnects with backoff.
+ * A server that stops answering must not leave the plugin waiting forever:
+ * `LOGOUT` goes through here, and a timeout is a broken connection that the
+ * plugin simply closes.
  */
 function deadline(promise, ms, label) {
   return new Promise((resolve, reject) => {
@@ -83,15 +81,12 @@ function createSession(transport, options = {}) {
   const defaultTimeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const log = options.log ?? (() => {});
   const parser = createParser();
-  const existsListeners = new Set();
   const closeListeners = new Set();
   let inflight = null;
   let chain = Promise.resolve();
   let tagSeq = 0;
   let closed = false;
   let closeCause = null;
-  let continuation = null;
-  let idling = null;
   /** The teardown in progress, shared by every `close()` caller. */
   let closing = null;
 
@@ -106,7 +101,7 @@ function createSession(transport, options = {}) {
     closeListeners.clear();
   }
 
-  /** Tear the session down once: every waiter fails, then the socket is dropped. */
+  /** Tear the session down once: the waiter fails, then the socket is dropped. */
   function fail(error) {
     if (closed) return;
     closed = true;
@@ -117,34 +112,17 @@ function createSession(transport, options = {}) {
       clearTimeout(entry.timer);
       entry.reject(closeCause);
     }
-    if (continuation) {
-      const waiter = continuation;
-      continuation = null;
-      waiter.reject(closeCause);
-    }
     void transport.close?.().catch?.(() => undefined);
     notifyClose(closeCause);
   }
 
   function dispatch(tokens) {
     const kind = kindOf(tokens);
-    if (kind === "cont") {
-      const waiter = continuation;
-      continuation = null;
-      waiter?.resolve();
-      return;
-    }
+    // No command here has a continuation: without IDLE, a `+` line is a server
+    // that is out of step, and answering nothing is the honest response.
+    if (kind === "cont") return;
     if (kind === "untagged") {
       const record = parseUntagged(tokens);
-      if (record.kind === "exists") {
-        for (const listener of existsListeners) {
-          try {
-            listener(record.count);
-          } catch (error) {
-            log("warn", `exists listener failed: ${error?.message ?? error}`);
-          }
-        }
-      }
       if (record.kind === "status" && record.status === "BYE") {
         // The server is closing: nothing else on this socket can be trusted.
         fail(Object.assign(new Error(`server said BYE: ${record.text}`), { code: "IMAP_BYE" }));
@@ -167,7 +145,7 @@ function createSession(transport, options = {}) {
       else entry.reject(Object.assign(taggedError(reply.status, reply.text), { untagged: entry.untagged }));
       return;
     }
-    log("warn", "response with no tag, continuation or untagged marker");
+    log("warn", "response with no tag or untagged marker");
   }
 
   transport.onData((chunk) => {
@@ -191,67 +169,14 @@ function createSession(transport, options = {}) {
   /**
    * Run one exchange after the previous one finished, successful or not.
    *
-   * IMAP has one command in flight at a time, and `IDLE` is not an exception:
-   * it owns the connection until `DONE`. Two paths that skipped this queue could
-   * interleave a `SEARCH` into an outstanding `IDLE`, and the reply that arrives
-   * would settle the wrong waiter.
+   * IMAP allows one command in flight at a time. Two paths that skipped this queue
+   * could interleave two commands, and the reply that arrives would settle the
+   * wrong waiter.
    */
   function enqueue(run) {
     const queued = chain.then(run, run);
     chain = queued.then(() => undefined, () => undefined);
     return queued;
-  }
-
-  /**
-   * The IDLE body. Only reached through `enqueue`, so nothing else is in flight
-   * when the connection is handed to the server for an indefinite wait.
-   */
-  async function enterIdle(options2 = {}) {
-    const timeoutMs = options2.timeoutMs ?? defaultTimeoutMs;
-    if (closed) throw closeCause ?? closedError();
-    if (idling) return;
-    const tag = `A${(tagSeq += 1)}`;
-    const entry = { tag, untagged: [], resolve: null, reject: null, timer: null };
-    const started = new Promise((resolve, reject) => {
-      continuation = { resolve: () => resolve(), reject };
-    });
-    const completion = new Promise((resolve, reject) => {
-      entry.resolve = (reply) => resolve(reply);
-      entry.reject = (error) => reject(error);
-    });
-    // The IDLE reply is the tagged completion after `DONE`, so the entry is what
-    // the dispatcher settles; there is no second command to wait for.
-    entry.timer = setTimeout(() => {
-      fail(Object.assign(new Error("IDLE was not acknowledged"), { code: "IMAP_TIMEOUT" }));
-    }, timeoutMs);
-    if (typeof entry.timer?.unref === "function") entry.timer.unref();
-    inflight = entry;
-    idling = { entry, completion };
-    try {
-      await transport.send(`${tag} IDLE\r\n`);
-      await deadline(started, timeoutMs, "IDLE");
-    } catch (error) {
-      fail(error);
-      throw error;
-    }
-  }
-
-  /** Leave IDLE: `DONE`, then the tagged reply that closes the wait. */
-  async function leaveIdle(options2 = {}) {
-    const timeoutMs = options2.timeoutMs ?? defaultTimeoutMs;
-    const current = idling;
-    if (!current) return;
-    idling = null;
-    try {
-      await transport.send("DONE\r\n");
-      await deadline(current.completion, timeoutMs, "DONE");
-    } catch (error) {
-      fail(error);
-      throw error;
-    } finally {
-      if (inflight === current.entry) inflight = null;
-      clearTimeout(current.entry.timer);
-    }
   }
 
   /** One command, resolved with its tagged reply plus the untagged responses it caused. */
@@ -260,10 +185,6 @@ function createSession(transport, options = {}) {
     const run = () => new Promise((resolve, reject) => {
       if (closed) {
         reject(closeCause ?? closedError());
-        return;
-      }
-      if (idling) {
-        reject(Object.assign(new Error("the session is idling"), { code: "IMAP_BUSY" }));
         return;
       }
       const tag = `A${(tagSeq += 1)}`;
@@ -295,14 +216,7 @@ function createSession(transport, options = {}) {
     get closed() {
       return closed;
     },
-    get idling() {
-      return idling !== null;
-    },
 
-    onExists(listener) {
-      existsListeners.add(listener);
-      return () => existsListeners.delete(listener);
-    },
     onClose(listener) {
       closeListeners.add(listener);
       return () => closeListeners.delete(listener);
@@ -475,29 +389,17 @@ function createSession(transport, options = {}) {
       return { uid, flags: record ? record.item.flags : null };
     },
 
-    /** Enter IDLE and resolve once the server has agreed to it. */
-    async idleStart(options2 = {}) {
-      return enqueue(() => enterIdle(options2));
-    },
-
-    /** Leave IDLE. The server answers the `IDLE` tag once `DONE` is read. */
-    async idleStop(options2 = {}) {
-      return enqueue(() => leaveIdle(options2));
-    },
-
     /**
      * Best-effort `LOGOUT`, then drop the socket. Never throws.
      *
-     * Two callers can ask at once — the watcher's loop and a plugin unload — and
-     * a second `DONE` or a second `LOGOUT` would leave the first one waiting
-     * for a reply that was already spent. So the first call owns the teardown
-     * and the rest wait for it.
+     * Two callers can ask at once — a poll's teardown and a plugin unload — and a
+     * second `LOGOUT` would leave the first one waiting for a reply that was
+     * already spent. So the first call owns the teardown and the rest wait for it.
      */
     close() {
       if (closing) return closing;
       closing = (async () => {
         if (closed) return;
-        if (idling) await this.idleStop().catch(() => undefined);
         await deadline(command("LOGOUT", { timeoutMs: 3_000 }), 3_000, "LOGOUT").catch(() => undefined);
         // A server that does not answer LOGOUT is already gone as far as this
         // plugin is concerned; the socket is dropped either way.

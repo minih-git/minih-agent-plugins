@@ -177,6 +177,9 @@ async function migrateLegacy(instances) {
 
 /** Every row this plugin writes links to its one command. */
 function postRow(row) {
+  // A queued handler can run after the plugin was unloaded, and a row on a closed
+  // host is not an error worth logging.
+  if (!host) return Promise.resolve();
   return host.notify
     .center({ ...row, link: { command: COMMAND_ID } })
     .catch((error) => log("warn", `could not post a ${row.kind}: ${error?.message ?? error}`));
@@ -357,12 +360,6 @@ async function onLoad() {
   }
 
   subscriptions = [
-    {
-      event: "schedule:fire",
-      handler: () => {
-        for (const account of runtime?.accounts ?? []) account.watcher?.poke();
-      },
-    },
     {
       event: "plugin:settingsChanged",
       handler: () => {

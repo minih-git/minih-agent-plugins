@@ -47,10 +47,11 @@ test("it asks for exactly the capabilities it uses, including the panel", () => 
     "credentials.use",
     "net.tcp",
     "notify.center",
-    "scheduler",
     "shell.openExternal",
     "ui.view",
   ]);
+  // Polling is the plugin's own timer, so the host scheduler is not asked for.
+  assert.equal(manifest.permissions.includes("scheduler"), false);
   // Sending is not implemented by the host and must not be claimed.
   assert.equal(manifest.permissions.includes("mail.draft"), false);
   assert.equal(manifest.permissions.includes("renderer.extension"), false);
@@ -99,12 +100,15 @@ test("the manifest allowlist and the provider table are the same list", () => {
   }
 });
 
-test("the credential slot holds up to five mailboxes and keeps the 0.1.0 field set", () => {
+test("the credential slot has no account ceiling and keeps the 0.1.0 field set", () => {
   assert.equal(manifest.contributes.credentials.length, 1);
   const [slot] = manifest.contributes.credentials;
   assert.match(slot.id, CONTRIB_ID);
   assert.equal(slot.kind, "imap");
-  assert.deepEqual(slot.multiple, { max: 5 });
+  // No plugin-declared ceiling: 1.10.0 accepts `multiple: {}`, and the host keeps
+  // its own safety bound of 100 instances.
+  assert.deepEqual(slot.multiple, {});
+  assert.equal("max" in slot.multiple, false);
   assert.equal(slot.labelField, "username", "an instance is labelled by the address the user typed");
   const keys = slot.fields.map((field) => field.key);
   // The set is frozen: the host drops an instance whose declared fields are not
@@ -165,18 +169,12 @@ test("the Inbox panel is one sidebar view with a localized title and a real entr
   assert.ok(exists("view/vendor/purify.es.mjs"));
 });
 
-test("the fallback poll is one interval, at least a minute long", () => {
-  assert.equal(manifest.contributes.schedules.length, 1);
-  const [schedule] = manifest.contributes.schedules;
-  assert.match(schedule.id, CONTRIB_ID);
-  assert.ok(localized(schedule.title));
-  const hasEvery = schedule.every !== undefined;
-  const hasCron = schedule.cron !== undefined;
-  assert.equal(hasEvery !== hasCron, true, "exactly one of every or cron");
-  assert.equal(schedule.every, "15m");
-  const [, amount, unit] = /^([1-9][0-9]*)([smhd])$/.exec(schedule.every);
-  const minutes = { s: 1 / 60, m: 1, h: 60, d: 1440 }[unit] * Number(amount);
-  assert.ok(minutes >= 1, "the host's floor is one minute");
+test("the plugin polls itself instead of asking the host for a schedule", () => {
+  // Every account is checked by the plugin's own timer (three minutes, staggered,
+  // through one four-session gate), so a host schedule would be a second, slower
+  // source of ticks for the same work.
+  assert.equal(manifest.contributes.schedules, undefined);
+  assert.equal(manifest.permissions.includes("scheduler"), false);
 });
 
 test("the command a notification links to is declared and registered", () => {
@@ -225,8 +223,8 @@ test("both contract locales carry every display string", () => {
 test("the safety notes describe the panel honestly, in both languages", () => {
   const en = manifest.i18n.en.safetyNotes;
   const zh = manifest.i18n["zh-CN"].safetyNotes;
-  // Several mailboxes, and the panel.
-  assert.match(en, /five mailboxes/i);
+  // No account ceiling, and the panel.
+  assert.match(en, /no mailbox limit in this plugin/i);
   assert.match(en, /Inbox panel/);
   // Bodies only on click, capped, in memory.
   assert.match(en, /only when you open that message/);
@@ -244,18 +242,21 @@ test("the safety notes describe the panel honestly, in both languages", () => {
   assert.match(en, /does not send mail/);
   assert.match(en, /No model is called/);
   // And the Chinese notes say the same things.
-  assert.match(zh, /最多 5 个邮箱/);
+  assert.match(zh, /不设账号上限/);
   assert.match(zh, /只有你在「收件箱」面板里点开/);
   assert.match(zh, /无脚本/);
   assert.match(zh, /远程图片默认拦截/);
   // The other way in: a server the user typed, and the protocol with no flags.
   assert.match(en, /a server you typed into the account form yourself/);
   assert.match(en, /the app injects the password only into the endpoint stored in the same instance/);
-  assert.match(en, /polled every five minutes, never sooner than the server's LOGIN-DELAY/);
+  assert.match(en, /once every three minutes the plugin opens one short session per account/);
+  assert.match(en, /never more than four sessions at a time/);
+  assert.match(en, /never polled sooner than the server's LOGIN-DELAY/);
   assert.match(en, /never sends DELE/);
   assert.match(en, /POP3 reports no flags/);
   assert.match(zh, /自己填写的服务器/);
   assert.match(zh, /只会把该实例的密码注入同一个实例里记录的地址/);
+  assert.match(zh, /同时最多 4 条/);
   assert.match(zh, /不会早于服务器要求的 LOGIN-DELAY/);
   assert.match(zh, /从不向 POP3 服务器发送 DELE/);
   assert.match(zh, /POP3 不报告任何标记/);

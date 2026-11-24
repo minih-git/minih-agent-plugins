@@ -24,26 +24,18 @@ test("a command the server ignores rejects instead of waiting forever", async ()
   assert.equal(session.closed, true, "a timed-out connection is not reused");
 });
 
-test("IDLE is entered and left once, and a second DONE is not sent", async () => {
+test("the session has no IDLE surface: a poll only needs commands", async () => {
   const server = createFakeServer({ uidNext: 1 });
   const session = connect(server, { timeoutMs: 200 });
   await session.capabilities();
-  await session.select("INBOX");
-  await session.idleStart();
-  assert.equal(session.idling, true);
-  await session.idleStop();
-  await session.idleStop();
-  assert.equal(session.idling, false);
-  assert.equal(server.sentLines.filter((line) => line === "DONE").length, 1);
-});
-
-test("a command while idling is refused rather than interleaved", async () => {
-  const server = createFakeServer({ uidNext: 1 });
-  const session = connect(server, { timeoutMs: 200 });
-  await session.capabilities();
-  await session.idleStart();
-  await assert.rejects(() => session.searchNew({ afterUid: 0 }), (error) => error.code === "IMAP_BUSY");
-  await session.idleStop();
+  // Polling replaced the connected design, so the IDLE half of the client is
+  // gone rather than dormant: a mailbox that offers IDLE is still polled.
+  assert.equal(typeof session.idleStart, "undefined");
+  assert.equal(typeof session.idleStop, "undefined");
+  assert.equal(typeof session.onExists, "undefined");
+  assert.equal(session.idling, undefined);
+  await session.close();
+  assert.equal(server.sentLines.some((line) => /IDLE|DONE/.test(line)), false);
 });
 
 test("two closes at once perform one teardown", async () => {
