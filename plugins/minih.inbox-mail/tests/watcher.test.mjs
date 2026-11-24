@@ -288,14 +288,14 @@ test("only BODY.PEEK is used, and nothing that changes the mailbox is ever sent"
   }
 });
 
-test("a mailbox that changes provider reconnects when the setting moves", async () => {
+test("an account whose provider changed reconnects instead of dialling the old server", async () => {
   const server = createFakeServer({ uidNext: 1 });
   const harness = createHarness(server, { settings: SETTINGS });
   try {
     harness.watcher.start();
     await waitFor(() => server.idling, { label: "the first connection" });
     const before = harness.connectAttempts;
-    harness.overrides.provider = "netease163";
+    harness.setProvider("netease163");
     harness.watcher.poke();
     await waitFor(() => harness.connectAttempts > before, { label: "a reconnect for the new provider" });
   } finally {

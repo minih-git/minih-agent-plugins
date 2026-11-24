@@ -3,64 +3,57 @@
 /**
  * Inbox mail — Minih-Agent-Desktop plugin entry (plugin process).
  *
- * The plugin watches one mailbox the user configured in Settings and turns what
- * arrives into notification-centre entries: one `alert` for a message the rules
- * consider important, one rolling `digest` for everything else. It is the first
- * information source of a resident assistant, and it is deliberately the
- * cheapest kind: no model call, no token, no provider request — collection,
- * de-duplication, the rule and the notification are all local and deterministic.
- *
- * Read-only, by construction rather than by promise. The only IMAP verbs this
- * plugin sends are `CAPABILITY`, `ID`, `SELECT INBOX`, `UID SEARCH`, `UID FETCH`
- * with `BODY.PEEK`, `IDLE`, `DONE` and `LOGOUT`; there is no path in this
- * plugin that sends mail, deletes it, moves it or changes its flags. The user's
- * password never reaches this file either: the host performs the login and hands
- * over an already-authenticated socket.
+ * The plugin watches the mailboxes the user added (up to five, each a host-owned
+ * credential instance) and turns what arrives into notification-centre entries:
+ * one `alert` for a message the rules consider important, one rolling `digest`
+ * per account for everything else. The Inbox panel in the sidebar shows the same
+ * accounts together, opens one message body when the user clicks it, and changes
+ * a read or star flag only when the user clicks that.
  *
  * Division of responsibility with the host:
  *
- *   - the host holds the credential (`credentials.use`), opens and keeps the
- *     socket (`net.tcp`), owns the timer (`scheduler`) and stores the rows
- *     (`notify.center`);
- *   - this file owns the protocol (`lib/session.js`), the waiting and reconnecting
- *     (`lib/watcher.js`), the rules (`lib/rules.js`) and the small state file.
+ *   - the host holds the credentials (`credentials.use`), opens and keeps each
+ *     socket (`net.tcp`), owns the timer (`scheduler`), stores the rows
+ *     (`notify.center`) and opens the browser (`shell.openExternal`);
+ *   - this file owns the plugin's own data file, the account list it derives from
+ *     the host's, and the two surfaces the plugin exposes: the `check-now`
+ *     command and the panel channels (`onPanelInvoke`).
  *
- * What is stored, and nothing else: the UID cursor (`UIDVALIDITY` + highest
- * handled UID), the Message-IDs already reported (bounded), and the digest queue
- * waiting for its interval. No message body is ever fetched, and no message text
- * is copied into the state file.
+ * What is stored, and nothing else: per account the UID cursor (`UIDVALIDITY` +
+ * highest handled UID), the Message-IDs already reported (bounded), the digest
+ * queue, the last error, and the envelope of the newest messages the panel shows.
+ * A message body is fetched only when the user opens that message, is kept in
+ * memory for the answer, and never reaches this file.
  */
 
 const fs = require("node:fs/promises");
 const path = require("node:path");
 
+const accountsFile = require("./lib/accounts");
 const messages = require("./lib/messages");
 const providers = require("./lib/providers");
-const { createSession } = require("./lib/session");
 const { normalizeSettings } = require("./lib/settings");
-const store = require("./lib/store");
-const { createWatcher } = require("./lib/watcher");
+const { createRuntime, SLOT_ID } = require("./lib/runtime");
 const { version: PLUGIN_VERSION } = require("./package.json");
 
-/** The one credential slot the user fills in. */
-const SLOT_ID = "mailbox";
-const STATE_FILE = "inbox-mail.json";
+const STATE_FILE = accountsFile.FILE;
+const LEGACY_FILE = accountsFile.LEGACY_FILE;
 /** The command a notification links to, and the one the palette shows. */
 const COMMAND_ID = "check-now";
-/** One row for the setup problem, updated in place instead of added again. */
+/** One row for "no mailbox at all", updated in place instead of added again. */
 const CREDENTIALS_KEY = "minih.inbox-mail:credentials";
-/** One row for the roll-up; re-posting it updates that row. */
-const DIGEST_KEY = "minih.inbox-mail:digest";
+
 let host = null;
 let locale = "en";
-let state = store.emptyState();
 let settingsCache = normalizeSettings({});
-let watcher = null;
+/** The sheet as the host returned it, which is the only place a 0.1.0 provider survives. */
+let rawSettings = {};
+let root = accountsFile.emptyRoot();
+let runtime = null;
 let subscriptions = [];
 let writing = Promise.resolve();
-let setupNoticePosted = false;
-/** The transport of the current connection, closed by `onUnload`. */
-let connection = null;
+/** Rows posted once per load, so a retry loop cannot fill the notification list. */
+const postedRows = new Set();
 
 function text() {
   return messages.messages(locale);
@@ -86,37 +79,59 @@ async function refreshLocale() {
 
 async function readSettings() {
   try {
-    settingsCache = normalizeSettings(await host.plugin.getSettings());
+    rawSettings = (await host.plugin.getSettings()) ?? {};
+    settingsCache = normalizeSettings(rawSettings);
   } catch (error) {
     log("warn", `could not read settings: ${error?.message ?? error}`);
+    rawSettings = {};
     settingsCache = normalizeSettings({});
   }
   return settingsCache;
 }
 
-async function loadState() {
+async function dataPath(name) {
+  return path.join(await host.plugin.getDataPath(), name);
+}
+
+/** Read the accounts file. `null` means "this plugin has never run here". */
+async function readRoot() {
   try {
-    const file = path.join(await host.plugin.getDataPath(), STATE_FILE);
-    state = store.normalizeState(JSON.parse(await fs.readFile(file, "utf8")));
+    const raw = await fs.readFile(await dataPath(STATE_FILE), "utf8");
+    return accountsFile.normalizeRoot(JSON.parse(raw));
   } catch {
-    // A missing or unreadable file is the first run, not a failure: the cursor
-    // is rebuilt from the server and nothing is reported from the archive.
-    state = store.emptyState();
+    return null;
+  }
+}
+
+/** The 0.1.0 state file, if this is an upgrade from a single mailbox. */
+async function readLegacy() {
+  try {
+    return JSON.parse(await fs.readFile(await dataPath(LEGACY_FILE), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+async function removeLegacy() {
+  try {
+    await fs.rm(await dataPath(LEGACY_FILE), { force: true });
+  } catch (error) {
+    log("warn", `could not remove the 0.1.0 state file: ${error?.message ?? error}`);
   }
 }
 
 /**
- * Save the whole state file, one writer at a time.
+ * Save the whole file, one writer at a time.
  *
  * Two overlapping writes of a whole JSON document would let the older snapshot
  * win, which for a UID cursor means re-reporting mail that was already handled.
  */
-function persist(next) {
+function persist() {
   writing = writing
     .then(async () => {
-      const file = path.join(await host.plugin.getDataPath(), STATE_FILE);
+      const file = await dataPath(STATE_FILE);
       await fs.mkdir(path.dirname(file), { recursive: true });
-      await fs.writeFile(file, JSON.stringify(next, null, 2), "utf8");
+      await fs.writeFile(file, JSON.stringify(root, null, 2), "utf8");
     })
     .catch((error) => {
       log("warn", `could not write the mailbox state: ${error?.message ?? error}`);
@@ -125,136 +140,34 @@ function persist(next) {
 }
 
 /**
- * Wrap the host's TCP handle as the stream `lib/session.js` speaks.
+ * Move the 0.1.0 mailbox under the instance the host migrated it to.
  *
- * The host owns the socket and delivers `net:tcp:*` events for it; this adapter
- * filters by `connectionId` (the events are per plugin, not per connection) and
- * unsubscribes when the connection ends, so a reconnect cannot leave the old
- * listener feeding bytes into a dead session.
- */
-function wrapTransport(connectionId) {
-  const dataListeners = new Set();
-  const closeListeners = new Set();
-  let finished = false;
-
-  const onData = (event) => {
-    if (!event || event.connectionId !== connectionId) return;
-    for (const listener of dataListeners) {
-      try {
-        listener(event.data);
-      } catch (error) {
-        log("warn", `transport data handler failed: ${error?.message ?? error}`);
-      }
-    }
-  };
-  const finish = (error) => {
-    if (finished) return;
-    finished = true;
-    host.events.off("net:tcp:data", onData);
-    host.events.off("net:tcp:close", onClose);
-    host.events.off("net:tcp:error", onError);
-    for (const listener of closeListeners) {
-      try {
-        listener(error);
-      } catch (failure) {
-        log("warn", `transport close handler failed: ${failure?.message ?? failure}`);
-      }
-    }
-    closeListeners.clear();
-    dataListeners.clear();
-  };
-  const onClose = (event) => {
-    if (!event || event.connectionId !== connectionId) return;
-    finish(coded("IMAP_CLOSED", "the mailbox server closed the connection"));
-  };
-  const onError = (event) => {
-    if (!event || event.connectionId !== connectionId) return;
-    finish(coded(String(event.code ?? "CONNECT_FAILED"), String(event.message ?? "socket error")));
-  };
-
-  host.events.on("net:tcp:data", onData);
-  host.events.on("net:tcp:close", onClose);
-  host.events.on("net:tcp:error", onError);
-
-  const transport = {
-    send: async (data) => {
-      if (finished) throw coded("IMAP_CLOSED", "the connection is closed");
-      await host.net.tcp.send({ connectionId, data });
-    },
-    close: async () => {
-      if (finished) return;
-      finished = true;
-      host.events.off("net:tcp:data", onData);
-      host.events.off("net:tcp:close", onClose);
-      host.events.off("net:tcp:error", onError);
-      await host.net.tcp.close({ connectionId }).catch(() => undefined);
-    },
-    onData: (listener) => {
-      dataListeners.add(listener);
-      return () => dataListeners.delete(listener);
-    },
-    onClose: (listener) => {
-      closeListeners.add(listener);
-      return () => closeListeners.delete(listener);
-    },
-  };
-  connection = transport;
-  return transport;
-}
-
-/**
- * Open one authenticated IMAP session.
+ * The host turns the old single credential value into the first instance of the
+ * slot, so an upgrade shortly after 0.1.0 has exactly one instance and its old
+ * cursor, reported IDs and provider can be attributed without guessing. With two
+ * accounts there is no honest answer, so the old file is left untouched: losing a
+ * cursor costs nothing but re-reporting, and guessing could silence a mailbox.
  *
- * The endpoint comes from the provider table, never from a setting: the host
- * refuses any endpoint outside `manifest.net.tcp` anyway, and the user chose a
- * provider rather than a server.
+ * Re-entrant by construction: the old file is removed only after the new file is
+ * on disk, so a crash in between repeats the same migration into the same account.
  */
-async function connectMailbox() {
-  const provider = providers.providerFor(settingsCache.provider);
-  if (provider.auth !== "password") {
-    throw coded("PROVIDER_NEEDS_OAUTH", `${provider.label} requires OAuth2 for IMAP`);
+async function migrateLegacy(instances) {
+  const legacy = await readLegacy();
+  if (!legacy) return false;
+  if (instances.length !== 1) return false;
+  const instanceId = instances[0].instanceId;
+  // The 0.1.0 provider was a global setting. A host that still returns it is
+  // the best evidence of which service this mailbox belongs to; without it the
+  // address's domain has the next say, and otherwise the panel asks.
+  accountsFile.adoptLegacy(root, instanceId, legacy, rawSettings.provider);
+  if (!root.providers[instanceId]) {
+    const email = instances[0].publicFields?.username ?? instances[0].label ?? "";
+    const inferred = providers.inferProviderId(email);
+    if (inferred) accountsFile.setProvider(root, instanceId, inferred);
   }
-  if (typeof host.net?.tcp?.connect !== "function") {
-    throw coded("UNSUPPORTED", "this app version has no net.tcp");
-  }
-  const slots = await host.credentials.list();
-  if (!slots.some((slot) => slot.id === SLOT_ID && slot.configured)) {
-    throw coded("CREDENTIAL_NOT_CONFIGURED", "the mailbox credential slot is empty");
-  }
-  const handle = await host.net.tcp.connect({
-    endpoint: { host: provider.host, port: provider.port },
-    credentialRef: SLOT_ID,
-  });
-  const transport = wrapTransport(handle.connectionId);
-  return createSession(transport, { log });
-}
-
-/**
- * One alert row per message the rules picked out.
- *
- * The `dedupeKey` is the message's own identity, so a reconnect, a second copy or
- * a restart updates the same row instead of adding another one.
- */
-function notifyAlert(message) {
-  const strings = text();
-  return postRow({
-    kind: "alert",
-    title: messages.clamp(message.subject || strings.noSubject, messages.MAX_TITLE),
-    body: messages.alertBody(message, strings, locale),
-    dedupeKey: messages.clamp(store.messageKey(message), 240),
-  });
-}
-
-/** One rolling row for the batch. */
-function notifyDigest(entries) {
-  if (!entries.length) return Promise.resolve();
-  const strings = text();
-  return postRow({
-    kind: "digest",
-    title: messages.clamp(strings.digestTitle(entries.length), messages.MAX_TITLE),
-    body: messages.digestBody(entries, strings),
-    dedupeKey: DIGEST_KEY,
-  });
+  await persist();
+  await removeLegacy();
+  return true;
 }
 
 /** Every row this plugin writes links to its one command. */
@@ -265,50 +178,131 @@ function postRow(row) {
 }
 
 /**
- * Say once per plugin load why nothing is arriving.
+ * Say once per plugin load why nothing is arriving for one account.
  *
- * The user has no panel to look at in this slice, so the notification centre is
- * the only surface that can explain a missing credential; re-posting the same
- * dedupe key updates that row instead of filling the list.
+ * The notification centre is the surface a user sees without opening the panel,
+ * so a mailbox that cannot connect has to explain itself there. Re-posting the
+ * same dedupe key updates that row instead of filling the list.
  */
-function postSetupNotice(error) {
-  if (setupNoticePosted) return Promise.resolve();
-  setupNoticePosted = true;
+function postSetupNotice(account, error) {
+  const key = `${CREDENTIALS_KEY}:${account?.instanceId ?? "none"}`;
+  if (postedRows.has(key)) return Promise.resolve();
+  postedRows.add(key);
   const strings = text();
   return postRow({
     kind: "alert",
     title: messages.clamp(strings.needsSetup, messages.MAX_TITLE),
     body: messages.clamp(messages.setupReason(error?.code, strings), messages.MAX_BODY),
+    dedupeKey: key,
+  });
+}
+
+/** One row for a mailbox that still needs its provider chosen in the panel. */
+function postProviderNotice(account) {
+  const key = `${CREDENTIALS_KEY}:provider:${account.instanceId}`;
+  if (postedRows.has(key)) return Promise.resolve();
+  postedRows.add(key);
+  const strings = text();
+  return postRow({
+    kind: "alert",
+    title: messages.clamp(strings.needsProvider, messages.MAX_TITLE),
+    body: messages.clamp(strings.needsProviderBody(account.label || account.email), messages.MAX_BODY),
+    dedupeKey: key,
+  });
+}
+
+/**
+ * One explanation when the plugin has no mailbox at all.
+ *
+ * A fresh install has nothing to watch, and a plugin that stays silent looks
+ * broken. This is the one row the 0.1.0 release posted for a missing credential,
+ * kept under the same key so an upgrade replaces it rather than adding a second.
+ */
+function postNoAccountNotice() {
+  if (postedRows.has(CREDENTIALS_KEY)) return Promise.resolve();
+  postedRows.add(CREDENTIALS_KEY);
+  const strings = text();
+  return postRow({
+    kind: "alert",
+    title: messages.clamp(strings.needsSetup, messages.MAX_TITLE),
+    body: messages.clamp(messages.setupReason("CREDENTIAL_NOT_CONFIGURED", strings), messages.MAX_BODY),
     dedupeKey: CREDENTIALS_KEY,
   });
 }
 
-function onError(error) {
-  const code = String(error?.code ?? "");
-  if (
-    code === "CREDENTIAL_NOT_CONFIGURED" ||
-    code === "CREDENTIAL_REJECTED" ||
-    code === "CREDENTIAL_UNSUPPORTED" ||
-    code === "CREDENTIAL_UNAVAILABLE" ||
-    code === "PROVIDER_NEEDS_OAUTH" ||
-    code === "UNSUPPORTED"
-  ) {
-    void postSetupNotice(error);
+async function announceAccounts() {
+  const list = runtime?.accounts ?? [];
+  if (!list.length) {
+    await postNoAccountNotice();
     return;
   }
-  if (code === "PERMISSION_DENIED") {
-    log("warn", `the host refused the mailbox connection: ${error.message}`);
+  for (const account of list) {
+    if (!account.provider) await postProviderNotice(account);
   }
 }
 
+/** The `check-now` command: look at every connected account, then say what happened. */
 async function onCommand() {
-  if (!host) throw coded("PLUGIN_INVALID", "the plugin is not loaded");
+  if (!runtime) throw coded("PLUGIN_INVALID", "the plugin is not loaded");
   await refreshLocale();
   await readSettings();
-  const status = await watcher.checkNow();
+  const status = await runtime.checkNow();
   await host.ui
     ?.showToast?.(messages.checkedToast(status, text()), "info")
     .catch?.(() => undefined);
+}
+
+/**
+ * Panel → plugin.
+ *
+ * Every answer is a value, not a throw: the panel maps `code` to a sentence in
+ * the user's language, and a rejected bridge call would only give it a string it
+ * cannot translate. The bridge's own reserved channels are handled by the host;
+ * these names are this plugin's own.
+ */
+async function onPanelInvoke(channel, payload) {
+  if (!runtime) return { ok: false, code: "PLUGIN_NOT_LOADED", message: "the plugin is not loaded" };
+  try {
+    switch (String(channel)) {
+      case "inbox.snapshot": {
+        await refreshLocale();
+        return { ok: true, snapshot: runtime.snapshot(locale) };
+      }
+      case "inbox.addAccount": {
+        const result = await runtime.addAccount();
+        await announceAccounts();
+        return { ok: true, ...result };
+      }
+      case "inbox.removeAccount": {
+        const result = await runtime.removeAccount(payload?.instanceId);
+        await announceAccounts();
+        return { ok: true, ...result };
+      }
+      case "inbox.setProvider": {
+        const result = await runtime.setProvider(String(payload?.instanceId ?? ""), payload?.providerId);
+        await announceAccounts();
+        return { ok: true, ...result };
+      }
+      case "inbox.check": {
+        const result = await runtime.checkNow(payload?.instanceId ? String(payload.instanceId) : undefined);
+        return { ok: true, ...result };
+      }
+      case "inbox.openMessage":
+        return { ok: true, message: await runtime.openMessage(payload ?? {}) };
+      case "inbox.setFlag":
+        return { ok: true, ...(await runtime.setFlag(payload ?? {})) };
+      case "inbox.openWebmail":
+        return { ok: true, ...(await runtime.openWebmail(payload?.instanceId)) };
+      case "inbox.openExternal":
+        return { ok: true, ...(await runtime.openExternal(payload?.url)) };
+      default:
+        throw coded("UNSUPPORTED", `unknown panel channel: ${String(channel)}`);
+    }
+  } catch (error) {
+    const code = String(error?.code ?? "FAILED");
+    log("warn", `panel ${String(channel)} failed: ${code} ${error?.message ?? error}`);
+    return { ok: false, code, message: messages.clamp(String(error?.message ?? code), messages.MAX_BODY) };
+  }
 }
 
 async function onLoad() {
@@ -319,21 +313,30 @@ async function onLoad() {
     throw coded("PLUGIN_INVALID", "plugin host API is missing (globalThis.pi)");
   }
   await refreshLocale();
-  await loadState();
   await readSettings();
 
-  watcher = createWatcher({
-    connect: connectMailbox,
-    state,
-    persist,
-    settings: () => normalizeSettings(settingsCache),
-    notify: { alert: notifyAlert, digest: notifyDigest },
-    onError,
+  const stored = await readRoot();
+  root = stored ?? accountsFile.emptyRoot();
+
+  const slots = await host.credentials.list();
+  const slot = slots.find((entry) => entry.id === SLOT_ID) ?? null;
+  const instances = Array.isArray(slot?.instances) ? slot.instances : [];
+  if (!stored) await migrateLegacy(instances);
+
+  runtime = createRuntime({
+    host,
+    root,
     log,
-    now: () => Date.now(),
-    timers: { setTimeout, clearTimeout },
+    locale: () => locale,
+    text,
+    settings: () => normalizeSettings(settingsCache),
+    persist,
+    postRow,
+    postSetupNotice,
     clientId: { name: "Minih Agent Inbox Mail", vendor: "minih", version: PLUGIN_VERSION },
   });
+  await runtime.load();
+  await announceAccounts();
 
   if (typeof host.commands?.register === "function") {
     await host.commands.register({
@@ -349,7 +352,7 @@ async function onLoad() {
     {
       event: "schedule:fire",
       handler: () => {
-        watcher?.poke();
+        for (const account of runtime?.accounts ?? []) account.watcher?.poke();
       },
     },
     {
@@ -357,14 +360,28 @@ async function onLoad() {
       handler: () => {
         void (async () => {
           await readSettings();
-          watcher?.poke();
+          for (const account of runtime?.accounts ?? []) account.watcher?.poke();
+        })();
+      },
+    },
+    {
+      event: "credentials:changed",
+      handler: () => {
+        // The host owns the account list: an instance added in Settings or
+        // through the panel is a mailbox to start watching, and a removed one is
+        // a watcher to close and state to forget.
+        void (async () => {
+          try {
+            await runtime?.refresh();
+            await announceAccounts();
+          } catch (error) {
+            log("warn", `could not re-read the mailbox list: ${error?.message ?? error}`);
+          }
         })();
       },
     },
   ];
   for (const { event, handler } of subscriptions) host.events.on(event, handler);
-
-  watcher.start();
 }
 
 async function onUnload() {
@@ -376,12 +393,11 @@ async function onUnload() {
     }
   }
   subscriptions = [];
-  await watcher?.stop().catch(() => undefined);
-  watcher = null;
-  await connection?.close?.().catch(() => undefined);
-  connection = null;
+  await runtime?.unload().catch(() => undefined);
+  runtime = null;
   await writing;
+  postedRows.clear();
   host = null;
 }
 
-module.exports = { onLoad, onUnload };
+module.exports = { onLoad, onPanelInvoke, onUnload };

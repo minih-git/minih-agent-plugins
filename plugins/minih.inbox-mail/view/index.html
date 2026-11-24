@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <!--
+    The panel's own policy. `frame-src 'self'` is what the reading pane needs for
+    its `srcdoc` frame: the frame itself is sandboxed empty and carries its own
+    CSP, so it can neither script nor load anything remote by default.
+  -->
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; frame-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'"
+  />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>收件箱 · Inbox</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="app" id="app">
+    <header class="topbar">
+      <div class="topbar-title">
+        <h1 id="page-title">收件箱</h1>
+        <span class="counts" id="counts"></span>
+      </div>
+      <div class="topbar-actions">
+        <button type="button" class="btn" id="btn-check"></button>
+        <button type="button" class="btn btn-primary" id="btn-add"></button>
+      </div>
+    </header>
+
+    <p class="banner is-hidden" id="banner" role="alert"></p>
+
+    <div class="columns">
+      <aside class="accounts" aria-labelledby="accounts-title">
+        <div class="column-head">
+          <h2 id="accounts-title">邮箱账号</h2>
+          <span class="hint" id="accounts-hint"></span>
+        </div>
+        <ul class="account-list" id="account-list"></ul>
+        <p class="empty" id="accounts-empty" hidden></p>
+      </aside>
+
+      <main class="list" aria-labelledby="list-title">
+        <div class="column-head">
+          <h2 id="list-title" class="visually-hidden">邮件列表</h2>
+          <label class="visually-hidden" for="account-filter">筛选账号</label>
+          <select id="account-filter"></select>
+        </div>
+        <div class="groups" id="groups">
+          <section class="group" id="group-important" hidden>
+            <h3 class="group-title" id="group-important-title"></h3>
+            <ul class="mail-list" id="list-important"></ul>
+          </section>
+          <section class="group" id="group-other" hidden>
+            <h3 class="group-title" id="group-other-title"></h3>
+            <ul class="mail-list" id="list-other"></ul>
+          </section>
+        </div>
+        <p class="empty" id="messages-empty" hidden></p>
+      </main>
+
+      <section class="reader" id="reader" aria-live="polite">
+        <p class="empty" id="reader-empty"></p>
+        <div class="reader-state is-hidden" id="reader-state"></div>
+        <div class="reader-message is-hidden" id="reader-message">
+          <header class="reader-head">
+            <h2 id="reader-subject"></h2>
+            <p class="reader-meta">
+              <span id="reader-from"></span>
+              <span class="dot" aria-hidden="true">·</span>
+              <span id="reader-time"></span>
+              <span class="dot" aria-hidden="true">·</span>
+              <span id="reader-account"></span>
+            </p>
+            <div class="reader-actions" id="reader-actions"></div>
+            <p class="reader-notice is-hidden" id="reader-notice"></p>
+          </header>
+          <div class="reader-body" id="reader-body"></div>
+          <div class="reader-extras" id="reader-extras"></div>
+        </div>
+      </section>
+    </div>
+  </div>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

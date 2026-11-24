@@ -24,14 +24,33 @@ test("both contract locales are complete, with the same keys", () => {
   }
 });
 
-test("an alert body names the sender and the time, never the message text", () => {
+test("an alert body names the sender, the time and the account, never the message text", () => {
   const body = messages.alertBody(
     { from: { name: "Boss", address: "boss@example.com" }, receivedAt: Date.UTC(2026, 10, 14, 2, 0) },
     en,
     "en",
+    "owner@example.com",
   );
-  assert.match(body, /^Boss · /);
+  const lines = body.split("\n");
+  assert.match(lines[0], /^Boss · /);
+  assert.equal(lines[1], "owner@example.com", "the account is what tells two mailboxes apart");
   assert.equal(body.includes("body"), false);
+});
+
+test("without an account label the body stays one line", () => {
+  const body = messages.alertBody({ from: { address: "a@b.c" } }, en, "en");
+  assert.equal(body.split("\n").length, 1);
+});
+
+test("a digest title carries the count and the account", () => {
+  assert.equal(messages.digestTitle(3, en, "owner@example.com"), "3 new messages · owner@example.com");
+  assert.equal(messages.digestTitle(1, en), "1 new message");
+  assert.equal(messages.digestTitle(2, zh, "x@y.com"), "新邮件 2 封 · x@y.com");
+});
+
+test("a digest body ends with the account it was collected from", () => {
+  const body = messages.digestBody([{ from: { address: "a@b.c" }, subject: "s" }], en, "owner@example.com");
+  assert.equal(body.split("\n").pop(), "owner@example.com");
 });
 
 test("a message without a sender name falls back to the address, then to a placeholder", () => {
@@ -76,10 +95,16 @@ test("the setup reason names the actual failure", () => {
   assert.match(messages.setupReason("CREDENTIAL_NOT_CONFIGURED", zh), /凭据/);
 });
 
-test("the command's toast says what happened, in the user's language", () => {
-  assert.equal(messages.checkedToast({ checked: true, handled: 0 }, en), en.checkedEmpty);
-  assert.equal(messages.checkedToast({ checked: true, handled: 2 }, en), en.checkedWithMail(2));
+test("the command's toast says what happened, for every account it looked at", () => {
+  assert.equal(messages.checkedToast({ checked: true, handled: 0, accounts: 2 }, en), en.checkedEmpty(2));
+  assert.equal(messages.checkedToast({ checked: true, handled: 2, accounts: 2 }, en), en.checkedWithMail(2, 2));
   assert.equal(messages.checkedToast({ checked: false, watched: true }, en), en.checking);
   assert.equal(messages.checkedToast({ checked: false, watched: false }, en), en.notConnected);
-  assert.equal(messages.checkedToast({ checked: true, handled: 1 }, zh), "已检查：新邮件 1 封");
+  assert.equal(messages.checkedToast({ checked: true, handled: 1, accounts: 1 }, zh), "已检查 1 个账号：新邮件 1 封");
+});
+
+test("the per-account setup reason covers the instance codes", () => {
+  assert.match(messages.setupReason("CREDENTIAL_INSTANCE_REQUIRED", en), /credential/);
+  assert.match(messages.setupReason("PROVIDER_UNSELECTED", en), /OAuth2/);
+  assert.match(messages.setupReason("PROVIDER_UNSELECTED", zh), /OAuth2/);
 });

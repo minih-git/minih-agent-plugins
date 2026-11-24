@@ -265,7 +265,19 @@ function parseEnvelope(list) {
 }
 
 function readFetchItems(list) {
-  const item = { flags: [], uid: null, internalDate: null, envelope: null, headers: null };
+  const item = {
+    flags: [],
+    uid: null,
+    internalDate: null,
+    envelope: null,
+    headers: null,
+    /** The whole message, when the fetch asked for `BODY[]`. */
+    body: null,
+    /** `RFC822.SIZE`, the message's real size, so a capped fetch knows what it lost. */
+    size: null,
+    /** True when the server sent a partial section (`BODY[]<0>`). */
+    partial: false,
+  };
   for (let i = 0; i < list.length; i += 1) {
     const key = list[i];
     const value = list[i + 1];
@@ -291,10 +303,32 @@ function readFetchItems(list) {
       i += 1;
       continue;
     }
+    if (upper === "RFC822.SIZE") {
+      item.size = typeof value === "string" ? Number(value) : null;
+      i += 1;
+      continue;
+    }
     // The server echoes the section without the `.PEEK` that asked for it, so
-    // the check is on the prefix, not on an exact name.
-    if (upper.startsWith("BODY[") || upper.startsWith("RFC822.HEADER")) {
+    // the check is on the prefix, not on an exact name. An empty section name is
+    // the whole message; a named one is the header block this plugin asks for.
+    if (upper.startsWith("BODY[")) {
+      const section = /^BODY\[([^\]]*)\]/i.exec(key);
+      if (section && section[1].trim() === "") {
+        item.body = Buffer.isBuffer(value) ? value : null;
+        item.partial = /^BODY\[\s*\]<\d+>/i.test(key);
+      } else {
+        item.headers = Buffer.isBuffer(value) ? value : null;
+      }
+      i += 1;
+      continue;
+    }
+    if (upper.startsWith("RFC822.HEADER")) {
       item.headers = Buffer.isBuffer(value) ? value : null;
+      i += 1;
+      continue;
+    }
+    if (upper.startsWith("RFC822")) {
+      item.body = Buffer.isBuffer(value) ? value : null;
       i += 1;
       continue;
     }

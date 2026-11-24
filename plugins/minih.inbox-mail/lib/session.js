@@ -6,17 +6,24 @@
  * The host performs the login: by the time `net.tcp.connect` resolves, the socket
  * is inside TLS, the server has accepted the credential and the greeting, the
  * capability reply and the login exchange have all been consumed. This file
- * therefore starts at `CAPABILITY` and owns everything after it — and only
- * read-only commands:
+ * therefore starts at `CAPABILITY` and owns everything after it:
  *
- *   CAPABILITY, ID, SELECT INBOX, UID SEARCH, UID FETCH with BODY.PEEK, IDLE,
- *   DONE, LOGOUT.
+ *   CAPABILITY, ID, SELECT INBOX, UID SEARCH, UID FETCH with BODY.PEEK,
+ *   UID STORE of `\Seen` / `\Flagged`, IDLE, DONE, LOGOUT.
  *
- * There is no `STORE`, no `APPEND`, no `COPY` and no `EXPUNGE` here, on purpose.
+ * There is no `APPEND`, no `COPY`, no `EXPUNGE` and no `STORE` other than the two
+ * flags above: nothing here deletes, moves, copies or sends mail.
+ *
+ * `STORE` exists because the user asked for it: the Inbox panel offers "mark as
+ * read" and "add star", and each of those is one click that sends exactly one
+ * `STORE`. `storeFlags` is therefore only reachable from a panel action; the
+ * watcher's own collection path cannot call it, and `tests/watcher.test.mjs`
+ * asserts that collecting new mail sends no `STORE` at all.
+ *
  * `BODY.PEEK[...]` is not a stylistic choice either: the non-peek form sets
  * `\Seen` on the message, which would make the plugin a thing that marks the
- * user's mail as read behind their back. `tests/watcher.test.mjs` asserts that no
- * command this module sends could do that.
+ * user's mail as read behind their back. The body fetch for a message the user
+ * opened is a `BODY.PEEK[]` for the same reason.
  *
  * Commands are serialised: IMAP allows one command in flight, and a plugin that
  * pipelined them would have to match untagged responses to two commands at
@@ -396,6 +403,76 @@ function createSession(transport, options = {}) {
       return reply.untagged
         .filter((record) => record.kind === "fetch" && Number.isInteger(record.item.uid))
         .map((record) => record.item);
+    },
+
+    /**
+     * Fetch one whole message, capped.
+     *
+     * Only the Inbox panel calls this, and only for the message the user opened:
+     * `BODY.PEEK[]<0.N>` downloads at most N bytes and, like every peek form,
+     * leaves the `\Seen` flag alone. `RFC822.SIZE` comes along so the caller can
+     * say "this one was truncated" instead of pretending it has the whole mail.
+     */
+    async fetchMessage(uid, options2 = {}) {
+      const maxBytes = options2.maxBytes ?? 0;
+      if (!Number.isInteger(uid)) {
+        throw Object.assign(new Error("fetchMessage needs an integer UID"), { code: "INVALID_ARGUMENT" });
+      }
+      const range = maxBytes > 0 ? `<0.${maxBytes}>` : "";
+      const reply = await command(
+        `UID FETCH ${uid} (UID RFC822.SIZE BODY.PEEK[]${range})`,
+        { timeoutMs: options2.timeoutMs ?? defaultTimeoutMs },
+      );
+      const record = reply.untagged.find(
+        (entry) => entry.kind === "fetch" && entry.item.uid === uid,
+      );
+      if (!record) {
+        throw Object.assign(new Error(`message ${uid} is not in the mailbox`), { code: "IMAP_NOT_FOUND" });
+      }
+      if (!record.item.body) {
+        throw Object.assign(new Error(`the server sent no body for message ${uid}`), { code: "IMAP_NO_BODY" });
+      }
+      const size = Number.isInteger(record.item.size) ? record.item.size : record.item.body.length;
+      return {
+        uid,
+        size,
+        body: record.item.body,
+        // A capped fetch always comes back as a partial section, so the section
+        // marker alone would report every message as truncated. The real question
+        // is whether the server said the message is bigger than what it sent.
+        truncated: size > record.item.body.length,
+        flags: record.item.flags,
+      };
+    },
+
+    /**
+     * Set or clear one flag on one message: `UID STORE <uid> +FLAGS (…)`.
+     *
+     * Both the add and the remove list are written into the same command when
+     * both are non-empty, so a caller cannot accidentally spend two round trips
+     * (and two chances to fail) on one user click. The server's own `FLAGS`
+     * reply is returned when it sends one; otherwise the caller keeps what it
+     * computed, because the two agree by construction.
+     */
+    async storeFlags(uid, change, options2 = {}) {
+      if (!Number.isInteger(uid)) {
+        throw Object.assign(new Error("storeFlags needs an integer UID"), { code: "INVALID_ARGUMENT" });
+      }
+      const add = (change?.add ?? []).filter((flag) => typeof flag === "string" && flag.startsWith("\\"));
+      const remove = (change?.remove ?? []).filter((flag) => typeof flag === "string" && flag.startsWith("\\"));
+      if (!add.length && !remove.length) {
+        throw Object.assign(new Error("storeFlags needs at least one flag"), { code: "INVALID_ARGUMENT" });
+      }
+      const items = [];
+      if (add.length) items.push(`+FLAGS (${add.join(" ")})`);
+      if (remove.length) items.push(`-FLAGS (${remove.join(" ")})`);
+      const reply = await command(`UID STORE ${uid} ${items.join(" ")}`, {
+        timeoutMs: options2.timeoutMs ?? defaultTimeoutMs,
+      });
+      const record = reply.untagged.find(
+        (entry) => entry.kind === "fetch" && entry.item.uid === uid && entry.item.flags.length,
+      );
+      return { uid, flags: record ? record.item.flags : null };
     },
 
     /** Enter IDLE and resolve once the server has agreed to it. */

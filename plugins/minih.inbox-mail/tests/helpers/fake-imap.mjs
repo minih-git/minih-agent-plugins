@@ -32,8 +32,10 @@ export function message({
   date = "14-Nov-2026 10:00:00 +0800",
   extraHeaders = [],
   flags = [],
+  raw,
+  bodyText = "Hello from the test mailbox.",
 } = {}) {
-  return { uid, from, subject, rawSubject, rawName, messageId, date, extraHeaders, flags };
+  return { uid, from, subject, rawSubject, rawName, messageId, date, extraHeaders, flags, raw, bodyText };
 }
 
 function envelopeOf(entry) {
@@ -82,6 +84,10 @@ export function createFakeServer(options = {}) {
     answerDone: options.answerDone ?? true,
     /** Commands this server accepts and never answers, for the timeout path. */
     mute: options.mute ?? [],
+    /** Every body fetch, so a test can assert the cap and that it happened once. */
+    bodyFetches: [],
+    /** Every STORE the plugin sent, as `{ set, command }`. */
+    stores: [],
   };
   let dataListener = null;
   let closeListener = null;
@@ -122,7 +128,22 @@ export function createFakeServer(options = {}) {
     push(`${lines.join("\r\n")}\r\n`);
   }
 
-  function fetchReply(tag, set) {
+  /** The whole message as the server would send it, for a `BODY[]` fetch. */
+  function rawMessage(entry) {
+    if (typeof entry.raw === "string") return entry.raw;
+    const lines = [
+      `From: ${entry.rawName ?? entry.from.name ? `"${entry.rawName ?? entry.from.name}" ` : ""}<${entry.from.address}>`,
+      `Subject: ${entry.rawSubject ?? entry.subject}`,
+      `Date: ${entry.date}`,
+      `Message-ID: ${entry.messageId}`,
+      `Content-Type: text/plain; charset=utf-8`,
+      `Content-Transfer-Encoding: 8bit`,
+      ...entry.extraHeaders,
+    ];
+    return `${lines.join("\r\n")}\r\n\r\n${entry.bodyText ?? ""}\r\n`;
+  }
+
+  function fetchReply(tag, set, command = "") {
     const wanted = set
       .split(",")
       .flatMap((part) => {
@@ -135,6 +156,27 @@ export function createFakeServer(options = {}) {
       .filter((entry, index, list) => list.indexOf(entry) === index);
     if (server.failFetch) {
       push(`${tag} NO FETCH failed\r\n`);
+      return;
+    }
+    // A body fetch: the whole message, capped by the `<0.N>` octet range the
+    // plugin asked for, exactly like a real server's partial section.
+    if (/BODY\.PEEK\[\]/i.test(command)) {
+      const cap = /<0\.(\d+)>/.exec(command);
+      for (const entry of wanted) {
+        const full = Buffer.from(rawMessage(entry), "utf8");
+        // A test can claim the message is bigger than what it actually sends,
+        // which is how the plugin's truncation notice is exercised.
+        const size = server.sizeOverride ?? full.length;
+        const body = cap ? full.subarray(0, Math.min(size, Number(cap[1]))) : full;
+        server.bodyFetches.push({ uid: entry.uid, size, sent: body.length });
+        push(
+          `* ${sequenceOf(entry.uid)} FETCH (UID ${entry.uid} RFC822.SIZE ${size} ` +
+            `${cap ? "BODY[]<0>" : "BODY[]"} {${body.length}}\r\n`,
+        );
+        pushBuffer(body);
+        push(")\r\n");
+      }
+      push(`${tag} OK FETCH completed\r\n`);
       return;
     }
     for (const entry of wanted) {
@@ -166,6 +208,40 @@ export function createFakeServer(options = {}) {
     push(`${tag} OK SEARCH completed\r\n`);
   }
 
+  /**
+   * `UID STORE <set> +FLAGS (…) -FLAGS (…)`, applied to the scripted messages.
+   *
+   * The reply is the untagged `FETCH (FLAGS (…))` a real server sends, which is
+   * what the plugin writes back into its own list.
+   */
+  function storeReply(tag, command) {
+    server.stores.push(command);
+    const match = /^UID STORE\s+(\S+)\s+(.*)$/i.exec(command);
+    const set = match?.[1] ?? "";
+    const rest = match?.[2] ?? "";
+    const uids = set.split(",").flatMap((part) => {
+      const [from, to] = part.split(":");
+      const start = Number(from);
+      const end = to === undefined ? start : to === "*" ? Number.MAX_SAFE_INTEGER : Number(to);
+      return server.entries.filter((entry) => entry.uid >= start && entry.uid <= end).map((entry) => entry.uid);
+    });
+    for (const uid of uids) {
+      const entry = server.entries.find((item) => item.uid === uid);
+      if (!entry) continue;
+      for (const item of rest.matchAll(/([+-])FLAGS(?:\.SILENT)?\s*\(([^)]*)\)/gi)) {
+        const sign = item[1];
+        const flags = item[2].split(/\s+/).filter(Boolean);
+        for (const flag of flags) {
+          const has = entry.flags.includes(flag);
+          if (sign === "+" && !has) entry.flags.push(flag);
+          if (sign === "-" && has) entry.flags.splice(entry.flags.indexOf(flag), 1);
+        }
+      }
+      push(`* ${sequenceOf(entry.uid)} FETCH (UID ${entry.uid} FLAGS (${entry.flags.join(" ")}))\r\n`);
+    }
+    push(`${tag} OK STORE completed\r\n`);
+  }
+
   const transport = {
     async send(data) {
       const text = typeof data === "string" ? data : Buffer.from(data).toString("latin1");
@@ -194,7 +270,9 @@ export function createFakeServer(options = {}) {
         } else if (upper.startsWith("UID SEARCH")) {
           searchReply(tag, command);
         } else if (upper.startsWith("UID FETCH")) {
-          fetchReply(tag, /\s(\S+)\s+\(/.exec(command)?.[1] ?? "");
+          fetchReply(tag, /\s(\S+)\s+\(/.exec(command)?.[1] ?? "", command);
+        } else if (upper.startsWith("UID STORE")) {
+          storeReply(tag, command);
         } else if (upper === "IDLE") {
           idleTag = tag;
           push("+ idling\r\n");

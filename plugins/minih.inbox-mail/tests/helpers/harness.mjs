@@ -31,6 +31,8 @@ export async function waitFor(predicate, { timeout = 3000, label = "condition" }
 export function createHarness(server, options = {}) {
   const settings = normalizeSettings({ ...options.settings });
   const overrides = {};
+  /** The provider this harness account is set to; a change reconnects. */
+  let provider = options.provider ?? "qq";
   const state = options.state ?? store.emptyState();
   const notifications = [];
   const errors = [];
@@ -55,6 +57,8 @@ export function createHarness(server, options = {}) {
       persisted.push(JSON.parse(JSON.stringify(next)));
     },
     settings: () => ({ ...settings, ...overrides }),
+    provider: () => provider,
+    account: { instanceId: options.instanceId ?? "acc_00000001", label: options.label ?? "owner@example.com" },
     notify: {
       alert: (message, reasons) => notifications.push({ kind: "alert", message, reasons }),
       digest: (entries) => notifications.push({ kind: "digest", entries }),
@@ -76,6 +80,9 @@ export function createHarness(server, options = {}) {
     state,
     settings,
     overrides,
+    setProvider(next) {
+      provider = next;
+    },
     control,
     attemptTimes,
     notifications,

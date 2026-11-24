@@ -3,7 +3,11 @@
 /**
  * Keeping one mailbox watched: connect, wait, collect, notify, repeat.
  *
- * The shape of this file is the answer to three failure modes that a mail
+ * Since 0.2.0 there is one of these per account, each with its own state object
+ * and its own credential instance, so adding or removing a mailbox starts or
+ * stops exactly one loop and cannot disturb another one's cursor.
+ *
+ * The shape of this file is the answer to four failure modes that a mail
  * watcher gets wrong by default:
  *
  * - **Reconnect storms.** A dropped connection is retried with exponential
@@ -17,6 +21,12 @@
  * - **The unread archive.** On a first connection, or after the server changes
  *   `UIDVALIDITY`, the cursor is baselined at `UIDNEXT - 1`: the plugin starts
  *   watching from now and does not announce a mailbox it has never seen.
+ * - **The extra socket.** Opening a message or marking it read needs a command
+ *   while the connection is committed to `IDLE`. Rather than dial a second
+ *   connection (the host allows eight per plugin, and five accounts already use
+ *   five), a user-triggered job is queued and run by this loop in the gap
+ *   between two IDLEs. That keeps the plugin at one socket per account and makes
+ *   "at most one command in flight" true by construction.
  *
  * Everything here is injected — the socket, the clock, the timers, the state
  * file, the notifier — so the tests drive a scripted server and a fake clock and
@@ -33,8 +43,14 @@ const IDLE_RENEW_MS = 25 * 60 * 1000;
 const MAX_FETCH_PER_CYCLE = 25;
 /** Rounds per wake, so one wake on a mailbox full of new mail still terminates. */
 const MAX_ROUNDS_PER_CYCLE = 4;
-/** What this client calls itself in the RFC 2971 `ID` command. */
-const CLIENT_ID = { name: "Minih Agent Inbox Mail", vendor: "minih", version: "0.1.0" };
+/**
+ * How long a panel action waits for the account to be between two IDLEs.
+ *
+ * A body fetch or a flag change is a click the user is watching: twenty seconds
+ * is long enough for a reconnect on a slow link and short enough that the panel
+ * can say "not connected yet" instead of spinning.
+ */
+const JOB_TIMEOUT_MS = 20_000;
 
 function parseInternalDate(value) {
   if (typeof value !== "string") return null;
@@ -56,6 +72,7 @@ function toMessage(item, uidValidity) {
   const messageId = (mime.headerValue(headers, "message-id") || envelope.messageId || "").trim();
   return {
     headers,
+    flags: Array.isArray(item.flags) ? item.flags : [],
     message: {
       uid: item.uid,
       uidValidity,
@@ -75,8 +92,10 @@ function createWatcher(deps) {
     // reconnect and a long outage stops costing a handshake every few seconds.
     backoffBaseMs: deps.backoffBaseMs ?? 5_000,
     backoffMaxMs: deps.backoffMaxMs ?? 5 * 60 * 1000,
+    jobTimeoutMs: deps.jobTimeoutMs ?? JOB_TIMEOUT_MS,
   };
   const state = deps.state;
+  const accountId = deps.account?.instanceId ?? "";
   let session = null;
   let stopped = true;
   let loopPromise = null;
@@ -94,6 +113,8 @@ function createWatcher(deps) {
    * IDLE, which is exactly the case an unload must not deadlock on.
    */
   let pendingWake = null;
+  /** User-triggered work waiting for the loop to be between two IDLEs. */
+  let jobs = [];
   let providerAtConnect = null;
   let phase = "stopped";
   let lastError = null;
@@ -178,8 +199,7 @@ function createWatcher(deps) {
 
   /** Baseline or continue the cursor for the mailbox just selected. */
   async function reconcile(box) {
-    const settings = deps.settings();
-    providerAtConnect = settings.provider;
+    providerAtConnect = deps.provider();
     if (store.cursorFor(state, box.uidValidity)) return;
     const fallback = Number.isInteger(box.uidNext) ? box.uidNext - 1 : await session.maxUid();
     store.setCursor(state, box.uidValidity, Math.max(0, fallback));
@@ -202,13 +222,26 @@ function createWatcher(deps) {
     }
   }
 
-  /** Classify one batch and post what it earned. */
+  /** Classify one batch, remember it for the panel, and post what it earned. */
   async function handleItems(items, settings, uidValidity) {
     for (const item of items) {
-      const { message, headers } = toMessage(item, uidValidity);
+      const { message, flags, headers } = toMessage(item, uidValidity);
       const key = store.messageKey(message);
-      if (store.hasSeen(state, key)) continue;
       const verdict = rules.classify(message, settings, headers);
+      // The panel's list is filled here too: one pass over the same envelope the
+      // notification decided on, so the two can never disagree about importance.
+      store.recordEnvelope(state, {
+        key,
+        uid: message.uid,
+        uidValidity,
+        messageId: message.messageId,
+        from: message.from,
+        subject: message.subject,
+        receivedAt: message.receivedAt,
+        flags,
+        important: verdict.level === "alert",
+      });
+      if (store.hasSeen(state, key)) continue;
       if (verdict.level === "alert") {
         store.rememberSeen(state, key);
         await notify("alert", message, verdict.reasons);
@@ -269,9 +302,31 @@ function createWatcher(deps) {
     return handled;
   }
 
-  /** A setting that names a different server invalidates this connection. */
-  function settingsMoved() {
-    return providerAtConnect !== null && deps.settings().provider !== providerAtConnect;
+  /** A different provider for this account invalidates its connection. */
+  function providerMoved() {
+    return providerAtConnect !== null && deps.provider() !== providerAtConnect;
+  }
+
+  /**
+   * Hand the connection to one queued job, if any.
+   *
+   * Run sequentially and awaited: the job may issue a `FETCH` or a `STORE`, and
+   * the loop must not enter `IDLE` in the middle of it. A job that throws is the
+   * caller's error, never the connection's — the loop keeps watching.
+   */
+  async function drainJobs(current) {
+    while (!stopped && jobs.length) {
+      const entry = jobs.shift();
+      if (entry.done) continue;
+      entry.done = true;
+      deps.timers.clearTimeout(entry.timer);
+      try {
+        const value = await entry.job(current);
+        entry.resolve(value);
+      } catch (error) {
+        entry.reject(error);
+      }
+    }
   }
 
   /** Everything one authenticated connection does, until it ends or is stopped. */
@@ -282,7 +337,7 @@ function createWatcher(deps) {
     if (capabilities.includes("ID")) {
       // NetEase answers `SELECT` with "Unsafe Login" until a client identifies
       // itself; a refused ID is not fatal for providers that do not want one.
-      await current.identify(deps.clientId ?? CLIENT_ID).catch((error) => {
+      await current.identify(deps.clientId ?? {}).catch((error) => {
         deps.log("info", `ID refused: ${error?.message ?? error}`);
       });
     }
@@ -293,11 +348,13 @@ function createWatcher(deps) {
 
     for (;;) {
       if (stopped) return;
-      if (settingsMoved()) {
-        deps.log("info", "the provider setting changed; reconnecting");
+      if (providerMoved()) {
+        deps.log("info", "the provider for this account changed; reconnecting");
         return;
       }
       settleCycle(await collect(deps.settings()));
+      if (stopped) return;
+      await drainJobs(current);
       if (stopped) return;
       if (!canIdle) {
         // A server without IDLE is polled: a timeout is the next poll, and a
@@ -356,6 +413,7 @@ function createWatcher(deps) {
   return {
     get status() {
       return {
+        accountId,
         phase,
         watched: phase === "connected" || phase === "waiting" || phase === "error",
         lastCheckAt,
@@ -388,6 +446,35 @@ function createWatcher(deps) {
     },
 
     /**
+     * Run one command on this account's own connection.
+     *
+     * The job is queued, not started here: the loop owns the socket and hands it
+     * over only between two IDLEs, which is the only moment an IMAP command can
+     * be issued without interleaving with the server's wait. The promise settles
+     * when the job settles, or rejects with `ACCOUNT_OFFLINE` when no connection
+     * appears inside `jobTimeoutMs` — the panel turns that into "not connected
+     * yet, try again".
+     */
+    runJob(job, options2 = {}) {
+      if (stopped) this.start();
+      const timeoutMs = options2.timeoutMs ?? options.jobTimeoutMs;
+      return new Promise((resolve, reject) => {
+        const entry = { job, resolve, reject, done: false, timer: null };
+        entry.timer = deps.timers.setTimeout(() => {
+          const index = jobs.indexOf(entry);
+          if (index >= 0) jobs.splice(index, 1);
+          const error = new Error("the mailbox is not connected yet");
+          error.code = "ACCOUNT_OFFLINE";
+          reject(error);
+        }, timeoutMs);
+        if (typeof entry.timer?.unref === "function") entry.timer.unref();
+        jobs.push(entry);
+        // Wake the loop out of IDLE so the job runs on the next gap.
+        signal("poke");
+      });
+    },
+
+    /**
      * A user-initiated check.
      *
      * While the plugin is idling it cannot issue a command — IMAP allows only one
@@ -412,6 +499,16 @@ function createWatcher(deps) {
     async stop() {
       stopped = true;
       signal("stop");
+      const queued = jobs;
+      jobs = [];
+      for (const entry of queued) {
+        if (entry.done) continue;
+        entry.done = true;
+        deps.timers.clearTimeout(entry.timer);
+        const error = new Error("the account was stopped");
+        error.code = "ACCOUNT_STOPPED";
+        entry.reject(error);
+      }
       // The loop owns its connection: closing it here as well would race the one
       // the loop is already performing in its `finally`.
       await Promise.resolve(loopPromise).catch(() => undefined);
@@ -423,4 +520,4 @@ function createWatcher(deps) {
   };
 }
 
-module.exports = { createWatcher };
+module.exports = { JOB_TIMEOUT_MS, createWatcher };

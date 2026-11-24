@@ -1,8 +1,8 @@
 {
   "name": "@minih-plugin/minih.inbox-mail",
   "private": true,
-  "version": "0.1.0",
-  "description": "Watch one mailbox over IMAP and turn new mail into notification-centre entries: read-only, deterministic, no model calls.",
+  "version": "0.2.0",
+  "description": "Watch up to five mailboxes over IMAP, notify only what matters, and show them in one Inbox panel: no model calls.",
   "scripts": {
     "test": "node --test tests/*.test.mjs"
   }

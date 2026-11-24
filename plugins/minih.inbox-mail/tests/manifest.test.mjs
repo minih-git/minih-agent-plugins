@@ -11,13 +11,14 @@ const providers = require("../lib/providers.js");
 /**
  * The manifest this plugin publishes, checked against the host's own rules.
  *
- * The desktop's `validateManifest` is the authority, but the devkit build in a
- * checkout can be older than the host capability it validates, so this file
- * pins the same rules here: what the permissions may be, that every TCP
- * endpoint is literal and encrypted, that the credential slot reaches each
- * provider host, and that the schedule is one interval. A drift between the
- * manifest and `lib/providers.js` — the table the code actually dials — is the
- * failure that would otherwise only show up as a permission error at runtime.
+ * The desktop's `validateManifest` is the authority, but the devkit in a checkout
+ * can be older than the host capability it validates, so this file pins the same
+ * rules here: what the permissions may be, that every TCP endpoint is literal and
+ * encrypted, that the credential slot reaches each provider host and keeps the
+ * 0.1.0 field set, that the panel is declared as a sidebar view, and that the
+ * schedule is one interval. A drift between the manifest and `lib/providers.js` —
+ * the table the code actually dials — is the failure that would otherwise only
+ * show up as a permission error at runtime.
  */
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -28,35 +29,38 @@ const exists = (file) => statSync(join(root, file), { throwIfNoEntry: false })?.
 
 const HOSTNAME = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/;
 const CONTRIB_ID = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
+const localized = (value) => Boolean(value && typeof value === "object" && value.en && value["zh-CN"]);
 
-test("the plugin is published as minih.inbox-mail, versioned with its package", () => {
+test("the plugin is published as minih.inbox-mail 0.2.0, versioned with its package", () => {
   assert.equal(manifest.schemaVersion, 1);
   assert.equal(manifest.id, "minih.inbox-mail");
-  assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
+  assert.equal(manifest.version, "0.2.0");
   assert.equal(manifest.version, pkg.version);
   assert.equal(manifest.main, "main.js");
   assert.ok(exists(manifest.main), "the entry point must be in the tree");
   assert.ok(exists("README.md"), "a user-facing plugin needs its own README");
+  assert.ok(exists("CHANGELOG.md"), "a released plugin records what changed");
 });
 
-test("it asks for the four capabilities it uses and nothing else", () => {
+test("it asks for exactly the capabilities it uses, including the panel", () => {
   assert.deepEqual([...manifest.permissions].sort(), [
     "credentials.use",
     "net.tcp",
     "notify.center",
     "scheduler",
+    "shell.openExternal",
+    "ui.view",
   ]);
   // Sending is not implemented by the host and must not be claimed.
   assert.equal(manifest.permissions.includes("mail.draft"), false);
-  // This slice has no panel and no renderer slot.
-  assert.equal(manifest.permissions.includes("ui.view"), false);
   assert.equal(manifest.permissions.includes("renderer.extension"), false);
   assert.equal(manifest.renderer, undefined);
-  assert.equal(manifest.contributes.views, undefined);
+  // A view contribution without its permission is refused by the host.
+  assert.equal(manifest.contributes.views.length > 0, manifest.permissions.includes("ui.view"));
 });
 
 test("it declares the app version that actually has these host capabilities", () => {
-  assert.equal(manifest.engines.minihAgent, ">=1.8.0");
+  assert.equal(manifest.engines.minihAgent, ">=1.9.0", "multi-instance credentials and sidebar views need 1.9.0");
   assert.equal(manifest.activationEvents.includes("onStartup"), true, "a watcher has to start with the app");
 });
 
@@ -91,21 +95,24 @@ test("the manifest allowlist and the provider table are the same list", () => {
   }
 });
 
-test("the credential slot is one IMAP account the user fills in", () => {
+test("the credential slot holds up to five mailboxes and keeps the 0.1.0 field set", () => {
   assert.equal(manifest.contributes.credentials.length, 1);
   const [slot] = manifest.contributes.credentials;
   assert.match(slot.id, CONTRIB_ID);
   assert.equal(slot.kind, "imap");
-  assert.ok(Array.isArray(slot.fields) && slot.fields.length >= 2);
+  assert.deepEqual(slot.multiple, { max: 5 });
+  assert.equal(slot.labelField, "username", "an instance is labelled by the address the user typed");
   const keys = slot.fields.map((field) => field.key);
+  // The set is frozen: the host drops an instance whose declared fields are not
+  // all filled, so a new field here would delete the account migrated from 0.1.0.
   assert.deepEqual([...keys].sort(), ["password", "username"]);
-  assert.equal(new Set(keys).size, keys.length);
   assert.equal(slot.fields.find((field) => field.key === "password").secret, true);
+  assert.equal(slot.fields.find((field) => field.key === slot.labelField).secret, undefined);
   for (const field of slot.fields) {
     assert.match(field.key, CONTRIB_ID);
-    assert.ok(field.label.en && field.label["zh-CN"], "a field label needs both contract locales");
+    assert.ok(localized(field.label), "a field label needs both contract locales");
   }
-  assert.ok(slot.title.en && slot.title["zh-CN"]);
+  assert.ok(localized(slot.title));
 });
 
 test("the slot's scope admits every provider host it will be injected into", () => {
@@ -119,11 +126,24 @@ test("the slot's scope admits every provider host it will be injected into", () 
   }
 });
 
+test("the Inbox panel is one sidebar view with a localized title and a real entry", () => {
+  assert.equal(manifest.contributes.views.length, 1);
+  const [view] = manifest.contributes.views;
+  assert.match(view.id, CONTRIB_ID);
+  assert.equal(view.placement, "sidebar");
+  assert.ok(localized(view.title));
+  assert.equal(view.title["zh-CN"], "收件箱");
+  assert.ok(exists(view.entry), "the view entry must exist");
+  assert.equal(view.entry, "view/index.html");
+  assert.ok(exists("view/app.js"));
+  assert.ok(exists("view/vendor/purify.es.mjs"));
+});
+
 test("the fallback poll is one interval, at least a minute long", () => {
   assert.equal(manifest.contributes.schedules.length, 1);
   const [schedule] = manifest.contributes.schedules;
   assert.match(schedule.id, CONTRIB_ID);
-  assert.ok(schedule.title.en && schedule.title["zh-CN"]);
+  assert.ok(localized(schedule.title));
   const hasEvery = schedule.every !== undefined;
   const hasCron = schedule.cron !== undefined;
   assert.equal(hasEvery !== hasCron, true, "exactly one of every or cron");
@@ -136,34 +156,31 @@ test("the fallback poll is one interval, at least a minute long", () => {
 test("the command a notification links to is declared and registered", () => {
   const ids = manifest.contributes.commands.map((command) => command.id);
   assert.deepEqual(ids, ["check-now"]);
-  // `notify.center` only accepts a link to a declared command, and the runtime
-  // only answers one it registered: both halves have to exist.
   assert.match(mainSource, /const COMMAND_ID = "check-now";/);
   assert.match(mainSource, /commands\.register\(/);
-  assert.match(mainSource, /link: \{ command: COMMAND_ID \}/);
+  assert.match(mainSource, /onPanelInvoke/);
 });
 
-test("every setting the code reads is declared, with the same defaults", () => {
+test("every remaining setting is declared, localized, and matches the code's defaults", () => {
   const settings = new Map(manifest.contributes.settings.map((entry) => [entry.key, entry]));
   assert.equal(settings.size, manifest.contributes.settings.length, "settings keys are unique");
+  // The provider is no longer a setting: it belongs to one account, not to all of them.
   assert.deepEqual([...settings.keys()].sort(), [
     "digestMinutes",
     "importantSenders",
     "keywords",
-    "provider",
     "unreadOnly",
   ]);
+  for (const entry of settings.values()) {
+    assert.ok(localized(entry.title), `${entry.key} title needs both locales`);
+    assert.ok(localized(entry.description), `${entry.key} description needs both locales`);
+    assert.match(entry.key, /^[a-zA-Z][a-zA-Z0-9]*$/);
+  }
   assert.equal(settings.get("digestMinutes").type, "number");
   assert.equal(settings.get("digestMinutes").default, 30);
   assert.equal(settings.get("unreadOnly").type, "boolean");
   assert.equal(settings.get("unreadOnly").default, false);
-  const provider = settings.get("provider");
-  assert.equal(provider.type, "select");
-  assert.deepEqual(
-    [...provider.enum.map((option) => option.value)].sort(),
-    [...providers.PROVIDERS.map((entry) => entry.id)].sort(),
-  );
-  assert.equal(provider.default, providers.DEFAULT_PROVIDER_ID);
+  assert.equal(settings.get("importantSenders").default, "");
 });
 
 test("both contract locales carry every display string", () => {
@@ -175,14 +192,36 @@ test("both contract locales carry every display string", () => {
     assert.ok(block.safetyNotes, `${locale}.safetyNotes`);
   }
   assert.equal(manifest.name, manifest.i18n.en.name);
+  assert.equal(manifest.description, manifest.i18n.en.description);
   assert.equal(manifest.safetyNotes, manifest.i18n.en.safetyNotes);
 });
 
-test("the safety notes say what is read, what is kept and what is never done", () => {
-  const notes = `${manifest.i18n.en.safetyNotes} ${manifest.i18n["zh-CN"].safetyNotes}`;
-  assert.match(notes, /BODY\.PEEK/);
-  assert.match(notes, /read-only/i);
-  assert.match(notes, /does not send mail/);
-  assert.match(notes, /No model is called/);
-  assert.match(notes, /不准|不发信|不会/);
+test("the safety notes describe the panel honestly, in both languages", () => {
+  const en = manifest.i18n.en.safetyNotes;
+  const zh = manifest.i18n["zh-CN"].safetyNotes;
+  // Several mailboxes, and the panel.
+  assert.match(en, /five mailboxes/i);
+  assert.match(en, /Inbox panel/);
+  // Bodies only on click, capped, in memory.
+  assert.match(en, /only when you open that message/);
+  assert.match(en, /1 MiB/);
+  assert.match(en, /never written to disk/);
+  // Header-only watching.
+  assert.match(en, /BODY\.PEEK/);
+  // Read/star only on a click, one STORE.
+  assert.match(en, /only when you click/);
+  assert.match(en, /IMAP STORE/);
+  // The frame: sanitized, scriptless, no remote images by default.
+  assert.match(en, /scriptless, origin-less sandboxed frame/);
+  assert.match(en, /remote images stay blocked/i);
+  // Still not a mail client.
+  assert.match(en, /does not send mail/);
+  assert.match(en, /No model is called/);
+  // And the Chinese notes say the same things.
+  assert.match(zh, /最多 5 个邮箱/);
+  assert.match(zh, /只有你在「收件箱」面板里点开/);
+  assert.match(zh, /无脚本/);
+  assert.match(zh, /远程图片默认拦截/);
+  assert.match(zh, /不发信/);
+  assert.match(zh, /不调用模型/);
 });

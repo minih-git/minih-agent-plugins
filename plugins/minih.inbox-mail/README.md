@@ -1,19 +1,20 @@
 # Inbox mail
 
-Watches one mailbox and puts only the mail you care about in the app's
-notification centre. It is the first information source of a resident assistant:
-the mail arrives while you are doing something else, and the app tells you about
-it without opening a mail client.
+Watches up to **five** mailboxes and does two things with them: puts only the mail
+you care about into the app's notification centre, and shows all of them in one
+**Inbox** panel in the sidebar. Nothing here calls a model.
 
-Two kinds of entry, decided by your own rules, with no model in the loop:
+In the notification centre you get:
 
-- **alert** — one entry per message that comes from an important sender, subject
-  or sender name matching one of your keywords, or that the sender marked urgent.
-- **digest** — everything else, rolled up into one entry every N minutes. The same
-  entry is updated instead of piling up.
+- **alert** — one entry per message that comes from an important sender, matches
+  one of your keywords, or was marked urgent by the sender. The entry names the
+  account it came from.
+- **digest** — everything else, rolled up into one entry per account every N
+  minutes. The same entry is updated instead of piling up.
 
-A notification carries the sender, the subject and the time. The body of the mail
-is never fetched, so it is never shown, stored or forwarded.
+In the panel you get every account's recent mail in one list, and one message at a
+time in a reading pane. A message body is downloaded only when you open that
+message; read state and the star change only when you click them.
 
 ## Set it up
 
@@ -21,10 +22,14 @@ is never fetched, so it is never shown, stored or forwarded.
    providers call it an app password). A normal account password usually does not
    work for third-party clients, and an app password is the safer thing anyway:
    it can be revoked without changing your login.
-2. **Settings → Plugins → Inbox mail.** Pick your provider, then fill the one
-   credential slot with your full email address and that code.
-3. That is all. The first connection only records a starting point: it does not
-   announce the mail already in the mailbox.
+2. **Open the Inbox panel in the sidebar → "Add mailbox"**, then fill the host's
+   form with your full email address and that code. Repeat for up to five
+   mailboxes; the same dialog also works in Settings → Plugins → Inbox mail.
+3. The provider is inferred from the address (`qq.com`/`foxmail.com`, `163.com`,
+   `126.com`, `gmail.com`/`googlemail.com`). A company address cannot be inferred,
+   so the panel asks you to pick one; nothing is dialled until you do.
+4. The first connection only records a starting point: it does not announce the
+   mail already in the mailbox.
 
 | Provider | IMAP server | Enable it / get a code |
 | --- | --- | --- |
@@ -37,14 +42,34 @@ is never fetched, so it is never shown, stored or forwarded.
 **Outlook / Hotmail is listed but cannot connect yet.** Microsoft now accepts only
 OAuth2 for IMAP on personal accounts
 ([settings page](https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040)),
-and the app performs the sign-in itself with a password only. The provider will
-work as soon as the host learns XOAUTH2; until then the plugin says so instead of
-failing with a rejected login.
+and the app performs the sign-in itself with a password only. The panel says so
+instead of failing with a rejected login.
 
 You cannot type a server of your own: the app only connects to endpoints the
 plugin declares, and the plugin declares the five above (plus Outlook). That is
-the price of a permission a reviewer can actually check, and it is why a
-self-hosted server is a later slice rather than a setting.
+the price of a permission a reviewer can actually check.
+
+## The Inbox panel
+
+- **Mailboxes** — one card per account with its address, its provider (changeable
+  in place), its state (connecting / connected / reconnecting / error with the
+  reason / waiting for a provider), an "open the web mailbox" shortcut, and a
+  remove button that asks once before it acts.
+- **One list** — every account's mail, newest first, grouped into **Important**
+  (the same rule as the alerts) and **Other**, with a filter per mailbox. Each row
+  shows sender, subject, time, account, unread and star state.
+- **One message** — the reading pane. Your choice of plain text or HTML, the
+  attachment names and sizes (listed only, never downloaded), and a list of the
+  message's links, which open in your real browser rather than inside the panel.
+- **Actions** — mark read / unread and add / remove the star, each an explicit
+  click, and each one IMAP `STORE` of `\Seen` or `\Flagged` on that one message.
+
+HTML bodies are sanitized with a vendored copy of
+[DOMPurify](https://github.com/cure53/DOMPurify) (3.2.7, Apache-2.0 OR MPL-2.0 —
+see `view/vendor/`) and rendered in an `<iframe sandbox="">`: no scripts, no
+same-origin access, and its own `default-src 'none'` policy. Remote images stay
+blocked until you press "show remote images" for that one message, so a tracking
+pixel never learns that you opened the mail.
 
 ## How importance is decided
 
@@ -63,51 +88,68 @@ start of the address (`finance@…`) or anywhere in the display name. Keywords a
 plain substrings, case-insensitive, checked against the subject and the sender's
 name — not the body, which is not fetched.
 
-If you would rather not be told about mail you have already read elsewhere, turn
-on **Only report unread mail**: the check then asks the server for unseen messages
-only. Reading is never the plugin's doing — it changes no flags at all.
+The lists apply to every account. If you would rather not be told about mail you
+have already read elsewhere, turn on **Only report unread mail**: the check then
+asks the server for unseen messages only.
 
 ## What it reads, and what it keeps
 
-- It selects the inbox and reads the mailbox's UID cursor, then for new mail only
-  the envelope and a few headers — `BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE
-  MESSAGE-ID IMPORTANCE X-PRIORITY X-MSMail-Priority)]`. `PEEK` is the point: the
-  other form would mark every message the plugin looks at as read.
-- It keeps one small file in its own data folder: `UIDVALIDITY`, the highest UID
-  already handled, the Message-IDs it has already reported (at most 200), the
-  queue for the current digest, and the last error. No message text is stored.
-- It does not send mail, write drafts, delete, move or copy messages, or change
-  read state. Its only network destination is the IMAP server of the provider you
-  picked, and its only stored output is notification-centre entries.
-- Your password never reaches the plugin. The app holds the credential and
-  performs the IMAP login; the plugin gets an already-authenticated connection
-  and only ever learns whether the slot is filled.
+- While watching, it selects the inbox and for new mail reads only the envelope
+  and a few headers — `BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID
+  IMPORTANCE X-PRIORITY X-MSMail-Priority)]`. `PEEK` is the point: the other form
+  would mark every message the plugin looks at as read.
+- When you open a message it fetches that message only, with `BODY.PEEK[]<0.1048576>`:
+  at most 1 MiB, truncated with a notice beyond that, held in memory for the
+  panel and never written to disk. Attachments are listed by name and size and
+  are never downloaded.
+- It keeps one small file in its own data folder: per account `UIDVALIDITY`, the
+  highest UID already handled, the Message-IDs it has already reported (at most
+  200), the digest queue, the last error, and the envelope of the newest 200
+  messages (sender, subject, time, flags). No message text is stored.
+- It reads and star state only from your clicks, and each click sends exactly one
+  `STORE`. It does not send mail, write drafts, delete, move, copy or archive
+  messages. Its only network destination is the IMAP server of each account's
+  provider; links you open go through the app to your browser.
+- Your password never reaches the plugin. The app holds each credential instance
+  and performs the IMAP login; the plugin gets an already-authenticated connection
+  and only learns which accounts exist, their addresses and whether they are
+  filled.
 
-If the mailbox is not configured, or the server rejects the sign-in, one entry
-appears in the notification centre saying which of the two happened. It is
-updated in place rather than repeated.
+If a mailbox cannot connect, one entry appears in the notification centre saying
+why, and it is updated in place rather than repeated. A mailbox that still needs
+its provider gets one entry telling you to pick one in the panel.
 
 ## How it waits
 
-The plugin asks the server to push new mail (`IDLE`) and renews that request every
-25 minutes, because a server drops a longer one. If the server does not offer
-`IDLE`, it falls back to a poll every 15 minutes. When the connection drops, the
-next attempt waits 5 seconds, then 10, then 20, up to five minutes: a laptop that
-comes back from sleep reconnects in seconds, and a network that is simply down
-does not cost a handshake every few seconds. A mailbox whose `UIDVALIDITY` changed
-starts a fresh baseline instead of replaying itself.
+Each account asks its server to push new mail (`IDLE`) and renews that request
+every 25 minutes, because a server drops a longer one. If the server does not
+offer `IDLE`, it falls back to a poll every 15 minutes. When a connection drops,
+the next attempt waits 5 seconds, then 10, then 20, up to five minutes. A mailbox
+whose `UIDVALIDITY` changed starts a fresh baseline instead of replaying itself.
 
-**Check the mailbox now**, from the command palette or from the link on any
-notification, runs one check immediately.
+One connection per mailbox, and the panel's own work runs on that connection
+between two IDLEs, so five mailboxes cost five of the app's eight allowed
+connections — never a sixth for opening a message.
+
+**Check the mailboxes now**, from the command palette or from the link on any
+notification, runs one check across every connected account.
+
+## Upgrading from 0.1.0
+
+The app turns your single mailbox into the first account of the new slot. On the
+first run the plugin moves the old state file under that account, remembers the
+provider you had chosen, and then deletes the old file. Re-running is safe. If two
+accounts already exist there is no honest way to tell which one the old cursor
+belonged to, so the old file is left alone and each account baselines itself.
 
 ## What is not here yet
 
-- AI triage of what the deterministic rule missed. The classification is already
-  one function with one return value, so a model can be added behind it without
-  changing the collector.
+- Folders, search, writing or replying, attachments, delete/move/archive.
+- AI triage of what the deterministic rule missed.
 - A mailbox server you type in yourself.
 - Outlook/Hotmail, which needs XOAUTH2 in the host.
 
-Published in this repository's catalog as `minih.inbox-mail` 0.1.0. It needs
-Minih-Agent-Desktop 1.8.0 or newer — the first release with `credentials.use`
-for an `imap` slot, `net.tcp`, `notify.center` and `scheduler`.
+Published in this repository's catalog as `minih.inbox-mail` 0.2.0. It needs
+Minih-Agent-Desktop 1.9.0 or newer — the first release with `multiple` credential
+slots, `credentials.requestAdd` / `requestRemove`, `credentials:changed` and
+sidebar `contributes.views`.

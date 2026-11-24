@@ -1,0 +1,580 @@
+/* Inbox view: three columns — mailboxes, the unified list, the reading pane.
+ * The layout carries the structure: which mailbox, which message, what it says.
+ * Both host palettes are first-class; `data-theme` is set from the host's own
+ * appearance so a light app never gets a dark panel. */
+
+:root {
+  --bg: #16181c;
+  --bg-panel: #1c1f24;
+  --bg-raised: #22262c;
+  --bg-hover: #262b32;
+  --bg-active: #2c323a;
+  --line: rgba(255, 255, 255, 0.09);
+  --line-strong: rgba(255, 255, 255, 0.16);
+  --ink: #e7e9ee;
+  --ink-dim: #a2a9b4;
+  --ink-faint: #7c838f;
+  --accent: #8fb3ff;
+  --accent-ink: #0d1526;
+  --accent-soft: rgba(143, 179, 255, 0.14);
+  --danger: #ff8a8a;
+  --star: #f2c14e;
+  --radius: 10px;
+  --sans: -apple-system, "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+:root[data-theme="light"] {
+  --bg: #f6f7f9;
+  --bg-panel: #ffffff;
+  --bg-raised: #ffffff;
+  --bg-hover: #f0f2f5;
+  --bg-active: #e7ebf1;
+  --line: rgba(18, 22, 28, 0.09);
+  --line-strong: rgba(18, 22, 28, 0.18);
+  --ink: #1b1f26;
+  --ink-dim: #5b6472;
+  --ink-faint: #7b8492;
+  --accent: #1f5fd0;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(31, 95, 208, 0.1);
+  --danger: #b4232a;
+  --star: #b8860b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font: 13px/1.5 var(--sans);
+}
+
+button,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.is-hidden {
+  display: none !important;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-panel);
+}
+
+.topbar-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.counts,
+.hint {
+  color: var(--ink-faint);
+  font-size: 11.5px;
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn {
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: transparent;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.btn:hover {
+  background: var(--bg-hover);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.btn-primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.06);
+  background: var(--accent);
+}
+
+.btn-quiet {
+  border-color: transparent;
+  padding: 4px 8px;
+  color: var(--ink-dim);
+}
+
+.btn-quiet:hover {
+  color: var(--ink);
+}
+
+.banner {
+  margin: 0;
+  padding: 9px 20px;
+  background: var(--accent-soft);
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+}
+
+.banner.is-error {
+  background: color-mix(in oklab, var(--danger) 14%, transparent);
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: 244px 348px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+
+.accounts,
+.list,
+.reader {
+  min-height: 0;
+  overflow: auto;
+}
+
+.accounts {
+  border-right: 1px solid var(--line);
+  background: var(--bg-panel);
+  padding: 12px 10px 18px;
+}
+
+.list {
+  border-right: 1px solid var(--line);
+  padding: 12px 10px 18px;
+}
+
+.column-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 6px 8px;
+}
+
+.column-head h2 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+#account-filter {
+  width: 100%;
+  max-width: 160px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg-raised);
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.account-list,
+.mail-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.account {
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 9px 10px;
+  margin-bottom: 6px;
+  background: var(--bg-raised);
+}
+
+.account.is-selected {
+  border-color: var(--line-strong);
+  background: var(--bg-active);
+}
+
+.account.is-pending {
+  border-style: dashed;
+}
+
+.account-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.account-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-dim);
+  font-size: 11.5px;
+}
+
+.status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+}
+
+.status[data-phase="connected"]::before {
+  background: #3fb950;
+}
+
+.status[data-phase="connecting"]::before,
+.status[data-phase="waiting"]::before {
+  background: #d0a215;
+}
+
+.status[data-phase="error"]::before {
+  background: var(--danger);
+}
+
+.status[data-phase="needs-provider"]::before {
+  background: var(--accent);
+}
+
+.account-provider {
+  margin-top: 7px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.account-provider select {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg-panel);
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.account-error {
+  margin: 6px 0 0;
+  color: var(--danger);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.account-foot {
+  margin-top: 7px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.group {
+  margin-bottom: 14px;
+}
+
+.group-title {
+  margin: 4px 6px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.mail {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  border-radius: var(--radius);
+  padding: 9px 10px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.mail:hover {
+  background: var(--bg-hover);
+}
+
+.mail.is-active {
+  background: var(--bg-active);
+  border-color: var(--line-strong);
+}
+
+.mail:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.mail-dot {
+  width: 6px;
+  height: 6px;
+  margin-top: 7px;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.mail.is-unread .mail-dot {
+  background: var(--accent);
+}
+
+.mail-main {
+  min-width: 0;
+}
+
+.mail-from {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-weight: 600;
+}
+
+/* Truncation belongs on the text itself: a flex container has no text of its
+ * own, so `text-overflow` there would clip with no ellipsis — and a long address
+ * without spaces would paint over the date column beside it. */
+.mail-from-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mail.is-read .mail-from {
+  font-weight: 500;
+  color: var(--ink-dim);
+}
+
+.mail-subject {
+  margin-top: 2px;
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mail-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  color: var(--ink-faint);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.mail-star {
+  color: var(--star);
+  font-size: 12px;
+}
+
+.mail-account {
+  font-size: 11px;
+  color: var(--ink-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 150px;
+}
+
+.empty {
+  margin: 8px 6px;
+  color: var(--ink-faint);
+  line-height: 1.6;
+}
+
+.reader {
+  padding: 0;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+
+.reader-head {
+  padding: 18px 22px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-panel);
+}
+
+.reader-head h2 {
+  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.reader-meta {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--ink-dim);
+  font-size: 12px;
+}
+
+.dot {
+  color: var(--ink-faint);
+}
+
+.reader-actions {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.reader-notice {
+  margin: 10px 0 0;
+  color: var(--ink-dim);
+  font-size: 12px;
+}
+
+.reader-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg-panel);
+}
+
+.reader-body iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 320px;
+  border: 0;
+  background: transparent;
+}
+
+.mail-text {
+  margin: 0;
+  padding: 18px 22px 24px;
+  font: 13px/1.65 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.reader-extras {
+  padding: 0 22px 22px;
+}
+
+.extra-title {
+  margin: 16px 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.extra-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.extra-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 9px;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+
+.extra-list .link-btn {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.extra-list .link-btn:hover {
+  text-decoration: underline;
+}
+
+.reader-state {
+  padding: 22px;
+  color: var(--ink-dim);
+}
+
+@media (max-width: 1180px) {
+  .columns {
+    grid-template-columns: 214px 296px minmax(0, 1fr);
+  }
+
+  .mail-account {
+    max-width: 110px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn {
+    transition: none;
+  }
+}
