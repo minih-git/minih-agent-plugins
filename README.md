@@ -43,7 +43,7 @@ keeping its own `LICENSE` and notice files inside its directory.
 | `minih.personal-knowledge` (`Personal Knowledge`) | 0.7.2 | minih-git | MIT | this repository |
 | `minih.selection-translate` (`Selection Translate`) | 0.3.2 | minih-git | MIT | this repository |
 | `minih.cache-keepwarm` (`Cache keep-warm`) | 0.1.0 | minih-git | MIT | this repository |
-| `minih.inbox-mail` (`Inbox mail`) | 0.2.0 | minih-git | MIT | this repository |
+| `minih.inbox-mail` (`Inbox mail`) | 0.3.0 | minih-git | MIT | this repository |
 | `minih.session-titles` (`Session Titles`) | 0.1.0 | minih-git | MIT | this repository |
 | `pi.file-manager` (`File Manager`) | 0.9.0 | Tioit-Wang | not declared by the author | not published by the author |
 
@@ -87,20 +87,30 @@ call. Read failures show the real error with retry, never demo data. File reads
 use a bounded parallel batch, and vault configuration stays available while
 indexing. No permission or data-format changes are needed.
 
-`minih.inbox-mail` 0.2.0 is the resident assistant's first information source:
-it watches up to five IMAP mailboxes and writes what arrives into the
-notification centre — one alert for a message from an important sender,
-matching one of your keywords or marked urgent by its own headers, and one
-rolling digest per account for the rest. Its own Inbox panel in the sidebar
-shows every account together, fetches a message body only when you open that
-message, and changes read or star state only on your click. Collecting,
-deciding and notifying call no model and download no body, so nothing you
-receive reaches an AI provider. It needs Desktop v1.9.0 or newer
-(`engines.minihAgent` is `>=1.9.0`): it is the first plugin to rely on
-multi-account credential slots (`contributes.credentials[].multiple`) and on
-localized `contributes.settings` titles, both hosted for the first time by
-1.9.0. The host still performs every IMAP sign-in, so the plugin never receives
-a password.
+`minih.inbox-mail` 0.3.0 is the resident assistant's first information source:
+it watches your mailboxes and writes what arrives into the notification centre
+— one alert for a message from an important sender, matching one of your
+keywords or marked urgent by its own headers, and one rolling digest per
+account for the rest. Each account is either one of the providers the plugin
+names or a mail server you type in yourself: IMAP or POP3, TLS or STARTTLS, on
+the port you gave. That endpoint belongs to the credential instance, so the app
+injects the password only into the server saved with the account and the plugin
+cannot redirect it. There is no mailbox limit in the plugin (the app keeps its
+own bound of 100), and no connection outlives a check: every account is polled
+in one short session every three minutes, at most four at a time. Its own Inbox
+panel in the sidebar shows every account together, fetches a message body only
+when you open that message — opening is what marks that one message read — and
+changes read or star state otherwise only on your click; a POP3 mailbox has no
+server flags, so read there is a mark kept on this computer and no star is
+offered. An HTML body is shown as it arrives inside a scriptless, origin-less
+sandbox that loads nothing remote, and a plain-text body is laid out as body
+text. A notification opens the Inbox panel instead of checking the account
+again. Collecting, deciding and notifying call no model and download no body,
+so nothing you receive reaches an AI provider. It needs Desktop v1.10.0 or
+newer (`engines.minihAgent` is `>=1.10.0`): a server you typed in — its host,
+port, protocol and transport — is validated and stored as part of the
+credential instance only from 1.10.0 on. The host still performs every sign-in,
+so the plugin never receives a password.
 
 The redistributed ones are listed with `trust: "community"` and
 `verified: false`: the `verified` badge is a claim about a publisher this
