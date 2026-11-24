@@ -23,6 +23,12 @@
 - Permissions: adds `ui.view` (the panel) and `shell.openExternal` (opening a
   message's links and the web mailbox in the browser). `net.tcp`, its allowlist
   and the credential scope are unchanged.
+- Fixed in the same version, before release: a docked view's `html`/`body` are
+  made transparent by the host, so the panel's own surface has to be painted by
+  the panel. The mail column and the notice banner now carry their own opaque
+  theme colours instead of falling through to the host's white surface, and the
+  page declares `color-scheme` per theme so native controls and scrollbars follow
+  the dark palette.
 
 ## 0.1.0
 
