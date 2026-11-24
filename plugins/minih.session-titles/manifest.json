@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "id": "minih.session-titles",
+  "name": "Session Titles",
+  "version": "0.1.0",
+  "description": "Name sessions from their first prompt with a configurable model.",
+  "author": "minih-git",
+  "license": "MIT",
+  "repository": "https://github.com/minih-git/minih-agent-plugins",
+  "categories": [
+    "productivity"
+  ],
+  "main": "main.js",
+  "engines": {
+    "minihAgent": ">=1.8.1"
+  },
+  "activationEvents": [
+    "onStartup"
+  ],
+  "permissions": [
+    "session.autoTitle",
+    "session.titleContext",
+    "models.list",
+    "agent.complete"
+  ],
+  "safetyNotes": "Reads bounded first-prompt text, session-owned pasted excerpts and compaction summaries for naming only. Sends them to the selected configured model through the host. Updates automatic titles with compare-and-set; manual renames always win. No full transcript, arbitrary file access, network credentials or tools are exposed. Model calls consume quota, with at most three first-title attempts per session and model configuration during one plugin activation.",
+  "i18n": {
+    "en": {
+      "name": "Session Titles",
+      "description": "Name sessions from their first prompt with a configurable model. Manual titles are never replaced."
+    },
+    "zh-CN": {
+      "name": "会话标题",
+      "description": "根据首轮请求自动生成会话标题，支持选择模型；手动命名始终优先。",
+      "safetyNotes": "仅为命名读取有限的首轮请求、该会话粘贴文本片段和压缩摘要，并通过宿主发送给所选模型。不读取完整会话或任意文件，不接触模型凭据。仅更新自动标题，手动命名始终优先。模型调用消耗额度；每次插件启用期间，同一会话和模型配置最多尝试三次首轮命名。"
+    }
+  },
+  "contributes": {
+    "settings": [
+      {
+        "key": "enabled",
+        "type": "boolean",
+        "title": "Generate session titles / 自动生成会话标题",
+        "default": true
+      },
+      {
+        "key": "model",
+        "type": "model",
+        "title": "Title model / 标题模型",
+        "description": "Empty uses the session model, then the host default. An unavailable explicit model is never silently replaced. / 留空使用会话模型，无会话模型时使用宿主默认模型。指定模型不可用时不会悄悄换用其他模型。",
+        "default": ""
+      },
+      {
+        "key": "thinkingLevel",
+        "type": "select",
+        "title": "Thinking level / 思考级别",
+        "default": "off",
+        "enum": [
+          {
+            "label": "Off",
+            "value": "off"
+          },
+          {
+            "label": "Minimal",
+            "value": "minimal"
+          },
+          {
+            "label": "Low",
+            "value": "low"
+          },
+          {
+            "label": "Medium",
+            "value": "medium"
+          },
+          {
+            "label": "High",
+            "value": "high"
+          },
+          {
+            "label": "Extra high",
+            "value": "xhigh"
+          },
+          {
+            "label": "Maximum",
+            "value": "max"
+          }
+        ],
+        "description": "Unsupported levels use off. / 所选模型不支持的思考级别按 off 处理。"
+      },
+      {
+        "key": "retitleAfterCompaction",
+        "type": "boolean",
+        "title": "Refresh titles after context compaction / 上下文压缩后更新标题",
+        "default": true
+      }
+    ]
+  }
+}

@@ -85,6 +85,7 @@ const FIRST_PARTY = new Set([
   "minih.selection-translate",
   "minih.cache-keepwarm",
   "minih.inbox-mail",
+  "minih.session-titles",
 ]);
 
 const PROVENANCE = {};

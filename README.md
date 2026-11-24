@@ -44,6 +44,7 @@ keeping its own `LICENSE` and notice files inside its directory.
 | `minih.selection-translate` (`Selection Translate`) | 0.3.2 | minih-git | MIT | this repository |
 | `minih.cache-keepwarm` (`Cache keep-warm`) | 0.1.0 | minih-git | MIT | this repository |
 | `minih.inbox-mail` (`Inbox mail`) | 0.1.0 | minih-git | MIT | this repository |
+| `minih.session-titles` (`Session Titles`) | 0.1.0 | minih-git | MIT | this repository |
 | `pi.file-manager` (`File Manager`) | 0.9.0 | Tioit-Wang | not declared by the author | not published by the author |
 
 `minih.personal-knowledge` 0.5.0 adds the conversation archive (ADR 0002 in
@@ -144,6 +145,17 @@ integrity remains checked by SHA-256.
    in one commit, then push. Bytes and the digest describing them land in the
    same commit, so changing published bytes means rewriting history rather
    than re-uploading a file — which is why branch protection matters here.
+
+## Session Titles
+
+`minih.session-titles` moves model-composed session naming into an optional
+plugin with native model, thinking-level and compaction-refresh settings. It
+requires the Desktop title-plugin migration (target range `>=1.8.1`) and explicit
+`session.autoTitle`, `session.titleContext`, `models.list` and `agent.complete`
+grants. Without it the host keeps its free first-prompt fallback. See the
+[plugin README](plugins/minih.session-titles/README.md) for compatibility, retry
+limits, privacy boundaries and test commands. This does not change the shared
+model transport or claim to repair an existing connection failure.
 
 ## A note on repository size
 
