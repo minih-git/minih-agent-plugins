@@ -246,9 +246,10 @@ test("the safety notes describe the panel honestly, in both languages", () => {
   assert.match(en, /never written to disk/);
   // Header-only watching.
   assert.match(en, /BODY\.PEEK/);
-  // Read/star only on a click, one STORE.
-  assert.match(en, /only when you click/);
+  // Opening marks read (one STORE), and a click is one STORE more.
+  assert.match(en, /Opening a message marks that one message read/);
   assert.match(en, /IMAP STORE/);
+  assert.match(en, /read there is a mark kept on this computer/);
   // The frame: sanitized, scriptless, no remote images by default.
   assert.match(en, /scriptless, origin-less sandboxed frame/);
   assert.match(en, /remote images stay blocked/i);
@@ -258,6 +259,7 @@ test("the safety notes describe the panel honestly, in both languages", () => {
   // And the Chinese notes say the same things.
   assert.match(zh, /不设账号上限/);
   assert.match(zh, /只有你在「收件箱」面板里点开/);
+  assert.match(zh, /打开一封邮件会把这封标为已读/);
   assert.match(zh, /无脚本/);
   assert.match(zh, /远程图片默认拦截/);
   // The other way in: a server the user typed, and the protocol with no flags.
@@ -267,13 +269,13 @@ test("the safety notes describe the panel honestly, in both languages", () => {
   assert.match(en, /never more than four sessions at a time/);
   assert.match(en, /never polled sooner than the server's LOGIN-DELAY/);
   assert.match(en, /never sends DELE/);
-  assert.match(en, /POP3 reports no flags/);
+  assert.match(en, /A POP3 account has no flags on the server/);
   assert.match(zh, /自己填写的服务器/);
   assert.match(zh, /只会把该实例的密码注入同一个实例里记录的地址/);
   assert.match(zh, /同时最多 4 条/);
   assert.match(zh, /不会早于服务器要求的 LOGIN-DELAY/);
   assert.match(zh, /从不向 POP3 服务器发送 DELE/);
-  assert.match(zh, /POP3 不报告任何标记/);
+  assert.match(zh, /POP3 服务器没有任何标记/);
   assert.match(zh, /不发信/);
   assert.match(zh, /不调用模型/);
 });
