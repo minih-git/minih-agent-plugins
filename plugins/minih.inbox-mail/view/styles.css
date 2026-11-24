@@ -4,6 +4,9 @@
  * appearance so a light app never gets a dark panel. */
 
 :root {
+  /* Native widgets (the account filter, the provider select, scrollbars) follow
+   * this, not our palette: without it a dark page gets light controls. */
+  color-scheme: dark;
   --bg: #16181c;
   --bg-panel: #1c1f24;
   --bg-raised: #22262c;
@@ -19,12 +22,17 @@
   --accent-soft: rgba(143, 179, 255, 0.14);
   --danger: #ff8a8a;
   --star: #f2c14e;
+  /* Opaque on purpose: the banner must read on its own, never as a wash over
+   * whatever the host happens to paint behind the page. */
+  --banner-bg: color-mix(in oklab, var(--accent) 16%, var(--bg-panel));
+  --banner-error-bg: color-mix(in oklab, var(--danger) 22%, var(--bg-panel));
   --radius: 10px;
   --sans: -apple-system, "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
 :root[data-theme="light"] {
+  color-scheme: light;
   --bg: #f6f7f9;
   --bg-panel: #ffffff;
   --bg-raised: #ffffff;
@@ -40,6 +48,8 @@
   --accent-soft: rgba(31, 95, 208, 0.1);
   --danger: #b4232a;
   --star: #b8860b;
+  --banner-bg: color-mix(in oklab, var(--accent) 9%, var(--bg-panel));
+  --banner-error-bg: color-mix(in oklab, var(--danger) 12%, var(--bg-panel));
 }
 
 * {
@@ -79,6 +89,10 @@ select {
   flex-direction: column;
   height: 100vh;
   overflow: hidden;
+  /* The canvas, not `body`: the host makes a docked view's root transparent and
+   * shows its own surface behind the page, which is white by default. Every
+   * region that owns a background here is unaffected by that. */
+  background: var(--bg);
 }
 
 .topbar {
@@ -159,13 +173,13 @@ select {
 .banner {
   margin: 0;
   padding: 9px 20px;
-  background: var(--accent-soft);
+  background: var(--banner-bg);
   border-bottom: 1px solid var(--line);
   color: var(--ink);
 }
 
 .banner.is-error {
-  background: color-mix(in oklab, var(--danger) 14%, transparent);
+  background: var(--banner-error-bg);
 }
 
 .columns {
@@ -191,6 +205,9 @@ select {
 .list {
   border-right: 1px solid var(--line);
   padding: 12px 10px 18px;
+  /* Opaque, for the same reason as `.app`: a transparent column would show the
+   * host's surface instead of this theme's surface. */
+  background: var(--bg);
 }
 
 .column-head {
