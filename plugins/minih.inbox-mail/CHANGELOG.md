@@ -2,6 +2,16 @@
 
 ## 0.3.0
 
+- **HTML mail is shown as HTML.** An HTML part is the default view (the "show plain
+  text" toggle remains), the frame is white paper whatever the app theme is, and
+  the message's own colours are never overridden. The forced `td`/`th` border and
+  padding are gone, so a newsletter's layout tables are not drawn as a grid. The
+  message's `<style>` blocks survive: DOMPurify drops them, so they are lifted out
+  of the raw document, scrubbed of `@import` and `expression()`, and placed after
+  the frame's defaults. A plain-text message is rendered as wrapped prose with its
+  links as buttons that open through the host, instead of a monospace `<pre>`. The
+  security model is unchanged: `sandbox=""`, the frame CSP, remote images blocked
+  by default, links opened externally.
 - **Opening a message marks it read.** An IMAP account (preset or custom) sends one
   `UID STORE +FLAGS (\Seen)` on that message after the capped `BODY.PEEK[]` body
   has arrived — a failed or refused fetch marks nothing, and a message that is

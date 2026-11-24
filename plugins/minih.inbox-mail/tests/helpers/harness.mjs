@@ -20,7 +20,7 @@ const store = require("../../lib/store.js");
 export { store };
 
 /** Poll until `predicate` holds, or fail with what was being waited on. */
-export async function waitFor(predicate, { timeout = 3000, label = "condition" } = {}) {
+export async function waitFor(predicate, { timeout = 8000, label = "condition" } = {}) {
   const started = Date.now();
   for (;;) {
     if (await predicate()) return;

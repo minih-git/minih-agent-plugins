@@ -571,10 +571,18 @@ select {
 
 .mail-text {
   margin: 0;
-  padding: 18px 22px 24px;
-  font: 13px/1.65 var(--mono);
+  font: inherit;
+  line-height: 1.65;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.mail-text p {
+  margin: 0 0 12px;
+}
+
+.mail-text p:last-child {
+  margin-bottom: 0;
 }
 
 .reader-extras {

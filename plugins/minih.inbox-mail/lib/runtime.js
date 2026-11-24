@@ -351,21 +351,24 @@ function createRuntime(deps) {
       // An edit can change the protocol, and the two cursors are not
       // interchangeable: an IMAP UID means nothing to POP3 and a POP3 UIDL means
       // nothing to IMAP. The account keeps its identity, its baseline does not.
-      if (record.protocol && protocol && record.protocol !== protocol) {
-        const state = accountStateOf(record.instanceId);
-        state.cursor = null;
-        state.pop3 = { baselined: false, uidls: [], read: [] };
-        log("info", `the protocol of ${instance.instanceId} changed; a fresh baseline follows`);
-      }
+      const protocolChanged = Boolean(record.protocol && protocol && record.protocol !== protocol);
       record.custom = resolved.custom;
       record.missingServer = resolved.missingServer;
       record.provider = provider ? provider.id : null;
       record.protocol = protocol;
       if (record.connectionKey !== connectionKey) {
         // A different server, protocol or transport means the open connection is
-        // to the wrong place: an edited account is not a poke.
+        // to the wrong place: an edited account is not a poke. The old watcher is
+        // stopped first, so its last poll cannot write the old cursor back over
+        // the reset below.
         await stopAccount(record);
         record.connectionKey = connectionKey;
+        if (protocolChanged) {
+          const state = accountStateOf(record.instanceId);
+          state.cursor = null;
+          state.pop3 = { baselined: false, uidls: [], read: [] };
+          log("info", `the protocol of ${instance.instanceId} changed; a fresh baseline follows`);
+        }
       }
       if (record.connectionKey && !record.watcher) {
         startAccount(record);

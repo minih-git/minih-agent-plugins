@@ -4,6 +4,7 @@ import { test } from "node:test";
 
 const require = createRequire(import.meta.url);
 const body = require("../lib/body.js");
+const { bodyMode } = await import("../view/policy.js");
 
 /**
  * One message body, as the reading pane will see it.
@@ -190,4 +191,55 @@ test("a part count above the limit is ignored instead of parsed", () => {
   );
   assert.ok(parsed.text.startsWith("part 0"));
   assert.ok(body.MAX_PARTS < 200);
+});
+
+test("a raw 8-bit GBK body is decoded without a transfer encoding", () => {
+  // 报告 in GBK, exactly as an old client on a Chinese Windows sends it: no
+  // base64, no quoted-printable, just bytes and a charset.
+  const raw = Buffer.concat([
+    Buffer.from("Content-Type: text/plain; charset=gbk\r\nContent-Transfer-Encoding: 8bit\r\n\r\n", "latin1"),
+    Buffer.from([0xb1, 0xa8, 0xb8, 0xe6]),
+  ]);
+  const parsed = body.parseMessage(raw);
+  assert.equal(parsed.text.trim(), "报告");
+});
+
+test("a GBK newsletter keeps both alternatives, and the HTML one is what is shown", () => {
+  const gbk = Buffer.from([0xb1, 0xa8, 0xb8, 0xe6]); // 报告
+  const raw = Buffer.concat([
+    Buffer.from(
+      [
+        "From: news@example.com",
+        "Subject: newsletter",
+        "MIME-Version: 1.0",
+        'Content-Type: multipart/alternative; boundary="B"',
+        "",
+        "--B",
+        "Content-Type: text/plain; charset=gbk",
+        "Content-Transfer-Encoding: 8bit",
+        "",
+      ].join("\r\n") + "\r\n",
+      "latin1",
+    ),
+    gbk,
+    Buffer.from(
+      [
+        "",
+        "--B",
+        "Content-Type: text/html; charset=gbk",
+        "Content-Transfer-Encoding: 8bit",
+        "",
+        "<table><tr><td>",
+      ].join("\r\n") + "\r\n",
+      "latin1",
+    ),
+    gbk,
+    Buffer.from("</td></tr></table>\r\n--B--\r\n", "latin1"),
+  ]);
+  const parsed = body.parseMessage(raw);
+  assert.equal(parsed.text.trim(), "报告");
+  assert.match(parsed.html, /^<table>/);
+  assert.match(parsed.html, /报告/);
+  // The reading pane's default is the HTML alternative when there is one.
+  assert.equal(bodyMode({ text: parsed.text, html: parsed.html }), "html");
 });

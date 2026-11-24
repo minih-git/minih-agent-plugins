@@ -92,9 +92,12 @@ live.
   (the same rule as the alerts) and **Other**, with a filter per mailbox. Each row
   shows sender, subject, time, account, unread and star state where the protocol
   reports them.
-- **One message** — the reading pane. Your choice of plain text or HTML, the
-  attachment names and sizes (listed only, never downloaded), and a list of the
-  message's links, which open in your real browser rather than inside the panel.
+- **One message** — the reading pane. An HTML message is shown as HTML, on white
+  paper, with its own stylesheet; "show plain text" switches to the text
+  alternative and back. A text-only message is shown as prose — proportional font,
+  wrapped, links listed as buttons — not as a monospace block. Also the attachment
+  names and sizes (listed only, never downloaded), and a list of the message's
+  links, which open in your real browser rather than inside the panel.
 - **Actions** — opening a message marks it read (one IMAP `STORE` of `\Seen` after
   the body arrived, and nothing at all when the message was already read), "mark
   unread" puts it back, and the star is one more click. A POP3 account has no flags
@@ -106,7 +109,14 @@ HTML bodies are sanitized with a vendored copy of
 see `view/vendor/`) and rendered in an `<iframe sandbox="">`: no scripts, no
 same-origin access, and its own `default-src 'none'` policy. Remote images stay
 blocked until you press "show remote images" for that one message, so a tracking
-pixel never learns that you opened the mail.
+pixel never learns that you opened the mail. The frame is white paper whatever the
+app theme is, and the message keeps its own colors: a mail is designed for a white
+page, and re-tinting it is how a newsletter becomes unreadable. DOMPurify removes
+`<style>` blocks, so the message's stylesheet is taken out of the raw document,
+scrubbed of `@import` (and of `expression()`/`javascript:`), and put after the
+frame's own rules, where it wins. Nothing is forced onto the message's layout: no
+border or padding on `td`/`th`, only a `max-width` on images and tables so a wide
+mail cannot push the panel sideways.
 
 ## How importance is decided
 
@@ -158,9 +168,10 @@ account is polled instead of connected:
 - While watching, an IMAP account selects the inbox and for new mail reads only
   the envelope and a few headers — `BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE
   MESSAGE-ID IMPORTANCE X-PRIORITY X-MSMail-Priority)]`. `PEEK` is the point: the
-  other form would mark every message the plugin looks at as read. A POP3 account
-  asks for the header block only (`TOP n 0`, or a capped `RETR` when the server has
-  no `TOP`).
+  other form would mark every message the plugin looks at as read; the one `STORE`
+  of `\Seen` happens only after a body you opened has arrived. A POP3 account asks
+  for the header block only (`TOP n 0`, or a capped `RETR` when the server has no
+  `TOP`).
 - When you open a message it fetches that message only, capped at 1 MiB (IMAP:
   `BODY.PEEK[]<0.1048576>`, POP3: `RETR` with the same cap): truncated with a
   notice beyond that, held in memory for the panel and never written to disk.

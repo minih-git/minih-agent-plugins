@@ -14,7 +14,7 @@
  * and it costs one bridge call.
  */
 
-import { buildFrameDocument, FRAME_SANDBOX } from "./policy.js";
+import { bodyMode, buildFrameDocument, FRAME_SANDBOX, linkifyText } from "./policy.js";
 import { prepareBody } from "./sanitize.js";
 import { codeText, strings } from "./strings.js";
 
@@ -384,10 +384,12 @@ function renderMessage(reader) {
     );
   }
   if (message.html) {
+    // HTML is what the message was written in, so the toggle offers the text
+    // alternative — and the way back.
     actions.push(
-      button(reader.showHtml ? table.showText : table.showHtml, {
+      button(reader.showText ? table.showHtml : table.showText, {
         onClick: () => {
-          reader.showHtml = !reader.showHtml;
+          reader.showText = !reader.showText;
           render();
         },
       }),
@@ -415,11 +417,10 @@ function renderMessage(reader) {
   nodes.readerNotice.classList.toggle("is-hidden", notices.length === 0);
 
   nodes.readerBody.replaceChildren();
-  const useHtml = message.html && (!message.text || reader.showHtml);
-  if (useHtml) {
+  if (bodyMode(message, reader.showText) === "html") {
     nodes.readerBody.append(renderFrame(message, reader));
   } else {
-    nodes.readerBody.append(el("pre", { class: "mail-text", text: message.text ?? "" }));
+    nodes.readerBody.append(renderText(message.text ?? ""));
   }
 
   const extras = [];
@@ -472,8 +473,42 @@ function renderFrame(message, reader) {
   const html = reader.allowImages ? message.body.html : message.body.blockedHtml;
   const frame = el("iframe", { title: message.subject || t().htmlBody, referrerpolicy: "no-referrer" });
   frame.setAttribute("sandbox", FRAME_SANDBOX);
-  frame.srcdoc = buildFrameDocument({ html, allowImages: reader.allowImages, theme: state.theme });
+  // No theme: a mail is drawn on white paper with its own styles, whatever the
+  // app looks like (`policy.js`). The message's `<style>` blocks come along.
+  frame.srcdoc = buildFrameDocument({ html, styles: message.body.styles ?? [], allowImages: reader.allowImages });
   return frame;
+}
+
+/**
+ * A plain-text body: one paragraph per line block, links as buttons.
+ *
+ * Not a `<pre>`: a mail typed by a person is prose, not code, so it gets the
+ * panel's proportional font and wraps. A link is still opened by the host in the
+ * user's browser (`inbox.openExternal`), never inside the panel.
+ */
+function renderText(text) {
+  const container = el("div", { class: "mail-text" });
+  const blocks = String(text).split(/\n{2,}/);
+  for (const block of blocks) {
+    const paragraph = el("p");
+    for (const segment of linkifyText(block)) {
+      if (segment.url) {
+        paragraph.append(
+          el("button", {
+            type: "button",
+            class: "link-btn",
+            title: segment.url,
+            text: segment.text,
+            onClick: () => void openExternal(segment.url),
+          }),
+        );
+      } else {
+        paragraph.append(document.createTextNode(segment.text));
+      }
+    }
+    container.append(paragraph);
+  }
+  return container;
 }
 
 async function openMessage(source) {
@@ -488,7 +523,7 @@ async function openMessage(source) {
       source,
       message: { ...message, body, text: message.text ?? "" },
       allowImages: false,
-      showHtml: false,
+      showText: false,
     };
     render();
     // Opening the message marked it read: the row's dot and the unread count are

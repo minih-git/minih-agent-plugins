@@ -14,6 +14,8 @@
  *
  * The frame's CSP is the enforcement for both (see `policy.js`); this file makes
  * the default view look deliberate instead of broken.
+ *
+ * It also keeps the message's own stylesheet: see `extractStyles`.
  */
 
 import DOMPurify from "./vendor/purify.es.mjs";
@@ -49,7 +51,12 @@ const FORBID_TAGS = [
 /** Attributes that fetch, submit or navigate, whatever the element. */
 const FORBID_ATTR = ["srcset", "imagesrcset", "ping", "formaction", "xlink:href", "action"];
 
-const CONFIG = {
+/**
+ * The sanitizer's configuration, exported so a test can state the one fact that
+ * matters here: `style` is not in the allowlist, so DOMPurify removes a mail's
+ * `<style>` blocks. That is why `extractStyles` exists.
+ */
+export const SANITIZE_CONFIG = {
   WHOLE_DOCUMENT: false,
   ALLOW_DATA_ATTR: false,
   ADD_ATTR: ["target"],
@@ -57,14 +64,46 @@ const CONFIG = {
   FORBID_ATTR,
 };
 
+const CONFIG = SANITIZE_CONFIG;
+
 /**
- * `{ html, blockedHtml, links, remoteImages }`.
+ * The message's own stylesheets, taken out of the raw HTML.
+ *
+ * DOMPurify drops `<style>` (it is not in its allowlist), which is why a
+ * newsletter used to arrive stripped of its design. The block is lifted here
+ * instead, scrubbed of the two things that could reach the network or the frame's
+ * own origin — `@import` and `expression()`/`javascript:` — and handed to the frame
+ * as a stylesheet. The CSP still governs loads (`style-src 'unsafe-inline'` allows
+ * inline sheets only, `img-src data:` blocks a remote background image), and an
+ * author colour is never overridden because the sheet comes after the frame's own.
+ */
+export function extractStyles(rawHtml) {
+  const source = String(rawHtml ?? "");
+  const styles = [];
+  for (const match of source.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi)) {
+    const css = match[1]
+      .replace(/@import[^;]*;?/gi, "")
+      .replace(/expression\s*\(/gi, "(")
+      .replace(/javascript:/gi, "")
+      // A closing tag inside CSS would end the injected `<style>` early.
+      .replace(/<\/style/gi, "<\\/style")
+      .trim();
+    if (css) styles.push(css);
+  }
+  return styles;
+}
+
+/**
+ * `{ html, blockedHtml, styles, links, remoteImages }`.
  *
  * `blockedHtml` is the default view (remote images swapped for a transparent
  * pixel); `html` is the same document with the original sources restored, used
  * only after the user presses "show remote images" for this one message.
  */
 export function prepareBody(rawHtml) {
+  // The styles come from the raw document, not from the sanitized one: DOMPurify
+  // removes `<style>`, and a mail with a design is the common case.
+  const styles = extractStyles(rawHtml);
   const clean = DOMPurify.sanitize(String(rawHtml ?? ""), CONFIG);
   const doc = new DOMParser().parseFromString(`<!doctype html><html><body>${clean}</body></html>`, "text/html");
   const links = [];
@@ -98,5 +137,5 @@ export function prepareBody(rawHtml) {
     image.setAttribute("src", image.getAttribute("data-remote-src"));
     image.removeAttribute("data-remote-src");
   }
-  return { blockedHtml, html: doc.body.innerHTML, links, remoteImages };
+  return { blockedHtml, html: doc.body.innerHTML, styles, links, remoteImages };
 }

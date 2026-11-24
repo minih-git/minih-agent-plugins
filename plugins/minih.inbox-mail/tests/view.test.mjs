@@ -6,11 +6,15 @@ import { fileURLToPath } from "node:url";
 
 import {
   FRAME_SANDBOX,
+  bodyMode,
   buildFrameDocument,
   classifyLink,
   frameCsp,
   isRemoteUrl,
+  linkifyText,
 } from "../view/policy.js";
+import { SANITIZE_CONFIG, extractStyles } from "../view/sanitize.js";
+import { NEWSLETTER_HTML } from "./helpers/newsletter.mjs";
 
 /**
  * The reading pane's security policy, asserted where it can be asserted without
@@ -62,14 +66,78 @@ test("the default CSP loads nothing remote, and the image variant is explicit", 
 });
 
 test("a message body is wrapped in a document that carries its own CSP", () => {
-  const document = buildFrameDocument({ html: "<p>hi</p>", allowImages: false, theme: "light" });
+  const document = buildFrameDocument({ html: "<p>hi</p>", allowImages: false });
   assert.match(document, /^<!doctype html>/);
   assert.match(document, /http-equiv="Content-Security-Policy"/);
   assert.ok(document.includes(frameCsp(false)));
   assert.ok(document.includes("<p>hi</p>"));
+  // White paper, whatever the app theme is: a mail was designed for one.
   assert.match(document, /color-scheme: light/);
-  // The dark frame is a different document, not a different attribute.
-  assert.match(buildFrameDocument({ html: "", allowImages: false, theme: "dark" }), /color-scheme: dark/);
+  assert.match(document, /background: #ffffff/);
+  assert.doesNotMatch(document, /#1b1d21;\s*margin|background: #1b1d21/);
+});
+
+test("the frame does not draw a grid over a table layout", () => {
+  const document = buildFrameDocument({ html: NEWSLETTER_HTML, allowImages: false });
+  // The forced `td, th { border; padding }` is what put a border on every cell of
+  // a newsletter's nested tables.
+  assert.doesNotMatch(document, /td,\s*th\s*\{/);
+  assert.doesNotMatch(document, /border: 1px solid; padding/);
+  // A wide mail still cannot force a horizontal scroll.
+  assert.match(document, /img \{ max-width: 100%/);
+  assert.match(document, /table \{ border-collapse: collapse; max-width: 100%/);
+});
+
+test("the message's own stylesheet survives, after the frame's defaults", () => {
+  const styles = extractStyles(NEWSLETTER_HTML);
+  assert.equal(styles.length, 1);
+  assert.match(styles[0], /\.paper\s*\{/);
+  assert.match(styles[0], /color:\s*#063/, "an author colour is kept as written");
+  const document = buildFrameDocument({ html: NEWSLETTER_HTML, styles, allowImages: false });
+  const base = document.indexOf("color-scheme: light");
+  const author = document.indexOf(".paper");
+  assert.ok(base >= 0 && author > base, "the author sheet comes after the defaults, so it wins");
+  // DOMPurify would have dropped the block entirely: that is why it is lifted out
+  // of the raw document instead of coming from the sanitizer.
+  assert.equal((SANITIZE_CONFIG.ADD_TAGS ?? []).includes("style"), false);
+});
+
+test("a stylesheet cannot pull anything in", () => {
+  const styles = extractStyles(
+    "<style>@import url(https://tracker.example/a.css); p { background: url(https://tracker.example/p.gif) }</style>",
+  );
+  assert.equal(styles.length, 1);
+  assert.doesNotMatch(styles[0], /@import/);
+  // The url() stays in the CSS; the frame's CSP (`img-src data:`) is what stops it.
+  assert.match(styles[0], /url\(https:\/\/tracker\.example\/p\.gif\)/);
+});
+
+test("a message with both parts is shown as HTML, and the toggle reaches the text", () => {
+  const message = { text: "plain", html: "<p>html</p>" };
+  assert.equal(bodyMode(message), "html");
+  assert.equal(bodyMode(message, true), "text");
+  // No HTML part: there is nothing to toggle to.
+  assert.equal(bodyMode({ text: "plain" }), "text");
+  assert.match(appSource, /bodyMode\(message, reader\.showText\)/);
+  assert.match(appSource, /reader\.showText = !reader\.showText/);
+});
+
+test("a plain-text body becomes wrapped prose with links the host opens", () => {
+  const segments = linkifyText("Hello\nhttps://example.com/a\nthanks");
+  assert.deepEqual(segments, [
+    { text: "Hello\n" },
+    { url: "https://example.com/a", text: "https://example.com/a" },
+    { text: "\nthanks" },
+  ]);
+  // No markup: a plain-text body never goes near the frame.
+  assert.equal(linkifyText("<b>not html</b>").every((segment) => !segment.url), true);
+  assert.match(appSource, /function renderText\(text\)/);
+  assert.match(appSource, /onClick: \(\) => void openExternal\(segment\.url\)/);
+  // And it is prose, not a monospace block.
+  const textBlock = ruleBlock(".mail-text");
+  assert.match(textBlock, /white-space:\s*pre-wrap/);
+  assert.doesNotMatch(textBlock, /font-family:\s*(monospace|ui-monospace)/);
+  assert.doesNotMatch(appSource, /el\("pre", \{ class: "mail-text"/);
 });
 
 test("only http, https and mailto links are treated as openable", () => {
