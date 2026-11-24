@@ -43,8 +43,21 @@ const { version: PLUGIN_VERSION } = require("./package.json");
 
 const STATE_FILE = accountsFile.FILE;
 const LEGACY_FILE = accountsFile.LEGACY_FILE;
-/** The command a notification links to, and the one the palette shows. */
+/** The command the palette offers. Notifications do not point at it: see below. */
 const COMMAND_ID = "check-now";
+/**
+ * What every notification row opens: the Inbox panel.
+ *
+ * A row is either "mail arrived" or "this account cannot connect", and both are
+ * read on the inbox page — the new message is in the list, the broken account is
+ * a card with its reason. Pointing a row at the `check-now` command instead, as
+ * 0.2.0 did, turned a click into "look again" without showing anything, which is
+ * exactly the bug the user reported. The command stays in the palette (and the
+ * panel has its own "Check now"), it is just not what a notification does.
+ */
+const VIEW_ID = "inbox";
+/** The one link every row carries, exported so a test can assert it. */
+const NOTIFICATION_LINK = Object.freeze({ view: VIEW_ID });
 /** One row for "no mailbox at all", updated in place instead of added again. */
 const CREDENTIALS_KEY = "minih.inbox-mail:credentials";
 
@@ -175,13 +188,13 @@ async function migrateLegacy(instances) {
   return true;
 }
 
-/** Every row this plugin writes links to its one command. */
+/** Every row this plugin writes opens the Inbox panel. */
 function postRow(row) {
   // A queued handler can run after the plugin was unloaded, and a row on a closed
   // host is not an error worth logging.
   if (!host) return Promise.resolve();
   return host.notify
-    .center({ ...row, link: { command: COMMAND_ID } })
+    .center({ ...row, link: NOTIFICATION_LINK })
     .catch((error) => log("warn", `could not post a ${row.kind}: ${error?.message ?? error}`));
 }
 
@@ -345,6 +358,8 @@ async function onLoad() {
   await announceAccounts();
 
   if (typeof host.commands?.register === "function") {
+    // The palette entry: the same check as the panel's button, and no longer the
+    // target of a notification.
     await host.commands.register({
       id: COMMAND_ID,
       title: text().commandTitle,
@@ -400,4 +415,4 @@ async function onUnload() {
   host = null;
 }
 
-module.exports = { onLoad, onPanelInvoke, onUnload };
+module.exports = { NOTIFICATION_LINK, onLoad, onPanelInvoke, onUnload };

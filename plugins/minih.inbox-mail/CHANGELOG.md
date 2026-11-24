@@ -12,6 +12,12 @@
   links as buttons that open through the host, instead of a monospace `<pre>`. The
   security model is unchanged: `sandbox=""`, the frame CSP, remote images blocked
   by default, links opened externally.
+- **A notification opens the Inbox panel.** Alert, digest, account-error and
+  provider/server rows carry `link: { view: "inbox" }` instead of pointing at the
+  `check-now` command, so clicking one shows the message or the account that needs
+  attention rather than silently re-checking. The command stays in the command
+  palette (and behind the panel's "Check now"); it is no longer a notification's
+  target.
 - **Opening a message marks it read.** An IMAP account (preset or custom) sends one
   `UID STORE +FLAGS (\Seen)` on that message after the capped `BODY.PEEK[]` body
   has arrived — a failed or refused fetch marks nothing, and a message that is

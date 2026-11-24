@@ -215,8 +215,11 @@ minutes, on its own schedule — a broken mailbox never delays another one. A ma
 whose `UIDVALIDITY` changed starts a fresh baseline instead of replaying itself.
 POP3 accounts follow the same rhythm and their server's `LOGIN-DELAY`.
 
-**Check the mailboxes now**, from the command palette, the panel or the link on any
-notification, polls every account immediately instead of waiting for the interval.
+Clicking a notification — an alert, a digest, or the row that says an account
+cannot connect — opens the **Inbox** panel, where the message or the broken account
+is. It does not run a check: that is what **Check now** in the palette (and the
+button in the panel) is for, and both poll every account immediately instead of
+waiting for the interval.
 
 ## Upgrading from 0.1.0
 

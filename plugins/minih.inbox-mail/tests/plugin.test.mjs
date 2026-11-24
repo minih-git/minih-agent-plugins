@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 
 import { createFakeServer, message } from "./helpers/fake-imap.mjs";
@@ -11,6 +11,7 @@ import { waitFor } from "./helpers/harness.mjs";
 
 const require = createRequire(import.meta.url);
 const MAIN = require.resolve("../main.js");
+const PLUGIN_ROOT = dirname(MAIN);
 
 /**
  * The plugin process against a fake host that behaves like Desktop 1.9.0.
@@ -331,7 +332,7 @@ test("an alert names its account, and de-duplication is per account", async () =
     assert.ok(bodies.some((body) => body.includes("owner@qq.com")));
     assert.ok(bodies.some((body) => body.includes("someone@163.com")));
     assert.equal(host.notifications.every((row) => row.kind === "alert"), true);
-    assert.deepEqual(host.notifications[0].link, { command: "check-now" });
+    assert.deepEqual(host.notifications[0].link, { view: "inbox" }, "a row opens the inbox page");
   } finally {
     await plugin.onUnload();
     rmSync(host.dataPath, { recursive: true, force: true });
@@ -499,6 +500,68 @@ test("a message that is already read is not stored again", async () => {
   } finally {
     await plugin.onUnload();
     rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("every notification opens the Inbox panel, and its view id is the declared one", async () => {
+  const manifest = JSON.parse(readFileSync(join(PLUGIN_ROOT, "manifest.json"), "utf8"));
+  const viewId = manifest.contributes.views[0].id;
+  const main = freshPlugin();
+
+  // One code path writes the link for every row (alert, digest, setup notice,
+  // provider notice), so the constant is what the four kinds share. The digest is
+  // the one kind a test cannot wait for (its interval has a one-minute floor), and
+  // it goes through this same `postRow`.
+  assert.deepEqual(main.NOTIFICATION_LINK, { view: viewId });
+  assert.equal(Object.keys(main.NOTIFICATION_LINK).length, 1, "the host accepts exactly one target");
+
+  // An account with no provider posts the "choose a service" row.
+  const idle = createFakeServer({ uidNext: 1 });
+  const first = fakeHost({
+    instances: [oneAccount("ceo@example.com")],
+    servers: { "mailbox#acc_1": idle },
+  });
+  const providerPlugin = await loadWith(first);
+  try {
+    await waitFor(() => first.notifications.some((row) => row.dedupeKey.includes(":provider:")), {
+      label: "the provider notice",
+    });
+    assert.deepEqual(first.notifications.at(-1).link, { view: viewId });
+  } finally {
+    await providerPlugin.onUnload();
+    rmSync(first.dataPath, { recursive: true, force: true });
+  }
+
+  // A working account: an alert, then the setup notice once it cannot connect.
+  const inbox = createFakeServer({ uidNext: 1 });
+  const second = fakeHost({
+    instances: [oneAccount("ceo@qq.com")],
+    servers: { "mailbox#acc_1": inbox },
+    settings: { importantSenders: "boss@example.com" },
+  });
+  const plugin = await loadWith(second);
+  try {
+    await waitForPolls(second);
+    inbox.deliver(message({ uid: 1, from: { name: "Boss", address: "boss@example.com" } }));
+    second.emit("plugin:settingsChanged", {});
+    await waitFor(() => second.notifications.some((row) => row.kind === "alert"), { label: "the alert" });
+
+    // The next poll is refused outright: this is the notice a rejected sign-in
+    // produces, which is one of the rows a click has to lead somewhere.
+    second.pi.net.tcp.connect = async () => {
+      throw coded("CREDENTIAL_REJECTED", "the mailbox refused the sign-in");
+    };
+    second.emit("plugin:settingsChanged", {});
+    await waitFor(() => second.notifications.some((row) => row.dedupeKey.includes(":credentials:")), {
+      label: "the setup notice",
+    });
+
+    for (const row of second.notifications) {
+      assert.deepEqual(row.link, { view: viewId }, `${row.kind} must open the inbox page`);
+    }
+  } finally {
+    await plugin.onUnload();
+    rmSync(second.dataPath, { recursive: true, force: true });
   }
 });
 
