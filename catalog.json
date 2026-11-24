@@ -4,8 +4,8 @@
   "catalog_id": null,
   "name": "Minih-Agent-Desktop Plugins",
   "homepage": "https://gitea.hungraim.com/minih/minih-agent-plugins",
-  "updated_at": "2026-11-23T03:02:02Z",
-  "generated_at": "2026-11-23T03:02:02Z",
+  "updated_at": "2026-11-23T08:03:39Z",
+  "generated_at": "2026-11-23T08:03:39Z",
   "policy_version": null,
   "artifact_base_url": "https://gitea.hungraim.com/minih/minih-agent-plugins/raw/branch/main",
   "plugins": [
@@ -238,6 +238,50 @@
           ],
           "yanked": false,
           "minMinihAgent": ">=1.1.0"
+        }
+      ]
+    },
+    {
+      "id": "minih.session-titles",
+      "name": "Session Titles",
+      "description": "Name sessions from their first prompt with a configurable model.",
+      "author": "minih-git",
+      "icon_url": null,
+      "categories": [
+        "productivity"
+      ],
+      "verified": true,
+      "trust": "verified",
+      "publisher_id": "minih-git",
+      "homepage": null,
+      "repository": "https://github.com/minih-git/minih-agent-plugins",
+      "safety_notes": "Reads bounded first-prompt text, session-owned pasted excerpts and compaction summaries for naming only. Sends them to the selected configured model through the host. Updates automatic titles with compare-and-set; manual renames always win. No full transcript, arbitrary file access, network credentials or tools are exposed. Model calls consume quota, with at most three first-title attempts per session and model configuration during one plugin activation.",
+      "i18n": {
+        "en": {
+          "name": "Session Titles",
+          "description": "Name sessions from their first prompt with a configurable model. Manual titles are never replaced."
+        },
+        "zh-CN": {
+          "name": "会话标题",
+          "description": "根据首轮请求自动生成会话标题，支持选择模型；手动命名始终优先。",
+          "safetyNotes": "仅为命名读取有限的首轮请求、该会话粘贴文本片段和压缩摘要，并通过宿主发送给所选模型。不读取完整会话或任意文件，不接触模型凭据。仅更新自动标题，手动命名始终优先。模型调用消耗额度；每次插件启用期间，同一会话和模型配置最多尝试三次首轮命名。"
+        }
+      },
+      "versions": [
+        {
+          "version": "0.1.0",
+          "publishedAt": "2026-11-23T07:51:21Z",
+          "shasum": "991885aa3d4a2cfd1864777fa7aac1bfedd1aba5b93c9a6ca663ca027c801665",
+          "url": "packages/minih.session-titles-0.1.0.piplug",
+          "sizeBytes": 25151,
+          "permissions": [
+            "session.autoTitle",
+            "session.titleContext",
+            "models.list",
+            "agent.complete"
+          ],
+          "yanked": false,
+          "minMinihAgent": ">=1.8.1"
         }
       ]
     },
