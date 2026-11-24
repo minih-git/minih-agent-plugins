@@ -444,6 +444,86 @@ test("marking read sends exactly one STORE, and the panel list follows", async (
   }
 });
 
+test("opening a message marks it read with one STORE, and the list follows", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(message({ uid: 1, messageId: "<read@example.com>", raw: rawMessage({ text: "hello" }) }));
+    host.emit("plugin:settingsChanged", {});
+    await waitFor(async () => (await panel(plugin, "inbox.snapshot")).snapshot.messages.length === 1, {
+      label: "the message list",
+    });
+    assert.equal((await panel(plugin, "inbox.snapshot")).snapshot.messages[0].unread, true);
+
+    const opened = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: "<read@example.com>" });
+    assert.equal(opened.ok, true);
+    assert.equal(opened.message.readError, null);
+    // Exactly one STORE, on that message, and it is the Seen flag.
+    assert.deepEqual(server.stores, ["UID STORE 1 +FLAGS (\\Seen)"]);
+    assert.equal((await panel(plugin, "inbox.snapshot")).snapshot.messages[0].unread, false);
+    // The body fetch is still a peek: the STORE is what marks it read.
+    const fetchLine = server.sentLines.find((line) => line.includes("BODY.PEEK[]"));
+    assert.match(fetchLine, /BODY\.PEEK\[\]<0\.1048576>/);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("a message that is already read is not stored again", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(
+      message({
+        uid: 1,
+        messageId: "<seen@example.com>",
+        flags: ["\\Seen"],
+        raw: rawMessage({ text: "already read" }),
+      }),
+    );
+    host.emit("plugin:settingsChanged", {});
+    await waitFor(async () => (await panel(plugin, "inbox.snapshot")).snapshot.messages.length === 1, {
+      label: "the message list",
+    });
+    assert.equal((await panel(plugin, "inbox.snapshot")).snapshot.messages[0].unread, false);
+
+    const opened = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: "<seen@example.com>" });
+    assert.equal(opened.ok, true);
+    assert.equal(server.stores.length, 0, "a second STORE would only be noise on the server");
+    assert.equal((await panel(plugin, "inbox.snapshot")).snapshot.messages[0].unread, false);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("a body that failed to arrive is not marked read", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(message({ uid: 1, messageId: "<broken@example.com>" }));
+    host.emit("plugin:settingsChanged", {});
+    await waitFor(async () => (await panel(plugin, "inbox.snapshot")).snapshot.messages.length === 1, {
+      label: "the message list",
+    });
+    server.failFetch = true;
+    const opened = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: "<broken@example.com>" });
+    assert.equal(opened.ok, false);
+    assert.equal(server.stores.length, 0, "no body, no read mark");
+    assert.equal((await panel(plugin, "inbox.snapshot")).snapshot.messages[0].unread, true);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
 test("a flag the panel invents is refused, and nothing is sent", async () => {
   const server = createFakeServer({ uidNext: 1 });
   const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
@@ -982,7 +1062,8 @@ test("a POP3 mailbox is polled, announced once, and offers no read or star state
     assert.match(account.provider.title, /POP3/);
     const listed = snapshot.messages[0];
     assert.equal(listed.key, "pop3:BBB");
-    assert.equal(listed.unread, null, "POP3 reports no read state, so none is invented");
+    assert.equal(listed.unread, true, "POP3 keeps read state on this machine, so it starts unread");
+    assert.equal(listed.readLocally, false);
     assert.equal(listed.starred, null);
 
     const opened = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: "pop3:BBB" });
@@ -992,7 +1073,19 @@ test("a POP3 mailbox is polled, announced once, and offers no read or star state
     assert.ok(server.sentLines.includes("RETR 2"), server.sentLines.join(" | "));
     assert.equal(server.sentLines.some((line) => /^DELE\b/.test(line)), false, "nothing is deleted");
 
-    const flagged = await panel(plugin, "inbox.setFlag", { accountId: "acc_1", key: "pop3:BBB", flag: "seen" });
+    // Opening it marked it read locally, and the list follows.
+    const afterOpen = (await panel(plugin, "inbox.snapshot")).snapshot.messages[0];
+    assert.equal(afterOpen.unread, false);
+    assert.equal(afterOpen.readLocally, true);
+    assert.equal(readState(host).accounts.acc_1.pop3.read.includes("pop3:BBB"), true);
+
+    // "Mark unread" is the same local record, and a star is refused because POP3
+    // has no flags at all.
+    const unread = await panel(plugin, "inbox.setFlag", { accountId: "acc_1", key: "pop3:BBB", flag: "unseen" });
+    assert.equal(unread.ok, true);
+    assert.equal(unread.readLocally, false);
+    assert.equal((await panel(plugin, "inbox.snapshot")).snapshot.messages[0].unread, true);
+    const flagged = await panel(plugin, "inbox.setFlag", { accountId: "acc_1", key: "pop3:BBB", flag: "flagged" });
     assert.equal(flagged.ok, false);
     assert.equal(flagged.code, "POP3_NO_FLAGS");
 

@@ -2,6 +2,14 @@
 
 ## 0.3.0
 
+- **Opening a message marks it read.** An IMAP account (preset or custom) sends one
+  `UID STORE +FLAGS (\Seen)` on that message after the capped `BODY.PEEK[]` body
+  has arrived — a failed or refused fetch marks nothing, and a message that is
+  already read is not stored again. A failed `STORE` shows a line in the pane and
+  the body is still shown. The list and the unread count update immediately, and
+  "mark unread" stays available. POP3 has no flags on the server, so read there is
+  a local mark (at most 500 entries, like the UIDL set), "mark unread" only drops
+  that mark, and the pane says the state is kept on this computer.
 - **No mailbox limit.** The credential slot declares `multiple: {}` — no `max` —
   so the number of accounts is decided by the host's own safety bound (100) rather
   than by this plugin. Requires the 1.10.0 manifest rule that allows `max` to be

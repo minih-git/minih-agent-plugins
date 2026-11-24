@@ -18,9 +18,9 @@ const TEXT = {
     // other way in is instead of offering a picker the panel cannot honour.
     customServerHint:
       "The mail service is chosen with the account. Not in the list — a company mailbox, for example? Open Settings → Plugins → Inbox mail, edit this account, pick “Custom server” and fill in the server, port and encryption (IMAP or POP3). Accounts are added, edited and removed there.",
-    // POP3 has no read or starred state, and nothing here may invent one.
+    // POP3 has no read flag on the server, and nothing here may invent one.
     pop3Note:
-      "POP3 only delivers mail: this account reports no read or starred state, so those actions are hidden and “Only report unread mail” does not apply to it.",
+      "POP3 only delivers mail: read state is kept on this computer only, a star is not supported, and “Only report unread mail” does not apply to this account.",
     status: {
       connecting: "Connecting…",
       connected: "Connected",
@@ -55,6 +55,7 @@ const TEXT = {
     openError: "This message could not be opened.",
     loadError: "This message could not be shown.",
     retry: "Try again",
+    readFailed: "This message could not be marked as read on the server. It is shown below anyway.",
     markRead: "Mark as read",
     markUnread: "Mark as unread",
     star: "Add star",
@@ -63,8 +64,8 @@ const TEXT = {
     imagesShown: "Remote images shown for this message",
     showHtml: "Show HTML",
     showText: "Show text",
-    pop3NoFlags:
-      "POP3 does not report read or starred state, so this message cannot be marked. Open it in your mail app to do that.",
+    pop3LocalRead:
+      "POP3 keeps no read state on the server: this message counts as read on this computer only.",
     textBody: "Text body",
     htmlBody: "HTML body",
     attachments: "Attachments (listed only, not downloaded)",
@@ -122,7 +123,7 @@ const TEXT = {
     accountsHint: (count) => `${count} 个账号`,
     customServerHint:
       "服务商是跟账号一起配置的。不在列表里（比如公司邮箱）？请打开 设置 → 插件 → 邮箱收件，编辑这个账号，选「自定义服务器」，再填上服务器、端口和加密方式（IMAP 或 POP3）。账号的添加、修改和删除都在那里。",
-    pop3Note: "POP3 只负责收信：这个账号没有已读和星标状态，因此相关操作不显示，「只提醒未读」对它也不适用。",
+    pop3Note: "POP3 只负责收信：已读状态只保存在这台电脑上，不支持星标，「只提醒未读」对它也不适用。",
     status: {
       connecting: "连接中…",
       connected: "正常",
@@ -156,6 +157,7 @@ const TEXT = {
     openError: "这封邮件打不开。",
     loadError: "这封邮件显示不出来。",
     retry: "重试",
+    readFailed: "这封邮件没能在服务器上标记为已读。正文仍照常显示。",
     markRead: "标为已读",
     markUnread: "标为未读",
     star: "加星标",
@@ -164,7 +166,7 @@ const TEXT = {
     imagesShown: "已显示这封邮件的远程图片",
     showHtml: "查看 HTML",
     showText: "查看纯文本",
-    pop3NoFlags: "POP3 不提供已读和星标状态，这封邮件无法在这里标记。如需标记，请在邮件客户端里操作。",
+    pop3LocalRead: "POP3 服务器不保存已读状态：这封邮件只在当前这台电脑上算已读。",
     textBody: "纯文本正文",
     htmlBody: "HTML 正文",
     attachments: "附件（仅列出，不下载）",

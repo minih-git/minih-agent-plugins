@@ -74,7 +74,7 @@ function emptyState() {
     messages: [],
     // POP3 keeps its own cursor: which UIDLs have been handled, and whether the
     // first poll has happened yet — that one only records a baseline.
-    pop3: { baselined: false, uidls: [] },
+    pop3: { baselined: false, uidls: [], read: [] },
   };
 }
 
@@ -141,6 +141,9 @@ function normalizeState(raw) {
   if (Array.isArray(pop3.uidls)) {
     base.pop3.uidls = pop3.uidls.filter((uidl) => isUidl(uidl)).slice(-POP3_UIDL_LIMIT);
   }
+  if (Array.isArray(pop3.read)) {
+    base.pop3.read = pop3.read.filter((key) => typeof key === "string" && key).slice(-POP3_UIDL_LIMIT);
+  }
   base.pendingSince = Number.isFinite(raw.pendingSince) ? raw.pendingSince : null;
   base.lastCheckAt = Number.isFinite(raw.lastCheckAt) ? raw.lastCheckAt : null;
   base.lastDigestAt = Number.isFinite(raw.lastDigestAt) ? raw.lastDigestAt : null;
@@ -206,6 +209,33 @@ function pop3Baseline(state, uidls) {
   state.pop3.baselined = true;
   state.pop3.uidls = seen.slice(-POP3_UIDL_LIMIT);
   return state.pop3.uidls;
+}
+
+/**
+ * Remember that this machine opened one POP3 message.
+ *
+ * POP3 has no read flag the server would keep, so "read" here means "opened on
+ * this computer": it is a local mark, bounded like the UIDL set, and it exists so
+ * the list and the unread count can follow what the user has actually looked at.
+ */
+function markReadLocally(state, key) {
+  if (!key || state.pop3.read.includes(key)) return state.pop3.read;
+  state.pop3.read.push(key);
+  if (state.pop3.read.length > POP3_UIDL_LIMIT) {
+    state.pop3.read.splice(0, state.pop3.read.length - POP3_UIDL_LIMIT);
+  }
+  return state.pop3.read;
+}
+
+/** Whether this machine has opened that POP3 message. */
+function hasReadLocally(state, key) {
+  return Boolean(key) && state.pop3.read.includes(key);
+}
+
+/** Mark one POP3 message unread again: drop it from the local record. */
+function clearReadLocally(state, key) {
+  state.pop3.read = state.pop3.read.filter((entry) => entry !== key);
+  return state.pop3.read;
 }
 
 /** Remember one handled UIDL, oldest entries first to go. */
@@ -365,6 +395,9 @@ module.exports = {
   messageKey,
   normalizeEnvelope,
   normalizeState,
+  clearReadLocally,
+  hasReadLocally,
+  markReadLocally,
   pop3Baselined,
   pop3Baseline,
   pop3Key,

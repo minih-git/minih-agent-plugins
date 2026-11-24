@@ -451,7 +451,8 @@ function createRuntime(deps) {
     const list = [];
     for (const record of accounts.values()) {
       const flagsSupported = record.protocol !== "pop3";
-      for (const envelope of accountStateOf(record.instanceId).messages) {
+      const state = accountStateOf(record.instanceId);
+      for (const envelope of state.messages) {
         list.push({
           accountId: record.instanceId,
           accountLabel: record.label,
@@ -461,9 +462,12 @@ function createRuntime(deps) {
           from: envelope.from,
           subject: envelope.subject,
           receivedAt: envelope.receivedAt,
-          // `null` means "this mailbox does not report it". POP3 has no read or
-          // starred state at all, and `false` here would claim the mail is read.
-          unread: flagsSupported ? !envelope.flags.includes("\\Seen") : null,
+          // IMAP reports the flag; POP3 has none, so "read" there means "opened on
+          // this machine". A star has no local equivalent and stays `null`.
+          unread: flagsSupported
+            ? !envelope.flags.includes("\\Seen")
+            : !store.hasReadLocally(state, envelope.key),
+          readLocally: flagsSupported ? null : store.hasReadLocally(state, envelope.key),
           starred: flagsSupported ? envelope.flags.includes("\\Flagged") : null,
           important: envelope.important,
         });
@@ -553,25 +557,55 @@ function createRuntime(deps) {
       const envelope = store.findEnvelope(state, String(input?.key ?? ""));
       if (!envelope) throw coded("MESSAGE_NOT_FOUND", "this message is not in the list");
       if (!record.watcher) throw coded("ACCOUNT_OFFLINE", "this mailbox is not connected yet");
-      // Two ways to read one message body, one per protocol: IMAP keeps the
-      // account's own connection and fetches a capped section on it, while POP3
-      // opens a short session of its own and resolves the UIDL to the message
-      // number of that session first.
-      const fetched = record.protocol === "pop3"
-        ? await record.watcher.fetchBody(envelope.key, { maxBytes: BODY_LIMIT, timeoutMs: BODY_TIMEOUT_MS })
-        : await record.watcher.withSession((session) =>
-            session.fetchMessage(envelope.uid, { maxBytes: BODY_LIMIT, timeoutMs: BODY_TIMEOUT_MS }),
-          );
-      const parsed = body.parseMessage(fetched.body);
-      if (Array.isArray(fetched.flags) && fetched.flags.length) {
-        store.setFlags(state, envelope.key, fetched.flags);
+      // Two ways to read one message body, one per protocol, and one rule for
+      // both: a body that was fetched is a message the user just read, so it is
+      // marked read only after the body actually arrived. IMAP sends one
+      // `UID STORE +FLAGS (\\Seen)`; POP3 has no such flag, so the mark is local.
+      let fetched;
+      let readError = null;
+      if (record.protocol === "pop3") {
+        fetched = await record.watcher.fetchBody(envelope.key, {
+          maxBytes: BODY_LIMIT,
+          timeoutMs: BODY_TIMEOUT_MS,
+        });
+        store.markReadLocally(state, envelope.key);
         await deps.persist();
+      } else {
+        // The panel's own envelope carries the flags the poll saw: a body fetch
+        // does not report flags on every server, and a message the user already
+        // read must not be stored again.
+        const alreadySeen = Array.isArray(envelope.flags) && envelope.flags.includes("\\Seen");
+        fetched = await record.watcher.withSession(async (session) => {
+          const message = await session.fetchMessage(envelope.uid, {
+            maxBytes: BODY_LIMIT,
+            timeoutMs: BODY_TIMEOUT_MS,
+          });
+          if (!alreadySeen) {
+            try {
+              const stored = await session.storeFlags(message.uid, { add: ["\\Seen"], remove: [] });
+              message.flags = Array.isArray(stored?.flags) && stored.flags.length
+                ? stored.flags
+                : [...(message.flags ?? []), "\\Seen"];
+            } catch (error) {
+              // A failed mark must not lose the message the user asked for.
+              readError = String(error?.code ?? "FAILED");
+            }
+          }
+          return message;
+        });
+        if (Array.isArray(fetched.flags) && fetched.flags.length) {
+          store.setFlags(state, envelope.key, fetched.flags);
+          await deps.persist();
+        }
       }
+      const parsed = body.parseMessage(fetched.body);
       return {
         accountId: record.instanceId,
         accountLabel: record.label,
         protocol: record.protocol ?? "imap",
         flagsSupported: record.protocol !== "pop3",
+        readLocally: record.protocol === "pop3" ? store.hasReadLocally(state, envelope.key) : false,
+        readError,
         key: envelope.key,
         uid: envelope.uid,
         subject: envelope.subject,
@@ -597,12 +631,24 @@ function createRuntime(deps) {
     async setFlag(input) {
       const record = accounts.get(String(input?.accountId ?? ""));
       if (!record) throw coded("ACCOUNT_NOT_FOUND", "this mailbox is not in the list");
-      // POP3 reports no flags at all, so there is nothing to send and nothing to
-      // show: the panel hides these actions and this refuses them anyway.
-      if (record.protocol === "pop3") {
-        throw coded("POP3_NO_FLAGS", "POP3 does not report read or starred state");
-      }
       const flag = String(input?.flag ?? "");
+      if (record.protocol === "pop3") {
+        // POP3 has no flags on the server. Read is a mark this plugin keeps for
+        // this machine, and a star has no equivalent at all.
+        const state = accountStateOf(record.instanceId);
+        const envelope = store.findEnvelope(state, String(input?.key ?? ""));
+        if (!envelope) throw coded("MESSAGE_NOT_FOUND", "this message is not in the list");
+        if (flag === "seen") store.markReadLocally(state, envelope.key);
+        else if (flag === "unseen") store.clearReadLocally(state, envelope.key);
+        else throw coded("POP3_NO_FLAGS", "POP3 has no flags, only a read mark kept on this machine");
+        await deps.persist();
+        return {
+          accountId: record.instanceId,
+          key: envelope.key,
+          flags: [],
+          readLocally: store.hasReadLocally(state, envelope.key),
+        };
+      }
       const change = store.flagChange(flag);
       if (!change) throw coded("INVALID_ARGUMENT", "unknown flag");
       const state = accountStateOf(record.instanceId);

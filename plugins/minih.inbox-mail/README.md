@@ -19,7 +19,9 @@ In the notification centre you get:
 
 In the panel you get every account's recent mail in one list, and one message at a
 time in a reading pane. A message body is downloaded only when you open that
-message; read state and the star change only when you click them.
+message, and opening it marks it read — one `STORE` of `\Seen` after the body has
+actually arrived, never before. The star changes only when you click it, and
+"mark unread" is always there to undo the read.
 
 ## Set it up
 
@@ -93,9 +95,11 @@ live.
 - **One message** — the reading pane. Your choice of plain text or HTML, the
   attachment names and sizes (listed only, never downloaded), and a list of the
   message's links, which open in your real browser rather than inside the panel.
-- **Actions** — mark read / unread and add / remove the star, each an explicit
-  click, and each one IMAP `STORE` of `\Seen` or `\Flagged` on that one message.
-  A POP3 account offers neither, and the card says why: POP3 has no flags at all.
+- **Actions** — opening a message marks it read (one IMAP `STORE` of `\Seen` after
+  the body arrived, and nothing at all when the message was already read), "mark
+  unread" puts it back, and the star is one more click. A POP3 account has no flags
+  on the server, so read is a mark this computer keeps (at most 500 of them) and a
+  star is not offered; the reading pane says so in one line.
 
 HTML bodies are sanitized with a vendored copy of
 [DOMPurify](https://github.com/cure53/DOMPurify) (3.2.7, Apache-2.0 OR MPL-2.0 —
@@ -143,6 +147,9 @@ account is polled instead of connected:
   message, keeping at most 1 MiB and draining the rest.
 - It **never sends `DELE`** — the command is not implemented at all — so nothing
   is deleted, and `QUIT` commits nothing.
+- Read state is a mark this computer keeps, not a flag the server stores: opening a
+  POP3 message adds it to that local list (at most 500), "mark unread" removes it,
+  and nothing is written back to the mailbox.
 - A failure backs off 5 seconds doubling to five minutes, and a batch bigger than
   one session catches up a second later instead of waiting for the interval.
 
@@ -163,8 +170,10 @@ account is polled instead of connected:
   most 500), the Message-IDs it has already reported (at most 200), the digest
   queue, the last error, and the envelope of the newest 200 messages (sender,
   subject, time, flags). No message text is stored.
-- It reads and star state only from your clicks, and each click sends exactly one
-  `STORE`. It does not send mail, write drafts, delete, move, copy or archive
+- Opening a message marks that one message read, once, and after its body arrived:
+  a failed fetch leaves it unread. "Mark unread" and the star are your clicks, each
+  sending exactly one `STORE`. It does not send mail, write drafts, delete, move,
+  copy or archive
   messages. Its only network destination is the server each account is set to;
   links you open go through the app to your browser.
 - Your password never reaches the plugin. The app holds each credential instance

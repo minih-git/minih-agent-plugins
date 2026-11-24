@@ -105,3 +105,21 @@ test("a POP3 message is named by its UIDL, not by a session's message number", (
   // must be recognised by the thing the server promises to keep.
   assert.equal(store.messageKey({ key: "pop3:AB12", messageId: "<x@y>", uid: 3 }), "pop3:AB12");
 });
+
+test("the POP3 read mark is local, bounded, and survives a reload", () => {
+  const state = store.emptyState();
+  assert.equal(store.hasReadLocally(state, "pop3:A"), false);
+  store.markReadLocally(state, "pop3:A");
+  assert.equal(store.hasReadLocally(state, "pop3:A"), true);
+  store.markReadLocally(state, "pop3:A");
+  assert.deepEqual(state.pop3.read, ["pop3:A"], "the mark is a set, not a counter");
+  for (let index = 0; index < store.POP3_UIDL_LIMIT + 20; index += 1) {
+    store.markReadLocally(state, `pop3:u${index}`);
+  }
+  assert.equal(state.pop3.read.length, store.POP3_UIDL_LIMIT, "the list cannot grow without a bound");
+  assert.equal(store.hasReadLocally(state, "pop3:u0"), false, "the oldest mark scrolls out first");
+  const reloaded = store.normalizeState(JSON.parse(JSON.stringify(state)));
+  assert.equal(reloaded.pop3.read.length, store.POP3_UIDL_LIMIT);
+  store.clearReadLocally(state, "pop3:A");
+  assert.equal(store.hasReadLocally(state, "pop3:A"), false, "mark unread drops the local mark");
+});

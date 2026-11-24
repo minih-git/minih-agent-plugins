@@ -364,21 +364,25 @@ function renderMessage(reader) {
   nodes.readerTime.textContent = formatTime(message.receivedAt);
   nodes.readerAccount.textContent = message.accountLabel;
 
-  // POP3 has no read or starred state, so those two buttons are not offered and
-  // the pane says why instead of showing a control that could only fail.
+  // Opening a message marks it read, so the pane offers the way back rather than a
+  // "mark read" that has already happened. POP3 reports no flags: read there is a
+  // mark this machine keeps, and a star has no equivalent.
   const flagsSupported = message.flagsSupported !== false;
-  const read = (message.flags ?? []).includes("\\Seen");
-  const starred = (message.flags ?? []).includes("\\Flagged");
-  const actions = flagsSupported
-    ? [
-        button(read ? table.markUnread : table.markRead, {
-          onClick: () => void setFlag(message, read ? "unseen" : "seen"),
-        }),
-        button(starred ? table.unstar : table.star, {
-          onClick: () => void setFlag(message, starred ? "unflagged" : "flagged"),
-        }),
-      ]
-    : [];
+  const read = flagsSupported ? (message.flags ?? []).includes("\\Seen") : message.readLocally === true;
+  const starred = flagsSupported ? (message.flags ?? []).includes("\\Flagged") : false;
+  const actions = [];
+  if (read) {
+    actions.push(button(table.markUnread, { onClick: () => void setFlag(message, "unseen") }));
+  } else if (flagsSupported) {
+    actions.push(button(table.markRead, { onClick: () => void setFlag(message, "seen") }));
+  }
+  if (flagsSupported) {
+    actions.push(
+      button(starred ? table.unstar : table.star, {
+        onClick: () => void setFlag(message, starred ? "unflagged" : "flagged"),
+      }),
+    );
+  }
   if (message.html) {
     actions.push(
       button(reader.showHtml ? table.showText : table.showHtml, {
@@ -403,7 +407,8 @@ function renderMessage(reader) {
   nodes.readerActions.replaceChildren(...actions);
 
   const notices = [];
-  if (!flagsSupported) notices.push(table.pop3NoFlags);
+  if (!flagsSupported) notices.push(table.pop3LocalRead);
+  if (message.readError) notices.push(table.readFailed);
   if (message.truncated) notices.push(table.truncated(BODY_LIMIT_LABEL));
   if (reader.allowImages) notices.push(table.imagesShown);
   nodes.readerNotice.textContent = notices.join(" ");
@@ -486,6 +491,9 @@ async function openMessage(source) {
       showHtml: false,
     };
     render();
+    // Opening the message marked it read: the row's dot and the unread count are
+    // refreshed now rather than at the next poll.
+    await refresh({ quiet: true });
   } catch (error) {
     state.reader = { status: "error", source, error };
     render();
@@ -499,7 +507,9 @@ async function setFlag(message, flag) {
     const result = await call("inbox.setFlag", { accountId: message.accountId, key: message.key, flag });
     const reader = state.reader;
     if (reader?.status === "ready" && reader.message.key === message.key) {
-      reader.message = { ...reader.message, flags: result.flags };
+      reader.message = typeof result.readLocally === "boolean"
+        ? { ...reader.message, readLocally: result.readLocally }
+        : { ...reader.message, flags: result.flags };
     }
     setBanner(null);
     await refresh({ quiet: true });
