@@ -43,7 +43,7 @@ keeping its own `LICENSE` and notice files inside its directory.
 | `minih.personal-knowledge` (`Personal Knowledge`) | 0.7.2 | minih-git | MIT | this repository |
 | `minih.selection-translate` (`Selection Translate`) | 0.3.2 | minih-git | MIT | this repository |
 | `minih.cache-keepwarm` (`Cache keep-warm`) | 0.1.0 | minih-git | MIT | this repository |
-| `minih.inbox-mail` (`Inbox mail`) | 0.1.0 | minih-git | MIT | this repository |
+| `minih.inbox-mail` (`Inbox mail`) | 0.2.0 | minih-git | MIT | this repository |
 | `minih.session-titles` (`Session Titles`) | 0.1.0 | minih-git | MIT | this repository |
 | `pi.file-manager` (`File Manager`) | 0.9.0 | Tioit-Wang | not declared by the author | not published by the author |
 
@@ -87,16 +87,20 @@ call. Read failures show the real error with retry, never demo data. File reads
 use a bounded parallel batch, and vault configuration stays available while
 indexing. No permission or data-format changes are needed.
 
-`minih.inbox-mail` 0.1.0 is the resident assistant's first information source:
-it watches one IMAP mailbox and writes what arrives into the notification
-centre — one alert for a message from an important sender, matching one of your
-keywords or marked urgent by its own headers, and one rolling digest for the
-rest. No model is called and no message body is fetched, so collecting,
-deciding and notifying are free and read-only. It needs Desktop v1.8.0 or newer
-(`engines.minihAgent` is `>=1.8.0`), the first release with the host
-capabilities it is built on — `credentials.use` with an `imap` slot, `net.tcp`,
-`notify.center` and `scheduler` — so the catalog never offers it to a Desktop
-that cannot run it.
+`minih.inbox-mail` 0.2.0 is the resident assistant's first information source:
+it watches up to five IMAP mailboxes and writes what arrives into the
+notification centre — one alert for a message from an important sender,
+matching one of your keywords or marked urgent by its own headers, and one
+rolling digest per account for the rest. Its own Inbox panel in the sidebar
+shows every account together, fetches a message body only when you open that
+message, and changes read or star state only on your click. Collecting,
+deciding and notifying call no model and download no body, so nothing you
+receive reaches an AI provider. It needs Desktop v1.9.0 or newer
+(`engines.minihAgent` is `>=1.9.0`): it is the first plugin to rely on
+multi-account credential slots (`contributes.credentials[].multiple`) and on
+localized `contributes.settings` titles, both hosted for the first time by
+1.9.0. The host still performs every IMAP sign-in, so the plugin never receives
+a password.
 
 The redistributed ones are listed with `trust: "community"` and
 `verified: false`: the `verified` badge is a claim about a publisher this
