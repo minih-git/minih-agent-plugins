@@ -29,10 +29,25 @@
  * on the server's own `UIDNEXT`: after such a change every UID refers to a
  * different message, so reusing one would either replay the whole mailbox as new
  * or skip everything that is actually new.
+ *
+ * A POP3 account keeps a different cursor in the same file: `pop3.baselined`
+ * says whether the first poll has happened, and `pop3.uidls` holds the UIDLs
+ * already handled (bounded), because a POP3 message number only holds inside one
+ * session and a UIDVALIDITY does not exist there at all.
  */
 
 /** How many reported Message-IDs are kept. */
 const SEEN_LIMIT = 200;
+/**
+ * How many POP3 UIDLs are kept.
+ *
+ * POP3 has no UIDVALIDITY and no UID: the only stable name of a message is the
+ * UIDL the server invents for it, so the set of UIDLs already handled is what
+ * stops a five-minute poll from re-announcing the same mail. It is larger than
+ * `SEEN_LIMIT` because a mailbox read elsewhere still has to remember more than
+ * the last 200 arrivals before the window scrolls past them.
+ */
+const POP3_UIDL_LIMIT = 500;
 /** How many messages wait in one digest before it is posted early. */
 const PENDING_LIMIT = 50;
 /** How many envelopes the panel can show per account. */
@@ -57,12 +72,20 @@ function emptyState() {
     lastDigestAt: null,
     lastError: null,
     messages: [],
+    // POP3 keeps its own cursor: which UIDLs have been handled, and whether the
+    // first poll has happened yet — that one only records a baseline.
+    pop3: { baselined: false, uidls: [] },
   };
 }
 
 function text(value, limit) {
   const source = typeof value === "string" ? value : "";
   return source.length > limit ? source.slice(0, limit) : source;
+}
+
+/** A UIDL is printable ASCII without whitespace, at most 70 characters. */
+function isUidl(value) {
+  return typeof value === "string" && value.length > 0 && value.length <= 70 && !/[\s\u0000-\u001f\u007f]/.test(value);
 }
 
 /** One stored envelope, normalized; `null` when it cannot name a message. */
@@ -113,6 +136,11 @@ function normalizeState(raw) {
       .filter(Boolean)
       .slice(0, MESSAGES_LIMIT);
   }
+  const pop3 = raw.pop3 && typeof raw.pop3 === "object" && !Array.isArray(raw.pop3) ? raw.pop3 : {};
+  base.pop3.baselined = pop3.baselined === true;
+  if (Array.isArray(pop3.uidls)) {
+    base.pop3.uidls = pop3.uidls.filter((uidl) => isUidl(uidl)).slice(-POP3_UIDL_LIMIT);
+  }
   base.pendingSince = Number.isFinite(raw.pendingSince) ? raw.pendingSince : null;
   base.lastCheckAt = Number.isFinite(raw.lastCheckAt) ? raw.lastCheckAt : null;
   base.lastDigestAt = Number.isFinite(raw.lastDigestAt) ? raw.lastDigestAt : null;
@@ -147,6 +175,50 @@ function advanceCursor(state, uid) {
 }
 
 /**
+ * The key a POP3 message is known by, for its whole life.
+ *
+ * A POP3 message number is only valid inside one session: delete one mail
+ * anywhere and every number after it moves. The UIDL is what the server
+ * guarantees to be permanent, so it is the key the panel, the digest queue and
+ * the notifications use, and the number is looked up again on each session.
+ */
+function pop3Key(uidl) {
+  return isUidl(uidl) ? `pop3:${uidl}` : "";
+}
+
+/** The UIDLs this account has already handled, newest last. */
+function pop3Seen(state) {
+  return new Set(state.pop3.uidls);
+}
+
+/** Whether the first poll has happened; until it has, nothing is announced. */
+function pop3Baselined(state) {
+  return state.pop3.baselined === true;
+}
+
+/** Record a mailbox's whole UID set as "already there" without announcing it. */
+function pop3Baseline(state, uidls) {
+  const seen = [];
+  for (const uidl of Array.isArray(uidls) ? uidls : []) {
+    if (!isUidl(uidl) || seen.includes(uidl)) continue;
+    seen.push(uidl);
+  }
+  state.pop3.baselined = true;
+  state.pop3.uidls = seen.slice(-POP3_UIDL_LIMIT);
+  return state.pop3.uidls;
+}
+
+/** Remember one handled UIDL, oldest entries first to go. */
+function pop3Remember(state, uidl) {
+  if (!isUidl(uidl) || state.pop3.uidls.includes(uidl)) return false;
+  state.pop3.uidls.push(uidl);
+  if (state.pop3.uidls.length > POP3_UIDL_LIMIT) {
+    state.pop3.uidls.splice(0, state.pop3.uidls.length - POP3_UIDL_LIMIT);
+  }
+  return true;
+}
+
+/**
  * The key a repeated report is deduplicated on.
  *
  * `Message-ID` is what the sender chose and what survives a reconnect, so it is
@@ -154,6 +226,9 @@ function advanceCursor(state, uid) {
  * `UIDVALIDITY`, which is just as stable for as long as the mailbox is.
  */
 function messageKey(message) {
+  // A POP3 message has no UID to fall back on: its message number only holds
+  // inside one session, so its caller passes the UIDL-derived key it computed.
+  if (typeof message.key === "string" && message.key) return message.key;
   if (typeof message.messageId === "string" && message.messageId) return message.messageId;
   return `uid:${message.uidValidity ?? 0}:${message.uid}`;
 }
@@ -277,6 +352,7 @@ function flagChange(flag) {
 module.exports = {
   MESSAGES_LIMIT,
   PENDING_LIMIT,
+  POP3_UIDL_LIMIT,
   SEEN_LIMIT,
   STATE_VERSION,
   advanceCursor,
@@ -289,6 +365,11 @@ module.exports = {
   messageKey,
   normalizeEnvelope,
   normalizeState,
+  pop3Baselined,
+  pop3Baseline,
+  pop3Key,
+  pop3Remember,
+  pop3Seen,
   queueDigest,
   recordEnvelope,
   rememberSeen,

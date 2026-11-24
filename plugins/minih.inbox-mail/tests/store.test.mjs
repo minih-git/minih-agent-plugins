@@ -70,3 +70,38 @@ test("the queue cannot grow without a bound", () => {
   }
   assert.equal(state.pending.length, store.PENDING_LIMIT);
 });
+
+test("a POP3 baseline records what is already there, and announces nothing", () => {
+  const state = store.emptyState();
+  assert.equal(store.pop3Baselined(state), false, "an account starts unbaselined");
+  store.pop3Baseline(state, ["AAA", "BBB", "AAA", 42, "two words"]);
+  assert.equal(state.pop3.baselined, true);
+  assert.deepEqual(state.pop3.uidls, ["AAA", "BBB"], "duplicates and values the protocol cannot carry are dropped");
+  assert.equal(store.pop3Seen(state).has("BBB"), true);
+});
+
+test("handled POP3 UIDLs are bounded, newest kept, and survive a reload", () => {
+  const state = store.emptyState();
+  store.pop3Baseline(state, []);
+  for (let index = 0; index < store.POP3_UIDL_LIMIT + 10; index += 1) {
+    store.pop3Remember(state, `u${index}`);
+  }
+  assert.equal(state.pop3.uidls.length, store.POP3_UIDL_LIMIT);
+  assert.equal(store.pop3Seen(state).has(`u${store.POP3_UIDL_LIMIT + 9}`), true);
+  assert.equal(store.pop3Seen(state).has("u0"), false, "the oldest entries scroll out first");
+  const reloaded = store.normalizeState(JSON.parse(JSON.stringify(state)));
+  assert.equal(reloaded.pop3.baselined, true);
+  assert.equal(reloaded.pop3.uidls.length, store.POP3_UIDL_LIMIT);
+  // A hand-edited file cannot smuggle in a value the protocol cannot carry.
+  assert.deepEqual(store.normalizeState({ pop3: { baselined: true, uidls: ["ok", 5, "two words"] } }).pop3.uidls, ["ok"]);
+  assert.equal(store.normalizeState({ pop3: "nope" }).pop3.baselined, false);
+});
+
+test("a POP3 message is named by its UIDL, not by a session's message number", () => {
+  assert.equal(store.pop3Key("AB12"), "pop3:AB12");
+  assert.equal(store.pop3Key(""), "");
+  assert.equal(store.pop3Key(undefined), "");
+  // The UIDL wins over a Message-ID when the caller computed it: a POP3 replay
+  // must be recognised by the thing the server promises to keep.
+  assert.equal(store.messageKey({ key: "pop3:AB12", messageId: "<x@y>", uid: 3 }), "pop3:AB12");
+});

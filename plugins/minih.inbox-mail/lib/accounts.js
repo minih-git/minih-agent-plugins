@@ -16,6 +16,11 @@
  * `provider` field in the slot would have made the account migrated from 0.1.0
  * look incomplete and be dropped from the list.
  *
+ * An account whose server the user typed stores nothing extra here: the host
+ * keeps that endpoint in the credential instance and publishes the four
+ * non-secret fields, so `lib/providers.js` reads them on every refresh and an
+ * edited account follows without a migration.
+ *
  * Upgrading from 0.1.0: that release kept one state file (`inbox-mail.json`) for
  * one mailbox and a global `provider` setting. The host turns the old single
  * credential value into the first instance, and the first run of 0.2.0 moves the

@@ -10,6 +10,11 @@
  * accounts together, opens one message body when the user clicks it, and changes
  * a read or star flag only when the user clicks that.
  *
+ * An account is a listed provider (IMAP) or a mail server the user typed (IMAP or
+ * POP3); the four non-secret fields of such a server come back in
+ * `credentials.list`, and the endpoint itself never leaves the host's credential
+ * store, which is what keeps the password bound to the server the user named.
+ *
  * Division of responsibility with the host:
  *
  *   - the host holds the credentials (`credentials.use`), opens and keeps each
@@ -237,7 +242,10 @@ async function announceAccounts() {
     return;
   }
   for (const account of list) {
-    if (!account.provider) await postProviderNotice(account);
+    // An account with its own server has nothing to pick: it is connected by the
+    // endpoint in its credential instance, so the "choose a provider" row would
+    // be asking for something that is already answered.
+    if (!account.provider && !account.custom) await postProviderNotice(account);
   }
 }
 

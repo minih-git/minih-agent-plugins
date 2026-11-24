@@ -32,7 +32,7 @@ const TEXT = {
     needsSetup: "Mailbox not connected",
     needsProvider: "Choose a mail provider",
     needsProviderBody: (label) =>
-      `${label || "This account"} has no provider yet, so it is not connected. Open the Inbox panel in the sidebar and pick one.`,
+      `${label || "This account"} has no provider yet, so it is not connected. Open the Inbox panel in the sidebar and pick one there — or, if your mail service is not in that list, remove the account and add it again with “Custom server” filled in.`,
     reasons: {
       missing:
         "The plugin has no mailbox credential yet. Add one from the Inbox panel in the sidebar, or in Settings.",
@@ -40,9 +40,14 @@ const TEXT = {
         "The mailbox refused the sign-in. Check the provider for this account in the Inbox panel and generate a new authorization code.",
       oauth2:
         "This provider now requires OAuth2 for IMAP, and the app cannot do that yet. Pick another provider for this account.",
+      starttls:
+        "This mail server does not offer STARTTLS, and the app does not sign in without encryption. In the account settings choose SSL for this mailbox and use the encrypted port your administrator gave you (993 for IMAP, 995 for POP3).",
+      tls:
+        "The encrypted connection to this mail server could not be established: its certificate did not verify, or that port is not the encrypted one. Check the server, the port and the encryption in the account settings.",
       unsupported:
-        "This app version does not have the host capabilities this plugin needs (Desktop 1.9.0 or newer).",
-      other: "The mailbox could not be reached. The next attempt is automatic.",
+        "This app version does not have the host capabilities this plugin needs (Desktop 1.10.0 or newer).",
+      other:
+        "The mailbox could not be reached. The next attempt is automatic.",
     },
   },
   "zh-CN": {
@@ -58,12 +63,15 @@ const TEXT = {
     needsSetup: "邮箱尚未连接",
     needsProvider: "请选择邮箱服务商",
     needsProviderBody: (label) =>
-      `${label || "这个账号"}还没指定服务商，所以暂时不连接。请打开侧栏的「收件箱」面板选择。`,
+      `${label || "这个账号"}还没指定服务商，所以暂时不连接。请在侧栏的「收件箱」面板选择一个服务商；如果你的邮箱不在那个列表里，请移除这个账号后重新添加，并在对话框里展开「自定义服务器」填写服务器信息。`,
     reasons: {
       missing: "插件还没有邮箱凭据。请在侧栏「收件箱」面板或设置里添加一个账号。",
       rejected: "邮箱拒绝了登录。请核对这个账号在「收件箱」面板里的服务商，并重新生成授权码。",
       oauth2: "该服务商现在要求 IMAP 使用 OAuth2，应用暂不支持。请为这个账号换一个服务商。",
-      unsupported: "当前应用版本缺少本插件需要的宿主能力（需要桌面 1.9.0 及以上）。",
+      starttls:
+        "这个邮件服务器不提供 STARTTLS，而应用不会在未加密的连接上登录。请在账号设置里把这封邮箱的加密方式改成 SSL，并使用管理员给你的加密端口（IMAP 993，POP3 995）。",
+      tls: "无法与这个邮件服务器建立加密连接：证书没有通过校验，或者那个端口并不是加密端口。请核对账号设置里的服务器、端口和加密方式。",
+      unsupported: "当前应用版本缺少本插件需要的宿主能力（需要桌面 1.10.0 及以上）。",
       other: "暂时无法连接邮箱，稍后会自动重试。",
     },
   },
@@ -160,12 +168,18 @@ function setupReason(code, text) {
     case "PROVIDER_NEEDS_OAUTH":
     case "PROVIDER_UNSELECTED":
       return text.reasons.oauth2;
+    case "STARTTLS_UNAVAILABLE":
+      return text.reasons.starttls;
+    case "TLS_FAILED":
+    case "TLS_CERTIFICATE":
+      return text.reasons.tls;
     case "UNSUPPORTED":
       return text.reasons.unsupported;
     default:
       return text.reasons.other;
   }
 }
+
 
 /** What the check command says afterwards, for every account it looked at. */
 function checkedToast(status, text) {

@@ -241,22 +241,37 @@ function renderAccounts() {
       ),
     );
 
-    const select = el("select", {
-      "aria-label": `${t().provider}: ${account.label}`,
-      onChange: (event) => void changeProvider(account.instanceId, event.target.value),
-    });
-    select.append(el("option", { value: "", text: account.provider ? t().providerHint : t().status["needs-provider"], selected: !account.provider }));
-    for (const provider of state.snapshot.providers) {
-      select.append(
-        el("option", {
-          value: provider.id,
-          text: provider.title,
-          selected: account.provider?.id === provider.id,
-          disabled: !provider.available && account.provider?.id !== provider.id,
-        }),
+    if (account.provider?.custom) {
+      // A server the user typed is a fact, not a choice: it is shown, and the
+      // only place to change it is the account dialog the host owns.
+      card.append(
+        el("div", { class: "account-provider" }, el("span", { class: "provider-custom", text: account.provider.title })),
       );
+    } else {
+      const select = el("select", {
+        "aria-label": `${t().provider}: ${account.label}`,
+        onChange: (event) => void changeProvider(account.instanceId, event.target.value),
+      });
+      select.append(el("option", { value: "", text: account.provider ? t().providerHint : t().status["needs-provider"], selected: !account.provider }));
+      for (const provider of state.snapshot.providers) {
+        select.append(
+          el("option", {
+            value: provider.id,
+            text: provider.title,
+            selected: account.provider?.id === provider.id,
+            disabled: !provider.available && account.provider?.id !== provider.id,
+          }),
+        );
+      }
+      card.append(el("div", { class: "account-provider" }, select));
+      // A domain this plugin cannot place is exactly the case a company mailbox
+      // starts with, so the panel offers the other way in the same breath.
+      if (!account.provider) card.append(el("p", { class: "account-hint", text: t().customServerHint }));
     }
-    card.append(el("div", { class: "account-provider" }, select));
+
+    if (account.flagsSupported === false) {
+      card.append(el("p", { class: "account-hint", text: t().pop3Note }));
+    }
 
     if (account.status?.phase === "error" && account.status?.lastError) {
       card.append(el("p", { class: "account-error", text: statusLabel(account) }));
@@ -383,12 +398,21 @@ function renderMessage(reader) {
   nodes.readerTime.textContent = formatTime(message.receivedAt);
   nodes.readerAccount.textContent = message.accountLabel;
 
+  // POP3 has no read or starred state, so those two buttons are not offered and
+  // the pane says why instead of showing a control that could only fail.
+  const flagsSupported = message.flagsSupported !== false;
   const read = (message.flags ?? []).includes("\\Seen");
   const starred = (message.flags ?? []).includes("\\Flagged");
-  const actions = [
-    button(read ? table.markUnread : table.markRead, { onClick: () => void setFlag(message, read ? "unseen" : "seen") }),
-    button(starred ? table.unstar : table.star, { onClick: () => void setFlag(message, starred ? "unflagged" : "flagged") }),
-  ];
+  const actions = flagsSupported
+    ? [
+        button(read ? table.markUnread : table.markRead, {
+          onClick: () => void setFlag(message, read ? "unseen" : "seen"),
+        }),
+        button(starred ? table.unstar : table.star, {
+          onClick: () => void setFlag(message, starred ? "unflagged" : "flagged"),
+        }),
+      ]
+    : [];
   if (message.html) {
     actions.push(
       button(reader.showHtml ? table.showText : table.showHtml, {
@@ -413,6 +437,7 @@ function renderMessage(reader) {
   nodes.readerActions.replaceChildren(...actions);
 
   const notices = [];
+  if (!flagsSupported) notices.push(table.pop3NoFlags);
   if (message.truncated) notices.push(table.truncated(BODY_LIMIT_LABEL));
   if (reader.allowImages) notices.push(table.imagesShown);
   nodes.readerNotice.textContent = notices.join(" ");

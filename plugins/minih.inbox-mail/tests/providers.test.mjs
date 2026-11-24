@@ -53,3 +53,68 @@ test("an unknown provider id resolves to nothing, not to a default server", () =
   assert.equal(providers.providerFor(undefined), null);
   assert.equal(providers.providerFor("gmail").host, "imap.gmail.com");
 });
+
+test("a custom endpoint is read from the four non-secret fields, or not at all", () => {
+  assert.deepEqual(
+    providers.customEndpointOf({ server: "mail.example.com", port: "993", protocol: "imap", security: "tls" }),
+    { id: "custom", host: "mail.example.com", port: 993, protocol: "imap", security: "tls" },
+  );
+  // Empty server is the preset path, which is the normal case.
+  assert.equal(providers.customEndpointOf({ server: "", port: "993", protocol: "imap", security: "tls" }), null);
+  assert.equal(providers.customEndpointOf({}), null);
+  assert.equal(providers.customEndpointOf(undefined), null);
+  // Anything the host would have refused is not turned into a guess: a wrong
+  // endpoint is worse than no endpoint, because it is where a password would go.
+  const bad = [
+    { server: "https://mail.example.com", port: "993", protocol: "imap", security: "tls" },
+    { server: "mail.example.com:993", port: "993", protocol: "imap", security: "tls" },
+    { server: "mail example.com", port: "993", protocol: "imap", security: "tls" },
+    { server: "mail.example.com", port: "0", protocol: "imap", security: "tls" },
+    { server: "mail.example.com", port: "70000", protocol: "imap", security: "tls" },
+    { server: "mail.example.com", port: "993", protocol: "smtp", security: "tls" },
+    { server: "mail.example.com", port: "993", protocol: "imap", security: "plain" },
+  ];
+  for (const fields of bad) {
+    assert.equal(providers.customEndpointOf(fields), null, JSON.stringify(fields));
+  }
+  // A LAN address is a company server, which is the whole point of the feature.
+  assert.equal(
+    providers.customEndpointOf({ server: "10.0.0.5", port: "143", protocol: "imap", security: "starttls" }).port,
+    143,
+  );
+});
+
+test("a custom account is labelled with its host, port, protocol and transport", () => {
+  const endpoint = providers.customEndpointOf({
+    server: "mail.example.com",
+    port: "995",
+    protocol: "pop3",
+    security: "tls",
+  });
+  assert.equal(providers.customTitle(endpoint, "zh-CN"), "自定义服务器 mail.example.com:995 · POP3 · SSL");
+  assert.equal(providers.customTitle(endpoint, "en"), "Custom server mail.example.com:995 · POP3 · SSL");
+  const starttls = providers.customEndpointOf({
+    server: "imap.example.com",
+    port: "143",
+    protocol: "imap",
+    security: "starttls",
+  });
+  assert.match(providers.customTitle(starttls, "en"), /IMAP · STARTTLS$/);
+});
+
+test("the endpoint key changes when anything the connection depends on changes", () => {
+  const base = { host: "mail.example.com", port: 993, protocol: "imap", security: "tls" };
+  assert.equal(providers.endpointKey(base), providers.endpointKey({ ...base }));
+  assert.notEqual(providers.endpointKey(base), providers.endpointKey({ ...base, port: 143 }));
+  assert.notEqual(providers.endpointKey(base), providers.endpointKey({ ...base, security: "starttls" }));
+  assert.notEqual(providers.endpointKey(base), providers.endpointKey({ ...base, protocol: "pop3" }));
+  assert.notEqual(providers.endpointKey(base), providers.endpointKey({ ...base, host: "other.example.com" }));
+  assert.equal(providers.endpointKey(null), "");
+});
+
+test("a custom server never widens the preset allowlist", () => {
+  assert.equal(providers.PROVIDERS.some((provider) => provider.id === "custom"), false);
+  assert.equal(providers.catalogue("en").some((provider) => provider.id === "custom"), false);
+  assert.equal(providers.hosts().includes("mail.example.com"), false);
+  assert.equal(providers.endpoints().some((endpoint) => endpoint.host === "mail.example.com"), false);
+});

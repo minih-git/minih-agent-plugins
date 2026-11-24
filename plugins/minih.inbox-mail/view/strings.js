@@ -18,6 +18,13 @@ const TEXT = {
     removeNo: "Cancel",
     provider: "Mail provider",
     providerHint: "Pick the service this mailbox uses.",
+    // A company mailbox has no entry in the provider list, and the dialog is the
+    // only place its server can be typed, so the panel has to say where.
+    customServerHint:
+      "Not in this list — a company mailbox, for example? Remove this account and add it again, then open “Custom server” in the dialog and fill in the server, port and encryption (IMAP or POP3).",
+    // POP3 has no read or starred state, and nothing here may invent one.
+    pop3Note:
+      "POP3 only delivers mail: this account reports no read or starred state, so those actions are hidden and “Only report unread mail” does not apply to it.",
     status: {
       connecting: "Connecting…",
       connected: "Connected",
@@ -49,6 +56,8 @@ const TEXT = {
     imagesShown: "Remote images shown for this message",
     showHtml: "Show HTML",
     showText: "Show text",
+    pop3NoFlags:
+      "POP3 does not report read or starred state, so this message cannot be marked. Open it in your mail app to do that.",
     textBody: "Text body",
     htmlBody: "HTML body",
     attachments: "Attachments (listed only, not downloaded)",
@@ -85,6 +94,19 @@ const TEXT = {
       PLUGIN_NOT_LOADED: "The plugin is not loaded.",
       INVALID_ARGUMENT: "That request was not valid.",
       FAILED: "The mailbox could not do that.",
+      NO_WEBMAIL: "A mail server you typed has no web mailbox the app could open.",
+      POP3_NO_FLAGS: "POP3 does not report read or starred state, so this cannot be changed.",
+      CUSTOM_SERVER_ACCOUNT: "This mailbox names its own server. Remove it and add it again to use a provider instead.",
+      POP3_ERR: "The POP3 server refused the request.",
+      POP3_TIMEOUT: "The POP3 server did not answer in time.",
+      POP3_CLOSED: "The connection to the POP3 server closed. It reconnects on its own.",
+      POP3_PROTOCOL: "The POP3 server sent a response that could not be read.",
+      POP3_SEND_FAILED: "The request could not be sent to the POP3 server.",
+      STARTTLS_UNAVAILABLE:
+        "This server does not offer STARTTLS, and the app never signs in without encryption. Choose SSL and the encrypted port instead.",
+      TLS_FAILED:
+        "The encrypted connection failed: the certificate did not verify, or that port is not the encrypted one.",
+      CONNECT_FAILED: "The mail server could not be reached.",
     },
   },
   "zh-CN": {
@@ -98,6 +120,9 @@ const TEXT = {
     removeNo: "取消",
     provider: "邮箱服务商",
     providerHint: "选择这个邮箱使用的服务商。",
+    customServerHint:
+      "不在这个列表里（比如公司邮箱）？请移除这个账号后重新添加，在对话框里展开「自定义服务器」，填上服务器、端口和加密方式（IMAP 或 POP3）。",
+    pop3Note: "POP3 只负责收信：这个账号没有已读和星标状态，因此相关操作不显示，「只提醒未读」对它也不适用。",
     status: {
       connecting: "连接中…",
       connected: "正常",
@@ -129,6 +154,7 @@ const TEXT = {
     imagesShown: "已显示这封邮件的远程图片",
     showHtml: "查看 HTML",
     showText: "查看纯文本",
+    pop3NoFlags: "POP3 不提供已读和星标状态，这封邮件无法在这里标记。如需标记，请在邮件客户端里操作。",
     textBody: "纯文本正文",
     htmlBody: "HTML 正文",
     attachments: "附件（仅列出，不下载）",
@@ -165,6 +191,18 @@ const TEXT = {
       PLUGIN_NOT_LOADED: "插件尚未加载。",
       INVALID_ARGUMENT: "请求不合法。",
       FAILED: "邮箱没能完成这个操作。",
+      NO_WEBMAIL: "自己填写的邮件服务器没有可打开的网页邮箱。",
+      POP3_NO_FLAGS: "POP3 不提供已读和星标状态，无法做这个修改。",
+      CUSTOM_SERVER_ACCOUNT: "这个邮箱用的是自己填写的服务器。想改用服务商，请移除后重新添加。",
+      POP3_ERR: "POP3 服务器拒绝了这个请求。",
+      POP3_TIMEOUT: "POP3 服务器没有及时响应。",
+      POP3_CLOSED: "与 POP3 服务器的连接断开了，插件会自动重连。",
+      POP3_PROTOCOL: "POP3 服务器返回了无法解析的响应。",
+      POP3_SEND_FAILED: "请求没能发送到 POP3 服务器。",
+      STARTTLS_UNAVAILABLE:
+        "这个服务器不提供 STARTTLS，而应用不会在未加密的连接上登录。请改用 SSL 和对应的加密端口。",
+      TLS_FAILED: "加密连接失败：证书没有通过校验，或者那个端口并不是加密端口。",
+      CONNECT_FAILED: "无法连接到邮件服务器。",
     },
   },
 };

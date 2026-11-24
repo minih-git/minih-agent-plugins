@@ -326,6 +326,24 @@ select {
   font-size: 12px;
 }
 
+/*
+ * A server the user typed is a fact, not a choice: the panel shows the line the
+ * account carries instead of a select it could not honour, and the hint under a
+ * provider it could not infer says where the other way in is.
+ */
+.account-provider .provider-custom {
+  color: var(--ink-dim);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.account-hint {
+  margin: 6px 0 0;
+  color: var(--ink-faint);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
 .account-error {
   margin: 6px 0 0;
   color: var(--danger);

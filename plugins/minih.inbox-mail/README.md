@@ -4,6 +4,11 @@ Watches up to **five** mailboxes and does two things with them: puts only the ma
 you care about into the app's notification centre, and shows all of them in one
 **Inbox** panel in the sidebar. Nothing here calls a model.
 
+A mailbox is either one of the providers listed below or **a mail server you type
+in yourself** — IMAP or POP3, implicit TLS or STARTTLS — which is what makes a
+company mailbox usable. A POP3 mailbox is polled and has no read or star state;
+everything else works the same for both.
+
 In the notification centre you get:
 
 - **alert** — one entry per message that comes from an important sender, matches
@@ -18,16 +23,29 @@ message; read state and the star change only when you click them.
 
 ## Set it up
 
-1. **Turn on IMAP in your mailbox** and generate an authorization code (some
-   providers call it an app password). A normal account password usually does not
-   work for third-party clients, and an app password is the safer thing anyway:
-   it can be revoked without changing your login.
+1. **Turn on IMAP (or POP3) in your mailbox** and generate an authorization code
+   (some providers call it an app password). A normal account password usually
+   does not work for third-party clients, and an app password is the safer thing
+   anyway: it can be revoked without changing your login.
 2. **Open the Inbox panel in the sidebar → "Add mailbox"**, then fill the host's
    form with your full email address and that code. Repeat for up to five
    mailboxes; the same dialog also works in Settings → Plugins → Inbox mail.
 3. The provider is inferred from the address (`qq.com`/`foxmail.com`, `163.com`,
    `126.com`, `gmail.com`/`googlemail.com`). A company address cannot be inferred,
-   so the panel asks you to pick one; nothing is dialled until you do.
+   so the panel asks you to pick one — or, if your mail service is not in the list
+   at all, open **Custom server** in that same dialog and type the server your
+   administrator gave you:
+
+   | Field | What to enter |
+   | --- | --- |
+   | Protocol | `IMAP` or `POP3` |
+   | Server | the bare host name or IP the administrator gave you (`mail.example.com`, `10.0.0.5`) — no `https://`, no port, no path |
+   | Encryption | `SSL/TLS` (implicit, the default port) or `STARTTLS` (upgrade a plain connection) |
+   | Port | defaults to 993 / 143 (IMAP) or 995 / 110 (POP3) until you change it |
+
+   Nothing is dialled until you save the account. The server belongs to that one
+   account: the app injects its password only into the endpoint stored beside it,
+   so this plugin cannot send your password anywhere it likes.
 4. The first connection only records a starting point: it does not announce the
    mail already in the mailbox.
 
@@ -45,24 +63,32 @@ OAuth2 for IMAP on personal accounts
 and the app performs the sign-in itself with a password only. The panel says so
 instead of failing with a rejected login.
 
-You cannot type a server of your own: the app only connects to endpoints the
-plugin declares, and the plugin declares the five above (plus Outlook). That is
-the price of a permission a reviewer can actually check.
+The five providers above are the only **preset** endpoints, and they are the only
+ones the plugin declares for itself. A server you type is a different mechanism on
+purpose: it is stored in that one credential instance, the host validates it
+(a bare host, a port in 1..65535, IMAP or POP3, TLS or STARTTLS, never plaintext,
+never a cloud-metadata address), and the password is injected into that stored
+endpoint and no other. A LAN address is fine — that is where company mail servers
+live.
 
 ## The Inbox panel
 
 - **Mailboxes** — one card per account with its address, its provider (changeable
-  in place), its state (connecting / connected / reconnecting / error with the
-  reason / waiting for a provider), an "open the web mailbox" shortcut, and a
-  remove button that asks once before it acts.
+  in place for a preset), its state (connecting / connected / reconnecting / error
+  with the reason / waiting for a provider), an "open the web mailbox" shortcut
+  when there is one, and a remove button that asks once before it acts. An account
+  with its own server shows `Custom server mail.example.com:993 · IMAP · SSL`
+  instead of a provider menu: that endpoint lives in the account, not here.
 - **One list** — every account's mail, newest first, grouped into **Important**
   (the same rule as the alerts) and **Other**, with a filter per mailbox. Each row
-  shows sender, subject, time, account, unread and star state.
+  shows sender, subject, time, account, unread and star state where the protocol
+  reports them.
 - **One message** — the reading pane. Your choice of plain text or HTML, the
   attachment names and sizes (listed only, never downloaded), and a list of the
   message's links, which open in your real browser rather than inside the panel.
 - **Actions** — mark read / unread and add / remove the star, each an explicit
   click, and each one IMAP `STORE` of `\Seen` or `\Flagged` on that one message.
+  A POP3 account offers neither, and the card says why: POP3 has no flags at all.
 
 HTML bodies are sanitized with a vendored copy of
 [DOMPurify](https://github.com/cure53/DOMPurify) (3.2.7, Apache-2.0 OR MPL-2.0 —
@@ -89,47 +115,74 @@ plain substrings, case-insensitive, checked against the subject and the sender's
 name — not the body, which is not fetched.
 
 The lists apply to every account. If you would rather not be told about mail you
-have already read elsewhere, turn on **Only report unread mail**: the check then
-asks the server for unseen messages only.
+have already read elsewhere, turn on **Only report unread mail**: the IMAP check
+then asks the server for unseen messages only. It does not apply to a POP3
+account, because POP3 reports no read state at all.
+
+## How a POP3 mailbox is watched
+
+POP3 cannot push, and a POP3 session locks the mailbox while it lasts, so this
+account is polled instead of connected:
+
+- Every five minutes — never sooner than the `LOGIN-DELAY` the server advertises —
+  the plugin opens **one short session**: `CAPA` (to read that delay), `STAT`,
+  `UIDL`, `TOP n 0` for the header block of each message it has not seen, `QUIT`.
+- The first session only records the UIDLs already in the mailbox. Nothing is
+  announced for mail that was there before you added the account.
+- What it remembers is the **UIDL**, the only name a POP3 server promises to keep
+  (at most 500 of them). The message number is looked up again in every session,
+  because it changes as soon as anything is deleted.
+- Opening a message is another short session: `UIDL`, then `RETR` for that one
+  message, keeping at most 1 MiB and draining the rest.
+- It **never sends `DELE`** — the command is not implemented at all — so nothing
+  is deleted, and `QUIT` commits nothing.
+- A failure backs off 5 seconds doubling to five minutes, and a batch bigger than
+  one session catches up a second later instead of waiting for the interval.
 
 ## What it reads, and what it keeps
 
-- While watching, it selects the inbox and for new mail reads only the envelope
-  and a few headers — `BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID
-  IMPORTANCE X-PRIORITY X-MSMail-Priority)]`. `PEEK` is the point: the other form
-  would mark every message the plugin looks at as read.
-- When you open a message it fetches that message only, with `BODY.PEEK[]<0.1048576>`:
-  at most 1 MiB, truncated with a notice beyond that, held in memory for the
-  panel and never written to disk. Attachments are listed by name and size and
-  are never downloaded.
-- It keeps one small file in its own data folder: per account `UIDVALIDITY`, the
-  highest UID already handled, the Message-IDs it has already reported (at most
-  200), the digest queue, the last error, and the envelope of the newest 200
-  messages (sender, subject, time, flags). No message text is stored.
+- While watching, an IMAP account selects the inbox and for new mail reads only
+  the envelope and a few headers — `BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE
+  MESSAGE-ID IMPORTANCE X-PRIORITY X-MSMail-Priority)]`. `PEEK` is the point: the
+  other form would mark every message the plugin looks at as read. A POP3 account
+  asks for the header block only (`TOP n 0`, or a capped `RETR` when the server has
+  no `TOP`).
+- When you open a message it fetches that message only, capped at 1 MiB (IMAP:
+  `BODY.PEEK[]<0.1048576>`, POP3: `RETR` with the same cap): truncated with a
+  notice beyond that, held in memory for the panel and never written to disk.
+  Attachments are listed by name and size and are never downloaded.
+- It keeps one small file in its own data folder: per account `UIDVALIDITY` and
+  the highest UID already handled (IMAP) or the UIDLs already handled (POP3, at
+  most 500), the Message-IDs it has already reported (at most 200), the digest
+  queue, the last error, and the envelope of the newest 200 messages (sender,
+  subject, time, flags). No message text is stored.
 - It reads and star state only from your clicks, and each click sends exactly one
   `STORE`. It does not send mail, write drafts, delete, move, copy or archive
-  messages. Its only network destination is the IMAP server of each account's
-  provider; links you open go through the app to your browser.
+  messages. Its only network destination is the server each account is set to;
+  links you open go through the app to your browser.
 - Your password never reaches the plugin. The app holds each credential instance
-  and performs the IMAP login; the plugin gets an already-authenticated connection
-  and only learns which accounts exist, their addresses and whether they are
-  filled.
+  and performs the login; the plugin gets an already-authenticated connection and
+  only learns which accounts exist, their addresses, whether they are filled, and
+  — for a server you typed — its host, port, protocol and transport.
 
 If a mailbox cannot connect, one entry appears in the notification centre saying
-why, and it is updated in place rather than repeated. A mailbox that still needs
-its provider gets one entry telling you to pick one in the panel.
+why, and it is updated in place rather than repeated. That includes the two
+failures only a typed server can have: a server that does not offer `STARTTLS`,
+and a certificate that does not verify. A mailbox that still needs its provider
+gets one entry telling you to pick one in the panel.
 
 ## How it waits
 
-Each account asks its server to push new mail (`IDLE`) and renews that request
+An IMAP account asks its server to push new mail (`IDLE`) and renews that request
 every 25 minutes, because a server drops a longer one. If the server does not
 offer `IDLE`, it falls back to a poll every 15 minutes. When a connection drops,
 the next attempt waits 5 seconds, then 10, then 20, up to five minutes. A mailbox
 whose `UIDVALIDITY` changed starts a fresh baseline instead of replaying itself.
 
-One connection per mailbox, and the panel's own work runs on that connection
+One connection per IMAP mailbox, and the panel's own work runs on that connection
 between two IDLEs, so five mailboxes cost five of the app's eight allowed
-connections — never a sixth for opening a message.
+connections — never a sixth for opening a message. A POP3 account costs one
+connection only for the seconds a poll or an opened message lasts.
 
 **Check the mailboxes now**, from the command palette or from the link on any
 notification, runs one check across every connected account.
@@ -146,10 +199,15 @@ belonged to, so the old file is left alone and each account baselines itself.
 
 - Folders, search, writing or replying, attachments, delete/move/archive.
 - AI triage of what the deterministic rule missed.
-- A mailbox server you type in yourself.
+- Editing the server of an existing account: remove it and add it again with
+  **Custom server** filled in. The account dialog the app shows is host-owned, and
+  it has no "edit this instance" step yet.
 - Outlook/Hotmail, which needs XOAUTH2 in the host.
 
-Published in this repository's catalog as `minih.inbox-mail` 0.2.0. It needs
-Minih-Agent-Desktop 1.9.0 or newer — the first release with `multiple` credential
-slots, `credentials.requestAdd` / `requestRemove`, `credentials:changed` and
-sidebar `contributes.views`.
+Published in this repository's catalog as `minih.inbox-mail` 0.3.0. It needs
+Minih-Agent-Desktop 1.10.0 or newer — the first release with a per-instance mail
+endpoint (`userEndpoint` on a credential slot), the POP3 login behind
+`net.tcp.connect`, and the `mail` sidebar icon.
+
+`minih.inbox-mail` 0.3.0 is not in the catalog yet: it needs Desktop 1.10.0, and it
+will be published here once that release ships.

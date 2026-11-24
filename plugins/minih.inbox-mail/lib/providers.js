@@ -29,6 +29,19 @@
  * panel otherwise (`inferProviderId`, `findProvider`).
  */
 
+/**
+ * A server the user typed is the other half of this file.
+ *
+ * Since 0.3.0 an account may carry its own endpoint — a company Exchange, an
+ * IMAP server at a small host, a POP3-only mailbox — and that endpoint lives in
+ * the credential instance, not here and not in a setting. This file only turns
+ * the four non-secret fields the host publishes into a descriptor and a label;
+ * the host is what validates them, and the host is what injects that instance's
+ * password into that endpoint and no other. Nothing below widens the preset
+ * allowlist: `PROVIDERS`, `endpoints()` and `hosts()` still describe the
+ * servers a reviewer can check, and a custom endpoint reaches none of them.
+ */
+
 const PROVIDERS = [
   {
     id: "qq",
@@ -110,6 +123,37 @@ const PROVIDERS = [
   },
 ];
 
+/** The id the panel shows for an account whose server the user typed. */
+const CUSTOM_PROVIDER_ID = "custom";
+/** The protocols the credential slot's `userEndpoint` admits. */
+const USER_PROTOCOLS = ["imap", "pop3"];
+/** The transports the host can perform a login over; plaintext is not one. */
+const USER_SECURITY = ["tls", "starttls"];
+/**
+ * The ports the host's dialog defaults to, per protocol and transport.
+ *
+ * Kept here so the plugin can describe a custom account the way the form
+ * describes it. The value that is used is always the one stored in the
+ * instance, never this table: a server on 143 with STARTTLS is the user's
+ * decision, not something this file may round to 993.
+ */
+const DEFAULT_PORTS = {
+  "imap/tls": 993,
+  "imap/starttls": 143,
+  "pop3/tls": 995,
+  "pop3/starttls": 110,
+};
+
+/** A bare hostname or an IP literal: no scheme, port, path, space or wildcard. */
+const HOSTNAME = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/;
+const IPV6 = /^\[?[0-9a-f:.]+\]?$/;
+
+function plausibleHost(value) {
+  if (!value || value.length > 253) return false;
+  if (/\s/.test(value)) return false;
+  return HOSTNAME.test(value) || IPV6.test(value);
+}
+
 /**
  * The domain-to-provider table used when an account is first seen.
  *
@@ -184,10 +228,63 @@ function hosts() {
   return [...new Set(PROVIDERS.map((provider) => provider.host))];
 }
 
+/**
+ * The endpoint an instance carries because the user filled one in, or `null`.
+ *
+ * All four fields are published by the host in `publicFields` (the password is
+ * the only secret), and the host validates them when the form is saved: a bare
+ * hostname or IP literal, a port in 1..65535, one of the declared protocols and
+ * one of the two transports. Empty `server` is the preset path and the normal
+ * case, so anything unusable is treated as "no custom server" — the plugin
+ * never invents an endpoint, and a half-filled instance is a host bug rather
+ * than a reason to guess.
+ */
+function customEndpointOf(publicFields) {
+  const fields = publicFields && typeof publicFields === "object" && !Array.isArray(publicFields)
+    ? publicFields
+    : {};
+  const host = String(fields.server ?? "").trim().toLowerCase();
+  if (!host) return null;
+  if (!plausibleHost(host)) return null;
+  const protocol = String(fields.protocol ?? "").trim().toLowerCase();
+  if (!USER_PROTOCOLS.includes(protocol)) return null;
+  const security = String(fields.security ?? "").trim().toLowerCase();
+  if (!USER_SECURITY.includes(security)) return null;
+  const port = Number(String(fields.port ?? "").trim());
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) return null;
+  return { id: CUSTOM_PROVIDER_ID, host, port, protocol, security };
+}
+
+/** What changes when the user edits the account: protocol, transport, host, port. */
+function endpointKey(endpoint) {
+  if (!endpoint) return "";
+  return `${endpoint.protocol}/${endpoint.security}://${endpoint.host}:${endpoint.port}`;
+}
+
+/**
+ * The one line a custom account is labelled with in the panel.
+ *
+ * `Custom server mail.example.com:993 · IMAP · SSL`: the host, the port and the
+ * two facts a user needs to compare against what their administrator told them.
+ */
+function customTitle(endpoint, locale) {
+  const zh = String(locale ?? "").startsWith("zh");
+  const protocol = endpoint.protocol === "pop3" ? "POP3" : "IMAP";
+  const security = endpoint.security === "starttls" ? "STARTTLS" : "SSL";
+  return `${zh ? "自定义服务器" : "Custom server"} ${endpoint.host}:${endpoint.port} · ${protocol} · ${security}`;
+}
+
 module.exports = {
+  CUSTOM_PROVIDER_ID,
+  DEFAULT_PORTS,
   PROVIDERS,
+  USER_PROTOCOLS,
+  USER_SECURITY,
   catalogue,
+  customEndpointOf,
+  customTitle,
   domainOf,
+  endpointKey,
   endpoints,
   findProvider,
   hosts,

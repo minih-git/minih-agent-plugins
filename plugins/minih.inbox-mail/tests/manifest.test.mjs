@@ -31,10 +31,10 @@ const HOSTNAME = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/;
 const CONTRIB_ID = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 const localized = (value) => Boolean(value && typeof value === "object" && value.en && value["zh-CN"]);
 
-test("the plugin is published as minih.inbox-mail 0.2.0, versioned with its package", () => {
+test("the plugin is published as minih.inbox-mail 0.3.0, versioned with its package", () => {
   assert.equal(manifest.schemaVersion, 1);
   assert.equal(manifest.id, "minih.inbox-mail");
-  assert.equal(manifest.version, "0.2.0");
+  assert.equal(manifest.version, "0.3.0");
   assert.equal(manifest.version, pkg.version);
   assert.equal(manifest.main, "main.js");
   assert.ok(exists(manifest.main), "the entry point must be in the tree");
@@ -60,7 +60,11 @@ test("it asks for exactly the capabilities it uses, including the panel", () => 
 });
 
 test("it declares the app version that actually has these host capabilities", () => {
-  assert.equal(manifest.engines.minihAgent, ">=1.9.0", "multi-instance credentials and sidebar views need 1.9.0");
+  assert.equal(
+    manifest.engines.minihAgent,
+    ">=1.10.0",
+    "a custom server needs the credential instance endpoint and the POP3 login of 1.10.0",
+  );
   assert.equal(manifest.activationEvents.includes("onStartup"), true, "a watcher has to start with the app");
 });
 
@@ -115,6 +119,25 @@ test("the credential slot holds up to five mailboxes and keeps the 0.1.0 field s
   assert.ok(localized(slot.title));
 });
 
+test("the slot admits a server the user types, for both protocols, and nothing more", () => {
+  const [slot] = manifest.contributes.credentials;
+  // The host reserves these four non-secret instance fields for an instance that
+  // carries its own endpoint. Declaring one here would be refused, and would also
+  // break the frozen field set the 0.1.0 migration depends on.
+  assert.deepEqual(slot.userEndpoint, { protocols: ["imap", "pop3"] });
+  for (const reserved of ["server", "port", "protocol", "security"]) {
+    assert.equal(
+      slot.fields.some((field) => field.key === reserved),
+      false,
+      `${reserved} belongs to the host, not to the slot`,
+    );
+  }
+  // The plugin's own table still knows nothing about a custom endpoint: an
+  // endpoint that is not a preset is never part of the reviewed allowlist.
+  assert.equal(providers.CUSTOM_PROVIDER_ID, "custom");
+  assert.equal(providers.catalogue("en").some((entry) => entry.id === "custom"), false);
+});
+
 test("the slot's scope admits every provider host it will be injected into", () => {
   const scope = manifest.contributes.credentials[0].scope.domains;
   assert.ok(Array.isArray(scope) && scope.length > 0, "a slot with no scope authorizes nothing");
@@ -131,6 +154,9 @@ test("the Inbox panel is one sidebar view with a localized title and a real entr
   const [view] = manifest.contributes.views;
   assert.match(view.id, CONTRIB_ID);
   assert.equal(view.placement, "sidebar");
+  // A sidebar icon the host knows: 1.10.0 adds "mail" to its list, and an older
+  // host that does not know the name draws a letter tile instead of failing.
+  assert.equal(view.icon, "mail");
   assert.ok(localized(view.title));
   assert.equal(view.title["zh-CN"], "收件箱");
   assert.ok(exists(view.entry), "the view entry must exist");
@@ -222,6 +248,17 @@ test("the safety notes describe the panel honestly, in both languages", () => {
   assert.match(zh, /只有你在「收件箱」面板里点开/);
   assert.match(zh, /无脚本/);
   assert.match(zh, /远程图片默认拦截/);
+  // The other way in: a server the user typed, and the protocol with no flags.
+  assert.match(en, /a server you typed into the account form yourself/);
+  assert.match(en, /the app injects the password only into the endpoint stored in the same instance/);
+  assert.match(en, /polled every five minutes, never sooner than the server's LOGIN-DELAY/);
+  assert.match(en, /never sends DELE/);
+  assert.match(en, /POP3 reports no flags/);
+  assert.match(zh, /自己填写的服务器/);
+  assert.match(zh, /只会把该实例的密码注入同一个实例里记录的地址/);
+  assert.match(zh, /不会早于服务器要求的 LOGIN-DELAY/);
+  assert.match(zh, /从不向 POP3 服务器发送 DELE/);
+  assert.match(zh, /POP3 不报告任何标记/);
   assert.match(zh, /不发信/);
   assert.match(zh, /不调用模型/);
 });

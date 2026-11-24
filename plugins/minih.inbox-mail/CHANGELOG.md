@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.3.0
+
+- **A mail server you type in yourself.** The `mailbox` credential slot declares
+  `userEndpoint: { protocols: ["imap", "pop3"] }`, so the host's account dialog
+  gains a "custom server" section — protocol, server, encryption, port — and the
+  four non-secret fields come back in `credentials.list`. An account whose
+  `publicFields.server` is set connects with its `credentialRef` only and no
+  endpoint: the endpoint lives in that instance, the host injects the password
+  into that endpoint and no other, and the plugin never names a host of its own
+  choosing. Preset providers are unchanged, allowlist included. Requires Desktop
+  1.10.0 (`engines.minihAgent` is `>=1.10.0`).
+- **POP3 receiving**, for a typed server: a new polling watcher opens one short
+  session every five minutes — never sooner than the server's `LOGIN-DELAY` —
+  with `CAPA`, `STAT`, `UIDL`, `TOP n 0` for the headers of unseen mail and
+  `QUIT`. The first poll records a baseline and announces nothing; what is
+  remembered is the UIDL (at most 500), because a message number only holds
+  inside one session. Opening a message is another short session that resolves
+  the UIDL and keeps at most 1 MiB of the `RETR`, draining the rest. It never
+  sends `DELE`: the command is not implemented at all.
+- A POP3 account has no read or starred state, so the panel hides those actions
+  and says why in one line, and "Only report unread mail" does not apply to it.
+- A company domain the plugin cannot place now shows both the provider list and a
+  hint that the server can be typed in the account dialog instead.
+- New copy in both languages: the panel (`view/strings.js`), the notification
+  reasons (including `STARTTLS_UNAVAILABLE` and a certificate that does not
+  verify) and the manifest's `en` / `zh-CN` blocks, whose safety notes now
+  describe the custom endpoint and POP3.
+- The sidebar icon is now `mail` instead of `bell`. Desktop 1.10.0 adds that
+  name to its icon list; an older host that does not know it draws a letter tile
+  rather than failing.
+- Not published to the catalog in this version: the host release that ships
+  `userEndpoint` and the POP3 login comes first.
+
 ## 0.2.0
 
 - Up to five mailboxes, each an instance of the host's `mailbox` credential slot

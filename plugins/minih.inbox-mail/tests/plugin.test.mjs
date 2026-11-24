@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { createFakeServer, message } from "./helpers/fake-imap.mjs";
+import { createFakePop3Server, popMessage } from "./helpers/fake-pop3.mjs";
 import { waitFor } from "./helpers/harness.mjs";
 
 const require = createRequire(import.meta.url);
@@ -104,7 +105,9 @@ function fakeHost({ instances = [], settings = {}, locale = "en", servers = {}, 
     instances: accounts.map((entry) => ({
       instanceId: entry.instanceId,
       label: entry.username,
-      publicFields: { username: entry.username },
+      // `fields` carries the four non-secret fields of an account whose server
+      // the user typed, which a 1.10.0 host publishes here.
+      publicFields: { username: entry.username, ...entry.fields },
       configured: true,
     })),
   });
@@ -139,8 +142,15 @@ function fakeHost({ instances = [], settings = {}, locale = "en", servers = {}, 
     net: {
       tcp: {
         connect: async ({ endpoint, credentialRef }) => {
-          assert.equal(endpoint.port, 993);
-          if (!credentialRef.includes("#")) {
+          // An account whose server the user typed passes no endpoint at all: the
+          // host reads it from the instance. A preset one names it, and 993 is
+          // the only IMAP port this plugin's providers use.
+          if (endpoint === undefined) {
+            assert.match(String(credentialRef), /^mailbox#/, "an instance is what binds the endpoint");
+          } else {
+            assert.equal(endpoint.port, 993);
+          }
+          if (!String(credentialRef).includes("#")) {
             throw coded("CREDENTIAL_INSTANCE_REQUIRED", "name an instance of the slot");
           }
           const server = servers[credentialRef];
@@ -153,7 +163,7 @@ function fakeHost({ instances = [], settings = {}, locale = "en", servers = {}, 
             emit("net:tcp:close", { type: "close", connectionId, hadError: Boolean(error) }),
           );
           connections.set(connectionId, { transport, credentialRef });
-          state.connects.push({ credentialRef, host: endpoint.host });
+          state.connects.push({ credentialRef, endpoint: endpoint ?? null, host: endpoint?.host ?? null });
           return { connectionId, authenticated: true };
         },
         send: async ({ connectionId, data }) => {
@@ -754,6 +764,132 @@ test("settings changes wake the watchers without dropping their connections", as
     host.emit("plugin:settingsChanged", {});
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.equal(host.state.connects.length, before, "a settings change is not a reconnect");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("a mailbox with its own server connects by credential instance only", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({
+    instances: [
+      {
+        instanceId: "acc_1",
+        username: "ceo@example.com",
+        fields: { server: "mail.example.com", port: "993", protocol: "imap", security: "tls" },
+      },
+    ],
+    servers: { "mailbox#acc_1": server },
+  });
+  const plugin = await loadWith(host);
+  try {
+    await waitFor(() => server.idling, { label: "the custom mailbox" });
+    const snapshot = (await panel(plugin, "inbox.snapshot")).snapshot;
+    const account = snapshot.accounts[0];
+    assert.equal(account.provider.id, "custom");
+    assert.match(account.provider.title, /mail\.example\.com:993 · IMAP · SSL/);
+    assert.equal(account.provider.custom.protocol, "imap");
+    assert.equal(account.protocol, "imap");
+    assert.equal(account.flagsSupported, true, "custom IMAP is still IMAP");
+    assert.equal(account.webmail, null, "no web page is guessed for a server we do not know");
+    // The endpoint is not named by the plugin: the instance carries it, and the
+    // host injects that instance's password into that endpoint alone.
+    assert.equal(host.state.connects.length, 1);
+    assert.equal(host.state.connects[0].credentialRef, "mailbox#acc_1");
+    assert.equal(host.state.connects[0].endpoint, null);
+    // After that it is the ordinary IMAP session, IDLE included.
+    assert.equal(server.idling, true);
+    assert.equal(server.sentLines[0], "A1 CAPABILITY");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("a preset provider still names its endpoint, and a custom account cannot be re-pointed", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({
+    instances: [
+      {
+        instanceId: "acc_1",
+        username: "ceo@example.com",
+        fields: { server: "mail.example.com", port: "993", protocol: "imap", security: "tls" },
+      },
+    ],
+    servers: { "mailbox#acc_1": server },
+  });
+  const plugin = await loadWith(host);
+  try {
+    await waitFor(() => server.idling, { label: "the custom mailbox" });
+    const picked = await panel(plugin, "inbox.setProvider", { instanceId: "acc_1", providerId: "tencentExmail" });
+    assert.equal(picked.ok, false);
+    assert.equal(picked.code, "CUSTOM_SERVER_ACCOUNT");
+    assert.equal(host.state.connects.length, 1, "nothing was dialled for a provider the account does not use");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("a POP3 mailbox is polled, announced once, and offers no read or star state", async () => {
+  const server = createFakePop3Server({ messages: [popMessage({ uidl: "AAA", subject: "already here" })] });
+  const host = fakeHost({
+    instances: [
+      {
+        instanceId: "acc_1",
+        username: "owner@example.com",
+        fields: { server: "pop.example.com", port: "995", protocol: "pop3", security: "tls" },
+      },
+    ],
+    servers: { "mailbox#acc_1": server },
+    settings: { importantSenders: "boss@example.com" },
+  });
+  const plugin = await loadWith(host);
+  try {
+    await waitFor(
+      async () => (await panel(plugin, "inbox.snapshot")).snapshot.accounts[0]?.status?.phase === "connected",
+      { label: "the baseline poll" },
+    );
+    assert.deepEqual(host.notifications, [], "mail that was already there is not announced");
+    assert.equal(host.state.connects[0].endpoint, null);
+
+    server.deliver(
+      popMessage({ uidl: "BBB", from: { name: "Boss", address: "boss@example.com" }, subject: "新邮件" }),
+    );
+    const checked = await panel(plugin, "inbox.check", { instanceId: "acc_1" });
+    assert.equal(checked.ok, true);
+    assert.equal(checked.handled, 1);
+    await waitFor(() => host.notifications.length === 1, { label: "the alert" });
+    const alert = host.notifications[0];
+    assert.equal(alert.kind, "alert");
+    assert.match(alert.body, /Boss/);
+    assert.ok(alert.dedupeKey.includes("pop3:BBB"), "the UIDL is what makes a replay impossible");
+
+    const snapshot = (await panel(plugin, "inbox.snapshot")).snapshot;
+    const account = snapshot.accounts[0];
+    assert.equal(account.protocol, "pop3");
+    assert.equal(account.flagsSupported, false);
+    assert.match(account.provider.title, /POP3/);
+    const listed = snapshot.messages[0];
+    assert.equal(listed.key, "pop3:BBB");
+    assert.equal(listed.unread, null, "POP3 reports no read state, so none is invented");
+    assert.equal(listed.starred, null);
+
+    const opened = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: "pop3:BBB" });
+    assert.equal(opened.ok, true);
+    assert.match(opened.message.text ?? "", /Hello from the test maildrop/);
+    assert.equal(opened.message.flagsSupported, false);
+    assert.ok(server.sentLines.includes("RETR 2"), server.sentLines.join(" | "));
+    assert.equal(server.sentLines.some((line) => /^DELE\b/.test(line)), false, "nothing is deleted");
+
+    const flagged = await panel(plugin, "inbox.setFlag", { accountId: "acc_1", key: "pop3:BBB", flag: "seen" });
+    assert.equal(flagged.ok, false);
+    assert.equal(flagged.code, "POP3_NO_FLAGS");
+
+    const webmail = await panel(plugin, "inbox.openWebmail", { instanceId: "acc_1" });
+    assert.equal(webmail.ok, false);
+    assert.equal(webmail.code, "NO_WEBMAIL");
   } finally {
     await plugin.onUnload();
     rmSync(host.dataPath, { recursive: true, force: true });
