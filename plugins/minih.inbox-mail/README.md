@@ -30,11 +30,11 @@ message; read state and the star change only when you click them.
 2. **Open the Inbox panel in the sidebar → "Add mailbox"**, then fill the host's
    form with your full email address and that code. Repeat for each mailbox you
    want; the same dialog also works in Settings → Plugins → Inbox mail.
-3. The provider is inferred from the address (`qq.com`/`foxmail.com`, `163.com`,
-   `126.com`, `gmail.com`/`googlemail.com`). A company address cannot be inferred,
-   so the panel asks you to pick one — or, if your mail service is not in the list
-   at all, open **Custom server** in that same dialog and type the server your
-   administrator gave you:
+3. **Pick your mail service in that same form** — QQ Mail, NetEase 163/126, Gmail,
+   Tencent Exmail, or **Custom server**. The form is where the provider belongs:
+   it is a required choice, so the plugin never has to guess from a domain. If your
+   mail service is not in the list, choose **Custom server** and type the address
+   your administrator gave you:
 
    | Field | What to enter |
    | --- | --- |
@@ -45,7 +45,11 @@ message; read state and the star change only when you click them.
 
    Nothing is dialled until you save the account. The server belongs to that one
    account: the app injects its password only into the endpoint stored beside it,
-   so this plugin cannot send your password anywhere it likes.
+   so this plugin cannot send your password anywhere it likes. To change any of
+   this later, edit the account in **Settings → Plugins → Inbox mail**; the account
+   keeps its identity, its baseline and its read progress, and only a switch
+   between IMAP and POP3 starts a fresh baseline (the two protocols do not share a
+   cursor).
 4. The first connection only records a starting point: it does not announce the
    mail already in the mailbox.
 
@@ -73,14 +77,15 @@ live.
 
 ## The Inbox panel
 
-- **Mailboxes** — one card per account with its address, its provider (changeable
-  in place for a preset), its state (connecting / connected / error with the
-  reason / waiting for a provider), an "open the web mailbox" shortcut when there
-  is one, and a remove button that asks once before it acts. An account with its
-  own server shows `Custom server mail.example.com:993 · IMAP · SSL` instead of a
-  provider menu: that endpoint lives in the account, not here. The panel states how
-  many accounts you have and never a ceiling: the slot declares no limit (the app
-  keeps its own safety bound of 100).
+- **Mailboxes** — one card per account: the address, a small state dot (the word
+  and, for a failure, the reason in one muted line and in the tooltip), and the
+  number of accounts in the column head. **Click a card to filter the list**; the
+  **All** entry above the list clears the filter. There is no provider picker, no
+  "open web mailbox" and no remove button here: accounts are added, edited and
+  removed in **Settings → Plugins → Inbox mail**, and the card shows what that
+  form produced (`Custom server mail.example.com:993 · IMAP · SSL`, for instance).
+  The panel states how many accounts you have and never a ceiling: the slot
+  declares no limit (the app keeps its own safety bound of 100).
 - **One list** — every account's mail, newest first, grouped into **Important**
   (the same rule as the alerts) and **Other**, with a filter per mailbox. Each row
   shows sender, subject, time, account, unread and star state where the protocol
@@ -205,9 +210,9 @@ belonged to, so the old file is left alone and each account baselines itself.
 
 - Folders, search, writing or replying, attachments, delete/move/archive.
 - AI triage of what the deterministic rule missed.
-- Editing the server of an existing account: remove it and add it again with
-  **Custom server** filled in. The account dialog the app shows is host-owned, and
-  it has no "edit this instance" step yet.
+- Anything about an account's own settings inside this panel: the host owns that
+  form, and from 1.10.0 it offers an edit entry per account (the connection code
+  fills in the values, and the authorization code has to be entered again).
 - Outlook/Hotmail, which needs XOAUTH2 in the host.
 
 Published in this repository's catalog as `minih.inbox-mail` 0.3.0. It needs

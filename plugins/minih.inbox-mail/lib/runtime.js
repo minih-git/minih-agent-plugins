@@ -322,6 +322,7 @@ function createRuntime(deps) {
           email,
           provider: null,
           custom: null,
+          missingServer: false,
           protocol: null,
           connectionKey: "",
           watcher: null,
@@ -330,31 +331,36 @@ function createRuntime(deps) {
       }
       record.label = label;
       record.email = email;
-      // A server the user typed wins over every other rule: the endpoint lives in
-      // the credential instance, and the host injects that instance's password
-      // into that endpoint alone. Nothing is inferred from the domain here — the
-      // domain says nothing about where a company's mail server is.
-      const custom = providers.customEndpointOf(instance.publicFields);
-      let provider = null;
-      if (!custom) {
-        provider = providerOf(instance.instanceId);
-        if (!provider) {
-          // First sight of this account: infer from the address when the domain
-          // has exactly one mail service, and otherwise leave it unselected until
-          // the user picks one in the panel. Connecting on a guess would send the
-          // password to the wrong server.
-          const inferred = providers.inferProviderId(email);
-          if (inferred) provider = accountsFile.setProvider(root, instance.instanceId, inferred);
-        }
-      }
-      const connectionKey = custom
-        ? providers.endpointKey(custom)
+      // Which service this account belongs to, in the order `lib/providers.js`
+      // documents: the endpoint the user typed, then the provider they chose in
+      // the host's form, then the choice a 0.2.0 panel stored, then the domain.
+      const stored = providerOf(instance.instanceId);
+      const resolved = providers.resolveAccount({
+        endpoint: providers.customEndpointOf(instance.publicFields),
+        fieldProvider: instance.publicFields?.provider,
+        storedProvider: stored ? stored.id : "",
+        email,
+      });
+      const provider = resolved.provider;
+      const connectionKey = resolved.custom
+        ? providers.endpointKey(resolved.custom)
         : provider
           ? `preset:${provider.id}`
           : "";
-      record.custom = custom;
+      const protocol = resolved.custom ? resolved.custom.protocol : provider ? "imap" : null;
+      // An edit can change the protocol, and the two cursors are not
+      // interchangeable: an IMAP UID means nothing to POP3 and a POP3 UIDL means
+      // nothing to IMAP. The account keeps its identity, its baseline does not.
+      if (record.protocol && protocol && record.protocol !== protocol) {
+        const state = accountStateOf(record.instanceId);
+        state.cursor = null;
+        state.pop3 = { baselined: false, uidls: [], read: [] };
+        log("info", `the protocol of ${instance.instanceId} changed; a fresh baseline follows`);
+      }
+      record.custom = resolved.custom;
+      record.missingServer = resolved.missingServer;
       record.provider = provider ? provider.id : null;
-      record.protocol = custom ? custom.protocol : provider ? "imap" : null;
+      record.protocol = protocol;
       if (record.connectionKey !== connectionKey) {
         // A different server, protocol or transport means the open connection is
         // to the wrong place: an edited account is not a poke.
@@ -372,9 +378,22 @@ function createRuntime(deps) {
 
   function statusFor(record) {
     const state = accountStateOf(record.instanceId);
+    // The provider is chosen in the account form now, so the two ways an account
+    // can be unusable are distinct: "custom server, no server filled in" and "no
+    // provider at all". Both are fixed in the host's account settings.
+    if (record.missingServer) {
+      return {
+        phase: "needs-server",
+        lastError: null,
+        lastCheckAt: state.lastCheckAt,
+        lastDigestAt: state.lastDigestAt,
+        uidValidity: state.cursor?.uidValidity ?? null,
+        maxUid: state.cursor?.maxUid ?? null,
+      };
+    }
     // `connectionKey` is what there is to connect to: a preset provider id, or
     // the endpoint the user typed. Without one the account is waiting for the
-    // panel, and saying "connecting" would be a lie.
+    // form, and saying "connecting" would be a lie.
     if (!record.connectionKey) {
       return {
         phase: "needs-provider",
@@ -396,6 +415,9 @@ function createRuntime(deps) {
       label: record.label,
       email: record.email,
       protocol: record.protocol ?? null,
+      // A `provider: custom` account with no server filled in yet: the panel says
+      // so instead of pretending it is connecting.
+      missingServer: record.missingServer === true,
       // What the panel may offer: a POP3 mailbox has no read or starred state.
       flagsSupported: record.protocol !== "pop3",
       provider: record.custom
@@ -500,32 +522,6 @@ function createRuntime(deps) {
       const result = await host.credentials.requestRemove(SLOT_ID, String(instanceId ?? ""));
       if (result?.removed) await refresh();
       return result ?? { cancelled: true };
-    },
-
-    /** Record the provider the user picked for one account, and connect it. */
-    async setProvider(instanceId, providerId) {
-      const record = accounts.get(instanceId);
-      if (!record) throw coded("ACCOUNT_NOT_FOUND", "this mailbox is not in the list");
-      // An account whose server the user typed is not a provider choice: that
-      // endpoint lives in the credential instance, and a provider picked here
-      // would be overwritten by the next refresh anyway.
-      if (record.custom) {
-        throw coded("CUSTOM_SERVER_ACCOUNT", "this mailbox already names its own server");
-      }
-      const provider = providers.findProvider(String(providerId ?? ""));
-      if (!provider) throw coded("INVALID_ARGUMENT", "unknown mail provider");
-      if (provider.auth !== "password") {
-        throw coded("PROVIDER_NEEDS_OAUTH", `${provider.label} requires OAuth2 for IMAP, which this app cannot do yet`);
-      }
-      accountsFile.setProvider(root, instanceId, provider.id);
-      await deps.persist();
-      await stopAccount(record);
-      record.provider = provider.id;
-      record.custom = null;
-      record.protocol = "imap";
-      record.connectionKey = `preset:${provider.id}`;
-      startAccount(record);
-      return { instanceId, provider: provider.id };
     },
 
     async checkNow(instanceId) {

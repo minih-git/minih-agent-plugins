@@ -118,3 +118,30 @@ test("a custom server never widens the preset allowlist", () => {
   assert.equal(providers.hosts().includes("mail.example.com"), false);
   assert.equal(providers.endpoints().some((endpoint) => endpoint.host === "mail.example.com"), false);
 });
+
+test("the account's provider is resolved in the order the addendum fixed", () => {
+  const endpoint = providers.customEndpointOf({
+    server: "mail.example.com",
+    port: "993",
+    protocol: "imap",
+    security: "tls",
+  });
+  // 1. An endpoint in the instance wins over everything else.
+  const custom = providers.resolveAccount({ endpoint, fieldProvider: "qq", storedProvider: "gmail", email: "a@gmail.com" });
+  assert.equal(custom.custom.host, "mail.example.com");
+  assert.equal(custom.provider, null);
+  // 2. The `provider` field chosen in the account form.
+  assert.equal(providers.resolveAccount({ fieldProvider: "netease163" }).provider.id, "netease163");
+  // 3. `custom` with no server is a state of its own, not a guess.
+  const needsServer = providers.resolveAccount({ fieldProvider: "custom" });
+  assert.equal(needsServer.missingServer, true);
+  assert.equal(needsServer.provider, null);
+  // 4. What a 0.2.0 panel stored still counts.
+  assert.equal(providers.resolveAccount({ storedProvider: "qq" }).provider.id, "qq");
+  // 5. The domain is the last word, and only for the unambiguous ones.
+  assert.equal(providers.resolveAccount({ email: "someone@163.com" }).provider.id, "netease163");
+  assert.equal(providers.resolveAccount({ email: "ceo@example.com" }).provider, null);
+  // A value the dropdown does not offer is not a provider choice.
+  assert.equal(providers.resolveAccount({ fieldProvider: "outlook" }).provider, null);
+  assert.equal(providers.resolveAccount({}).missingServer, false);
+});

@@ -43,8 +43,8 @@
       <main class="list" aria-labelledby="list-title">
         <div class="column-head">
           <h2 id="list-title" class="visually-hidden">邮件列表</h2>
-          <label class="visually-hidden" for="account-filter">筛选账号</label>
-          <select id="account-filter"></select>
+          <!-- One entry that clears the filter; the cards themselves are the choices. -->
+          <button type="button" class="btn btn-quiet" id="btn-all"></button>
         </div>
         <div class="groups" id="groups">
           <section class="group" id="group-important" hidden>

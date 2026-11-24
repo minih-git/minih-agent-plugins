@@ -91,6 +91,58 @@
             }
           },
           {
+            "key": "provider",
+            "label": {
+              "en": "Mail service",
+              "zh-CN": "邮箱服务商"
+            },
+            "type": "select",
+            "options": [
+              {
+                "value": "qq",
+                "label": {
+                  "en": "QQ Mail",
+                  "zh-CN": "QQ 邮箱"
+                }
+              },
+              {
+                "value": "netease163",
+                "label": {
+                  "en": "NetEase 163",
+                  "zh-CN": "网易 163 邮箱"
+                }
+              },
+              {
+                "value": "netease126",
+                "label": {
+                  "en": "NetEase 126",
+                  "zh-CN": "网易 126 邮箱"
+                }
+              },
+              {
+                "value": "gmail",
+                "label": {
+                  "en": "Gmail",
+                  "zh-CN": "Gmail"
+                }
+              },
+              {
+                "value": "tencentExmail",
+                "label": {
+                  "en": "Tencent Exmail",
+                  "zh-CN": "腾讯企业邮"
+                }
+              },
+              {
+                "value": "custom",
+                "label": {
+                  "en": "Custom server (fill in the address below)",
+                  "zh-CN": "自定义服务器（在下面填写服务器）"
+                }
+              }
+            ]
+          },
+          {
             "key": "password",
             "label": {
               "en": "IMAP/POP3 authorization code or app password",

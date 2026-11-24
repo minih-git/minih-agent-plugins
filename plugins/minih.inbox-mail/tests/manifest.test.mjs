@@ -111,10 +111,24 @@ test("the credential slot has no account ceiling and keeps the 0.1.0 field set",
   assert.equal("max" in slot.multiple, false);
   assert.equal(slot.labelField, "username", "an instance is labelled by the address the user typed");
   const keys = slot.fields.map((field) => field.key);
-  // The set is frozen: the host drops an instance whose declared fields are not
-  // all filled, so a new field here would delete the account migrated from 0.1.0.
-  assert.deepEqual([...keys].sort(), ["password", "username"]);
+  // `username` and `password` are the frozen 0.1.0 pair; `provider` was added in
+  // 0.3.0 for the account form. The host keeps reporting an existing instance, so
+  // an account created before the field existed still loads (see plugin.test).
+  assert.deepEqual([...keys].sort(), ["password", "provider", "username"]);
   assert.equal(slot.fields.find((field) => field.key === "password").secret, true);
+  const providerField = slot.fields.find((field) => field.key === "provider");
+  assert.equal(providerField.secret, undefined, "a select cannot be secret");
+  assert.equal(providerField.type, "select");
+  // The dropdown offers the services that can actually log in, plus the custom
+  // server; Outlook needs OAuth2 and is deliberately absent.
+  assert.deepEqual(
+    providerField.options.map((option) => option.value),
+    ["qq", "netease163", "netease126", "gmail", "tencentExmail", "custom"],
+  );
+  for (const option of providerField.options) {
+    assert.ok(localized(option.label), `${option.value} needs both locales`);
+  }
+  assert.equal(providerField.options.some((option) => option.value === "outlook"), false);
   assert.equal(slot.fields.find((field) => field.key === slot.labelField).secret, undefined);
   for (const field of slot.fields) {
     assert.match(field.key, CONTRIB_ID);

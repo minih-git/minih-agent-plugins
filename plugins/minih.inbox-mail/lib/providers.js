@@ -125,6 +125,27 @@ const PROVIDERS = [
 
 /** The id the panel shows for an account whose server the user typed. */
 const CUSTOM_PROVIDER_ID = "custom";
+/**
+ * The credential field the account form fills in.
+ *
+ * The provider is chosen when the account is created, not afterwards: the host
+ * requires every declared field to be non-empty, so it is a required dropdown in
+ * its own form, and the plugin only reads the value back through `publicFields`.
+ * `custom` is a value of that field, not a provider entry — it means "the server
+ * is in this same instance", which is the account the user typed.
+ */
+const PROVIDER_FIELD = "provider";
+/** The provider entries the dropdown offers, in the order the panel shows them. */
+const PROVIDER_OPTIONS = [
+  { value: "qq" },
+  { value: "netease163" },
+  { value: "netease126" },
+  { value: "gmail" },
+  { value: "tencentExmail" },
+  // Outlook is deliberately absent: it needs OAuth2 for IMAP, which the host
+  // cannot do, and offering it would hand the user a slot that never logs in.
+  { value: CUSTOM_PROVIDER_ID },
+];
 /** The protocols the credential slot's `userEndpoint` admits. */
 const USER_PROTOCOLS = ["imap", "pop3"];
 /** The transports the host can perform a login over; plaintext is not one. */
@@ -229,6 +250,35 @@ function hosts() {
 }
 
 /**
+ * Which service one account belongs to, in the order the addendum fixed.
+ *
+ *   1. an endpoint in the instance (`server` set)      → custom, whatever else says
+ *   2. the `provider` field chosen in the account form → that provider
+ *   3. `provider: custom` without a server             → the account needs a server
+ *   4. the provider a 0.2.0 panel stored               → that provider
+ *   5. the address's domain                            → that provider, else nothing
+ *
+ * Steps 3–5 are what keep a 0.2.0 account usable: it was created before the field
+ * existed, so it has neither a `provider` value nor an endpoint, and its old
+ * choice lives in the plugin's own file.
+ */
+function resolveAccount({ endpoint = null, fieldProvider = "", storedProvider = "", email = "" } = {}) {
+  if (endpoint) return { custom: endpoint, provider: null, missingServer: false };
+  const field = String(fieldProvider ?? "").trim();
+  if (field === CUSTOM_PROVIDER_ID) return { custom: null, provider: null, missingServer: true };
+  // Only a value the dropdown actually offers counts: the host refuses anything
+  // else on save, and a hand-edited file must not become a provider choice.
+  const offered = PROVIDER_OPTIONS.some((option) => option.value === field);
+  const chosen = offered ? findProvider(field) : null;
+  if (chosen) return { custom: null, provider: chosen, missingServer: false };
+  const stored = findProvider(String(storedProvider ?? "").trim());
+  if (stored) return { custom: null, provider: stored, missingServer: false };
+  const inferredId = inferProviderId(email);
+  const inferred = inferredId ? findProvider(inferredId) : null;
+  return { custom: null, provider: inferred, missingServer: false };
+}
+
+/**
  * The endpoint an instance carries because the user filled one in, or `null`.
  *
  * All four fields are published by the host in `publicFields` (the password is
@@ -277,6 +327,8 @@ function customTitle(endpoint, locale) {
 module.exports = {
   CUSTOM_PROVIDER_ID,
   DEFAULT_PORTS,
+  PROVIDER_FIELD,
+  PROVIDER_OPTIONS,
   PROVIDERS,
   USER_PROTOCOLS,
   USER_SECURITY,
@@ -290,4 +342,5 @@ module.exports = {
   hosts,
   inferProviderId,
   providerFor,
+  resolveAccount,
 };

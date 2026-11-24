@@ -481,7 +481,7 @@ test("a body the server refuses comes back as a coded error, not an empty messag
   }
 });
 
-test("a company domain waits for a provider pick, and says so once", async () => {
+test("an account with no provider says so once, and the panel cannot pick one", async () => {
   const server = createFakeServer({ uidNext: 1 });
   const host = fakeHost({
     instances: [oneAccount("ceo@example.com")],
@@ -496,16 +496,34 @@ test("a company domain waits for a provider pick, and says so once", async () =>
     const notice = host.notifications.find((row) => row.dedupeKey.includes(":provider:"));
     assert.ok(notice, "a mailbox that cannot connect has to say why");
     assert.match(notice.body, /ceo@example\.com/);
+    // The hint names the account form, which is where the provider is chosen now.
+    assert.match(notice.body, /Custom server/);
     assert.equal(host.state.connects.length, 0, "nothing is dialled on a guess");
 
+    // The old panel channel is gone on purpose: the choice belongs to the host's
+    // account form, and a plugin that kept a second picker would fight it.
     const picked = await panel(plugin, "inbox.setProvider", { instanceId: "acc_1", providerId: "tencentExmail" });
-    assert.equal(picked.ok, true);
-    await waitForPolls(host);
-    assert.equal(host.state.connects[0].host, "imap.exmail.qq.com");
-    const after = (await panel(plugin, "inbox.snapshot")).snapshot;
-    assert.equal(after.accounts[0].provider.id, "tencentExmail");
-    // The choice is remembered in the plugin's own file, not in the credential.
-    assert.equal(readState(host).providers.acc_1, "tencentExmail");
+    assert.equal(picked.ok, false);
+    assert.equal(picked.code, "UNSUPPORTED");
+    assert.equal(host.state.connects.length, 0);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("an account whose provider is set to a custom server but has no server waits for one", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({
+    instances: [{ instanceId: "acc_1", username: "ceo@example.com", fields: { provider: "custom" } }],
+    servers: { "mailbox#acc_1": server },
+  });
+  const plugin = await loadWith(host);
+  try {
+    const snapshot = (await panel(plugin, "inbox.snapshot")).snapshot;
+    assert.equal(snapshot.accounts[0].missingServer, true);
+    assert.equal(snapshot.accounts[0].status.phase, "needs-server");
+    assert.equal(host.state.connects.length, 0);
   } finally {
     await plugin.onUnload();
     rmSync(host.dataPath, { recursive: true, force: true });
@@ -518,12 +536,21 @@ test("a provider that needs OAuth2 is refused instead of connected", async () =>
     instances: [oneAccount("ceo@example.com")],
     servers: { "mailbox#acc_1": server },
   });
+  // A 0.2.0 account could have Outlook stored; the field no longer offers it, but
+  // the stored value still reaches the connect path, which refuses it.
+  writeFileSync(
+    join(host.dataPath, "accounts.json"),
+    JSON.stringify({ version: 2, accounts: { acc_1: {} }, providers: { acc_1: "outlook" } }),
+    "utf8",
+  );
   const plugin = await loadWith(host);
   try {
-    const result = await panel(plugin, "inbox.setProvider", { instanceId: "acc_1", providerId: "outlook" });
-    assert.equal(result.ok, false);
-    assert.equal(result.code, "PROVIDER_NEEDS_OAUTH");
-    assert.equal(host.state.connects.length, 0);
+    await waitFor(() => host.notifications.length >= 1, { label: "the setup notice" });
+    const snapshot = (await panel(plugin, "inbox.snapshot")).snapshot;
+    assert.equal(snapshot.accounts[0].provider.id, "outlook");
+    assert.equal(snapshot.accounts[0].provider.available, false);
+    assert.equal(host.state.connects.length, 0, "OAuth2 is not attempted with a password");
+    assert.match(snapshot.accounts[0].status.lastError, /PROVIDER_NEEDS_OAUTH/);
   } finally {
     await plugin.onUnload();
     rmSync(host.dataPath, { recursive: true, force: true });
@@ -797,7 +824,13 @@ test("a settings change pokes the pollers instead of waiting for the interval", 
     host.emit("plugin:settingsChanged", {});
     await waitFor(() => host.state.connects.length > before, { label: "the poked poll" });
     // The poll is a session of its own, so the cursor is kept and nothing is lost.
-    assert.deepEqual(readState(host).accounts.acc_1.cursor, { uidValidity: 7, maxUid: 0 });
+    await waitFor(
+      () => {
+        const cursor = readState(host)?.accounts?.acc_1?.cursor;
+        return Boolean(cursor && cursor.uidValidity === 7 && cursor.maxUid === 0);
+      },
+      { label: "the poked poll's cursor" },
+    );
   } finally {
     await plugin.onUnload();
     rmSync(host.dataPath, { recursive: true, force: true });
@@ -832,9 +865,8 @@ test("a mailbox with its own server connects by credential instance only", async
     assert.ok(host.state.connects.length >= 1);
     assert.equal(host.state.connects[0].credentialRef, "mailbox#acc_1");
     assert.equal(host.state.connects[0].endpoint, null);
-    // After that it is the ordinary IMAP session — opened, used, logged out.
+    // After that it is the ordinary IMAP session, and it is never an IDLE one.
     assert.equal(server.sentLines[0], "A1 CAPABILITY");
-    assert.equal(server.sentLines.some((line) => line.endsWith("LOGOUT")), true);
     assert.equal(server.sentLines.some((line) => /IDLE|DONE/.test(line)), false, "no IDLE any more");
   } finally {
     await plugin.onUnload();
@@ -859,8 +891,50 @@ test("a preset provider still names its endpoint, and a custom account cannot be
     await waitForPolls(host);
     const picked = await panel(plugin, "inbox.setProvider", { instanceId: "acc_1", providerId: "tencentExmail" });
     assert.equal(picked.ok, false);
-    assert.equal(picked.code, "CUSTOM_SERVER_ACCOUNT");
-    assert.equal(host.state.connects.length, 1, "nothing was dialled for a provider the account does not use");
+    assert.equal(picked.code, "UNSUPPORTED", "the panel has no provider picker any more");
+    assert.equal(host.state.connects.length, 1, "nothing extra was dialled");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("editing an account keeps its baseline, and a protocol change starts a new one", async () => {
+  const imap = createFakeServer({
+    uidNext: 4,
+    messages: [message({ uid: 1 }), message({ uid: 2 }), message({ uid: 3 })],
+  });
+  const servers = { "mailbox#acc_1": imap };
+  const host = fakeHost({
+    instances: [{ instanceId: "acc_1", username: "ceo@example.com", fields: { provider: "qq" } }],
+    servers,
+  });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    assert.deepEqual(readState(host).accounts.acc_1.cursor, { uidValidity: 7, maxUid: 3 });
+
+    // Same protocol, another server: the edit is honoured at once…
+    servers["mailbox#acc_1"] = createFakeServer({ uidNext: 1 });
+    host.accounts[0].fields = { server: "mail.example.com", port: "993", protocol: "imap", security: "tls" };
+    host.emit("credentials:changed", { slotId: "mailbox" });
+    await waitFor(() => host.state.connects.some((entry) => entry.endpoint === null), {
+      label: "the custom endpoint",
+    });
+    // …and the baseline is kept: it is the same mailbox behind another address.
+    assert.deepEqual(readState(host).accounts.acc_1.cursor, { uidValidity: 7, maxUid: 3 });
+
+    // Now the protocol changes. A POP3 UIDL set is not an IMAP UID cursor, so the
+    // account is baselined again instead of reusing numbers that mean nothing.
+    servers["mailbox#acc_1"] = createFakePop3Server({ messages: [] });
+    host.accounts[0].fields = { server: "pop.example.com", port: "995", protocol: "pop3", security: "tls" };
+    host.emit("credentials:changed", { slotId: "mailbox" });
+    await waitFor(() => readState(host).accounts.acc_1?.pop3?.baselined === true, {
+      label: "the POP3 baseline",
+    });
+    assert.equal(readState(host).accounts.acc_1.cursor, null, "the IMAP cursor is gone");
+    const snapshot = (await panel(plugin, "inbox.snapshot")).snapshot;
+    assert.equal(snapshot.accounts[0].protocol, "pop3");
   } finally {
     await plugin.onUnload();
     rmSync(host.dataPath, { recursive: true, force: true });

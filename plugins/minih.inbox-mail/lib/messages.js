@@ -32,7 +32,7 @@ const TEXT = {
     needsSetup: "Mailbox not connected",
     needsProvider: "Choose a mail provider",
     needsProviderBody: (label) =>
-      `${label || "This account"} has no provider yet, so it is not connected. Open the Inbox panel in the sidebar and pick one there — or, if your mail service is not in that list, remove the account and add it again with “Custom server” filled in.`,
+      `${label || "This account"} has no mail service yet, so it is not connected. Open Settings → Plugins → Inbox mail and edit the account: pick your provider there, or “Custom server” and fill in its address.`,
     reasons: {
       missing:
         "The plugin has no mailbox credential yet. Add one from the Inbox panel in the sidebar, or in Settings.",
@@ -63,7 +63,7 @@ const TEXT = {
     needsSetup: "邮箱尚未连接",
     needsProvider: "请选择邮箱服务商",
     needsProviderBody: (label) =>
-      `${label || "这个账号"}还没指定服务商，所以暂时不连接。请在侧栏的「收件箱」面板选择一个服务商；如果你的邮箱不在那个列表里，请移除这个账号后重新添加，并在对话框里展开「自定义服务器」填写服务器信息。`,
+      `${label || "这个账号"}还没指定邮箱服务，所以暂时不连接。请打开 设置 → 插件 → 邮箱收件 编辑这个账号：选择你的服务商，或者选「自定义服务器」并填写服务器信息。`,
     reasons: {
       missing: "插件还没有邮箱凭据。请在侧栏「收件箱」面板或设置里添加一个账号。",
       rejected: "邮箱拒绝了登录。请核对这个账号在「收件箱」面板里的服务商，并重新生成授权码。",

@@ -289,11 +289,6 @@ async function onPanelInvoke(channel, payload) {
         await announceAccounts();
         return { ok: true, ...result };
       }
-      case "inbox.setProvider": {
-        const result = await runtime.setProvider(String(payload?.instanceId ?? ""), payload?.providerId);
-        await announceAccounts();
-        return { ok: true, ...result };
-      }
       case "inbox.check": {
         const result = await runtime.checkNow(payload?.instanceId ? String(payload.instanceId) : undefined);
         return { ok: true, ...result };

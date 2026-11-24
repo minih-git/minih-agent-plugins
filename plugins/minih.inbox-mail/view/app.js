@@ -28,7 +28,6 @@ const state = {
   filter: "all",
   reader: null,
   banner: null,
-  confirmRemove: null,
   busy: false,
 };
 
@@ -42,7 +41,7 @@ const nodes = {
   accountsHint: document.getElementById("accounts-hint"),
   accountList: document.getElementById("account-list"),
   accountsEmpty: document.getElementById("accounts-empty"),
-  filter: document.getElementById("account-filter"),
+  all: document.getElementById("btn-all"),
   groups: document.getElementById("groups"),
   importantGroup: document.getElementById("group-important"),
   importantTitle: document.getElementById("group-important-title"),
@@ -186,6 +185,13 @@ function statusLabel(account) {
   return table[phase] ?? table.stopped;
 }
 
+/** The card's one-word state; the long version is the tooltip. */
+function shortStatus(account) {
+  const table = t().status;
+  const phase = account.status?.phase ?? "stopped";
+  return table.short[phase] ?? table.short.stopped;
+}
+
 function renderStatic() {
   const table = t();
   nodes.title.textContent = table.title;
@@ -227,88 +233,48 @@ function renderAccounts() {
   nodes.accountList.replaceChildren();
   for (const account of accounts) {
     const selected = state.filter === account.instanceId;
-    const card = el("li", { class: `account${selected ? " is-selected" : ""}${account.provider ? "" : " is-pending"}` });
+    const pending = account.status?.phase === "needs-provider" || account.status?.phase === "needs-server";
+    const card = el("li", { class: `account${selected ? " is-selected" : ""}${pending ? " is-pending" : ""}` });
 
-    const status = el("span", { class: "status", dataset: { phase: account.status?.phase ?? "stopped" } });
-    status.textContent = statusLabel(account);
-
-    card.append(
-      el(
-        "div",
-        { class: "account-head" },
-        el("span", { class: "account-label", title: account.label, text: account.label }),
-        status,
-      ),
-    );
-
-    if (account.provider?.custom) {
-      // A server the user typed is a fact, not a choice: it is shown, and the
-      // only place to change it is the account dialog the host owns.
-      card.append(
-        el("div", { class: "account-provider" }, el("span", { class: "provider-custom", text: account.provider.title })),
-      );
-    } else {
-      const select = el("select", {
-        "aria-label": `${t().provider}: ${account.label}`,
-        onChange: (event) => void changeProvider(account.instanceId, event.target.value),
-      });
-      select.append(el("option", { value: "", text: account.provider ? t().providerHint : t().status["needs-provider"], selected: !account.provider }));
-      for (const provider of state.snapshot.providers) {
-        select.append(
-          el("option", {
-            value: provider.id,
-            text: provider.title,
-            selected: account.provider?.id === provider.id,
-            disabled: !provider.available && account.provider?.id !== provider.id,
-          }),
-        );
-      }
-      card.append(el("div", { class: "account-provider" }, select));
-      // A domain this plugin cannot place is exactly the case a company mailbox
-      // starts with, so the panel offers the other way in the same breath.
-      if (!account.provider) card.append(el("p", { class: "account-hint", text: t().customServerHint }));
-    }
-
-    if (account.flagsSupported === false) {
-      card.append(el("p", { class: "account-hint", text: t().pop3Note }));
-    }
-
-    if (account.status?.phase === "error" && account.status?.lastError) {
-      card.append(el("p", { class: "account-error", text: statusLabel(account) }));
-    }
-
-    const foot = el("div", { class: "account-foot" });
-    foot.append(
-      button(selected ? t().all : t().onlyThis, {
-        quiet: true,
-        onClick: () => {
-          state.filter = selected ? "all" : account.instanceId;
-          render();
-        },
+    // The card is the control: the whole row filters the list. A button keeps it
+    // reachable from the keyboard and announced as a button by the screen reader.
+    const target = el("button", {
+      type: "button",
+      class: "account-main",
+      "aria-pressed": selected ? "true" : "false",
+      title: account.label,
+      onClick: () => {
+        state.filter = selected ? "all" : account.instanceId;
+        render();
+      },
+    });
+    target.append(
+      el("span", { class: "account-label", text: account.label }),
+      el("span", {
+        class: "status",
+        dataset: { phase: account.status?.phase ?? "stopped" },
+        title: statusLabel(account),
+        text: shortStatus(account),
       }),
     );
-    if (account.webmail) {
-      foot.append(button(t().openWebmail, { quiet: true, onClick: () => void openWebmail(account.instanceId) }));
+    card.append(target);
+
+    // The reason lives here, muted, and in full in the tooltip: a sidebar card is
+    // not the place for a paragraph.
+    if (account.status?.phase === "error" && account.status?.lastError) {
+      card.append(el("p", { class: "account-error", title: statusLabel(account), text: statusLabel(account) }));
     }
-    if (state.confirmRemove === account.instanceId) {
-      const yes = button(t().removeYes, { quiet: true, onClick: () => void removeAccount(account.instanceId) });
-      yes.style.color = "var(--danger)";
-      foot.append(yes, button(t().removeNo, { quiet: true, onClick: () => { state.confirmRemove = null; render(); } }));
-    } else {
-      foot.append(button(t().remove, { quiet: true, onClick: () => { state.confirmRemove = account.instanceId; render(); } }));
+    if (account.missingServer) {
+      card.append(el("p", { class: "account-hint", text: t().status["needs-server"] }));
     }
-    card.append(foot);
     nodes.accountList.append(card);
   }
 
-  const filter = nodes.filter;
-  filter.replaceChildren(el("option", { value: "all", text: t().all, selected: state.filter === "all" }));
-  for (const account of accounts) {
-    filter.append(
-      el("option", { value: account.instanceId, text: account.label, selected: state.filter === account.instanceId }),
-    );
-  }
-  filter.value = state.filter;
+  nodes.all.replaceChildren();
+  nodes.all.textContent = t().all;
+  nodes.all.hidden = accounts.length === 0;
+  nodes.all.classList.toggle("is-on", state.filter === "all");
+  nodes.all.setAttribute("aria-pressed", state.filter === "all" ? "true" : "false");
 }
 
 function renderList() {
@@ -545,17 +511,6 @@ async function setFlag(message, flag) {
   }
 }
 
-async function changeProvider(instanceId, providerId) {
-  if (!providerId) return;
-  try {
-    await call("inbox.setProvider", { instanceId, providerId });
-    setBanner(null);
-    await refresh({ quiet: true });
-  } catch (error) {
-    setBanner(describe(error), true);
-  }
-}
-
 async function addAccount() {
   if (state.busy) return;
   state.busy = true;
@@ -565,24 +520,12 @@ async function addAccount() {
     await refresh({ quiet: true });
     if (result.instanceId) {
       const account = accountById(result.instanceId);
-      if (account && !account.provider) setBanner(t().providerHint);
+      if (account && !account.provider && !account.missingServer) setBanner(t().customServerHint);
     }
   } catch (error) {
     setBanner(describe(error), true);
   } finally {
     state.busy = false;
-  }
-}
-
-async function removeAccount(instanceId) {
-  try {
-    await call("inbox.removeAccount", { instanceId });
-    state.confirmRemove = null;
-    if (state.filter === instanceId) state.filter = "all";
-    if (state.reader?.message?.accountId === instanceId) state.reader = null;
-    await refresh({ quiet: true });
-  } catch (error) {
-    setBanner(describe(error), true);
   }
 }
 
@@ -592,14 +535,6 @@ async function checkNow() {
     const table = t();
     setBanner(result.handled > 0 ? table.messages(result.handled) : table.checkedNone);
     await refresh({ quiet: true });
-  } catch (error) {
-    setBanner(describe(error), true);
-  }
-}
-
-async function openWebmail(instanceId) {
-  try {
-    await call("inbox.openWebmail", { instanceId });
   } catch (error) {
     setBanner(describe(error), true);
   }
@@ -616,8 +551,8 @@ async function openExternal(url) {
 function wire() {
   nodes.check.addEventListener("click", () => void checkNow());
   nodes.add.addEventListener("click", () => void addAccount());
-  nodes.filter.addEventListener("change", (event) => {
-    state.filter = event.target.value || "all";
+  nodes.all.addEventListener("click", () => {
+    state.filter = "all";
     render();
   });
   const bridge = globalThis.window?.pluginBridge;
