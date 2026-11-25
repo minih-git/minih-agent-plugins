@@ -16,9 +16,10 @@
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <div class="app" id="app">
+  <div class="app" id="app" data-pane="list">
     <header class="topbar">
       <div class="topbar-title">
+        <button type="button" class="icon-btn" id="btn-sidebar" aria-expanded="true"></button>
         <h1 id="page-title">收件箱</h1>
         <span class="counts" id="counts"></span>
       </div>
@@ -30,48 +31,50 @@
 
     <p class="banner is-hidden" id="banner" role="alert"></p>
 
-    <div class="columns">
-      <aside class="accounts" aria-labelledby="accounts-title">
+    <div class="columns" id="columns">
+      <!-- One row per mailbox, plus the fixed "all inboxes" row on top. -->
+      <aside class="accounts" id="accounts" aria-labelledby="accounts-title">
         <div class="column-head">
-          <h2 id="accounts-title">邮箱账号</h2>
+          <h2 id="accounts-title"></h2>
           <span class="hint" id="accounts-hint"></span>
         </div>
         <ul class="account-list" id="account-list"></ul>
         <p class="empty" id="accounts-empty" hidden></p>
       </aside>
 
-      <main class="list" aria-labelledby="list-title">
-        <div class="column-head">
+      <main class="list" id="list-column" aria-labelledby="list-title">
+        <div class="list-tools">
+          <div class="search-box">
+            <input
+              id="search"
+              class="search"
+              type="search"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <button type="button" class="icon-btn search-clear is-hidden" id="btn-search-clear"></button>
+          </div>
+          <div class="filters" id="filters" role="group"></div>
           <h2 id="list-title" class="visually-hidden">邮件列表</h2>
-          <!-- One entry that clears the filter; the cards themselves are the choices. -->
-          <button type="button" class="btn btn-quiet" id="btn-all"></button>
         </div>
-        <div class="groups" id="groups">
-          <section class="group" id="group-important" hidden>
-            <h3 class="group-title" id="group-important-title"></h3>
-            <ul class="mail-list" id="list-important"></ul>
-          </section>
-          <section class="group" id="group-other" hidden>
-            <h3 class="group-title" id="group-other-title"></h3>
-            <ul class="mail-list" id="list-other"></ul>
-          </section>
-        </div>
+        <div class="groups" id="groups"></div>
         <p class="empty" id="messages-empty" hidden></p>
+        <div class="list-foot is-hidden" id="list-foot">
+          <button type="button" class="btn btn-quiet" id="btn-older"></button>
+        </div>
       </main>
 
       <section class="reader" id="reader" aria-live="polite">
+        <div class="reader-bar">
+          <button type="button" class="btn btn-quiet reader-back" id="btn-back"></button>
+        </div>
         <p class="empty" id="reader-empty"></p>
         <div class="reader-state is-hidden" id="reader-state"></div>
         <div class="reader-message is-hidden" id="reader-message">
           <header class="reader-head">
             <h2 id="reader-subject"></h2>
-            <p class="reader-meta">
-              <span id="reader-from"></span>
-              <span class="dot" aria-hidden="true">·</span>
-              <span id="reader-time"></span>
-              <span class="dot" aria-hidden="true">·</span>
-              <span id="reader-account"></span>
-            </p>
+            <div class="reader-people" id="reader-people"></div>
+            <p class="reader-meta" id="reader-meta"></p>
             <div class="reader-actions" id="reader-actions"></div>
             <p class="reader-notice is-hidden" id="reader-notice"></p>
           </header>

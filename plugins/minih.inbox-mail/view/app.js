@@ -5,59 +5,96 @@
  * Everything here is a view of state the plugin owns. The page never decides what
  * a mailbox is, never decides that a message is read, and never holds a body it
  * fetched: it asks the plugin (`window.pluginBridge.invoke`) and renders the
- * answer. The two things it does own are the ones that need a document — the
- * sanitized frame and the reading controls — and even those never run anything
- * from the message.
+ * answer. The rules that can be stated without a document — day groups, short
+ * times, search, avatars, the keyboard map — live in `model.js`, so this file is
+ * about showing them and nothing else.
+ *
+ * The two things it does own are the ones that need a document: the sanitized
+ * frame and the reading controls. Both are bounded by the same rule as before —
+ * `sandbox=""`, the frame's own CSP, remote images blocked until asked for, links
+ * handed to the host.
  *
  * The panel polls because the host has no plugin → panel push channel; a five
  * second tick is the difference between "mail appears" and "reload the panel",
  * and it costs one bridge call.
  */
 
+import {
+  FILTERS,
+  attachmentMeta,
+  avatarColor,
+  fileKind,
+  fullTime,
+  groupMessages,
+  initials,
+  keyboardAction,
+  recipientSummary,
+  sameMessage,
+  shortTime,
+  stepIndex,
+  visibleMessages,
+} from "./model.js";
 import { bodyMode, buildFrameDocument, FRAME_SANDBOX, linkifyText } from "./policy.js";
 import { prepareBody } from "./sanitize.js";
 import { codeText, strings } from "./strings.js";
 
 const POLL_MS = 5000;
 const BODY_LIMIT_LABEL = "1 MiB";
+/** Below this the panel is one column and the reading pane takes the screen. */
+const NARROW = "(max-width: 699px)";
+/** How long a "moved to the trash" line stays up. */
+const NOTICE_MS = 5000;
 
 const state = {
   locale: "en",
   theme: "dark",
   snapshot: null,
+  accountId: "all",
   filter: "all",
+  query: "",
+  selected: null,
   reader: null,
   banner: null,
+  notice: null,
   busy: false,
+  loadingOlder: false,
+  sidebar: true,
+  /** The account whose "⋯" menu is open, if any. */
+  menu: null,
+  /** The account whose removal is being confirmed, if any. */
+  confirming: null,
 };
 
+let noticeTimer = null;
+
 const nodes = {
+  app: document.getElementById("app"),
   title: document.getElementById("page-title"),
   counts: document.getElementById("counts"),
+  sidebar: document.getElementById("btn-sidebar"),
   banner: document.getElementById("banner"),
   check: document.getElementById("btn-check"),
   add: document.getElementById("btn-add"),
+  accounts: document.getElementById("accounts"),
   accountsTitle: document.getElementById("accounts-title"),
   accountsHint: document.getElementById("accounts-hint"),
   accountList: document.getElementById("account-list"),
   accountsEmpty: document.getElementById("accounts-empty"),
-  all: document.getElementById("btn-all"),
+  search: document.getElementById("search"),
+  searchClear: document.getElementById("btn-search-clear"),
+  filters: document.getElementById("filters"),
   groups: document.getElementById("groups"),
-  importantGroup: document.getElementById("group-important"),
-  importantTitle: document.getElementById("group-important-title"),
-  importantList: document.getElementById("list-important"),
-  otherGroup: document.getElementById("group-other"),
-  otherTitle: document.getElementById("group-other-title"),
-  otherList: document.getElementById("list-other"),
   messagesEmpty: document.getElementById("messages-empty"),
+  listFoot: document.getElementById("list-foot"),
+  older: document.getElementById("btn-older"),
   reader: document.getElementById("reader"),
+  back: document.getElementById("btn-back"),
   readerEmpty: document.getElementById("reader-empty"),
   readerState: document.getElementById("reader-state"),
   readerMessage: document.getElementById("reader-message"),
   readerSubject: document.getElementById("reader-subject"),
-  readerFrom: document.getElementById("reader-from"),
-  readerTime: document.getElementById("reader-time"),
-  readerAccount: document.getElementById("reader-account"),
+  readerPeople: document.getElementById("reader-people"),
+  readerMeta: document.getElementById("reader-meta"),
   readerActions: document.getElementById("reader-actions"),
   readerNotice: document.getElementById("reader-notice"),
   readerBody: document.getElementById("reader-body"),
@@ -74,6 +111,7 @@ function el(tag, props = {}, ...children) {
     if (value === undefined || value === null || value === false) continue;
     if (key === "class") node.className = value;
     else if (key === "text") node.textContent = value;
+    else if (key === "html") node.innerHTML = value;
     else if (key.startsWith("on") && typeof value === "function") {
       node.addEventListener(key.slice(2).toLowerCase(), value);
     } else if (key === "dataset") {
@@ -87,14 +125,68 @@ function el(tag, props = {}, ...children) {
   return node;
 }
 
-function button(label, { onClick, quiet = false, primary = false, title } = {}) {
-  return el("button", {
+/**
+ * A 16×16 line icon.
+ *
+ * Inline SVG rather than a font or an image: the panel's CSP allows no remote
+ * source and no `data:` image in a button, and a vector keeps its weight in both
+ * themes. `currentColor` is what lets one icon serve a quiet button and a red
+ * destructive one.
+ */
+const ICONS = {
+  menu: '<circle cx="3" cy="8" r="1.6"/><circle cx="8" cy="8" r="1.6"/><circle cx="13" cy="8" r="1.6"/>',
+  sidebar: '<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M6 3v10"/>',
+  refresh: '<path d="M13 8a5 5 0 1 1-1.6-3.7"/><path d="M13 2.5V5h-2.5"/>',
+  search: '<circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 14 14"/>',
+  close: '<path d="M4 4l8 8M12 4l-8 8"/>',
+  star: '<path d="M8 2.6l1.7 3.5 3.8.5-2.8 2.7.7 3.8L8 11.3l-3.4 1.8.7-3.8-2.8-2.7 3.8-.5z"/>',
+  starFilled: '<path d="M8 2.6l1.7 3.5 3.8.5-2.8 2.7.7 3.8L8 11.3l-3.4 1.8.7-3.8-2.8-2.7 3.8-.5z" fill="currentColor"/>',
+  mailOpen: '<path d="M2.5 5.5 8 9l5.5-3.5"/><rect x="2" y="3.5" width="12" height="9" rx="1.5"/>',
+  mail: '<rect x="2" y="3.5" width="12" height="9" rx="1.5"/><path d="M4 5.5l4 3 4-3"/>',
+  trash: '<path d="M3 5h10M6.5 5V3.5h3V5M5 5l.6 8h4.8L11 5"/>',
+  archive: '<rect x="2" y="3.5" width="12" height="3" rx="1"/><path d="M3.5 6.5v5a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1v-5M6.5 9h3"/>',
+  images: '<rect x="2" y="3.5" width="12" height="9" rx="1.5"/><path d="M2.5 10.5 6 7.5l2.5 2 2-1.5 3 2.5"/><circle cx="5.5" cy="6.2" r=".9"/>',
+  code: '<path d="M6 4.5 3 8l3 3.5M10 4.5 13 8l-3 3.5"/>',
+  text: '<path d="M3 4.5h10M3 7.5h10M3 10.5h6"/>',
+  paperclip: '<path d="M10.5 4.5 5.6 9.4a1.7 1.7 0 0 0 2.4 2.4l5.3-5.3a2.9 2.9 0 0 0-4.1-4.1L3.9 7.7"/>',
+  external: '<path d="M9 3h4v4M13 3 8 8"/><path d="M11 9.5V12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h2.5"/>',
+};
+
+function icon(name) {
+  const span = document.createElement("span");
+  span.className = "icon";
+  span.setAttribute("aria-hidden", "true");
+  span.innerHTML =
+    `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" ` +
+    `stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${ICONS[name] ?? ""}</svg>`;
+  return span;
+}
+
+/** One icon button. The label is both the tooltip and the accessible name. */
+function iconButton(name, label, onClick, extra = {}) {
+  const node = el("button", {
+    type: "button",
+    class: `icon-btn${extra.className ? ` ${extra.className}` : ""}`,
+    title: label,
+    "aria-label": label,
+    "aria-pressed": extra.pressed === undefined ? undefined : String(extra.pressed),
+    onClick,
+  });
+  node.append(icon(name));
+  return node;
+}
+
+function button(label, { onClick, quiet = false, primary = false, title, iconName } = {}) {
+  const node = el("button", {
     type: "button",
     class: `btn${quiet ? " btn-quiet" : ""}${primary ? " btn-primary" : ""}`,
     title,
-    text: label,
+    "aria-label": title ?? label,
     onClick,
   });
+  if (iconName) node.append(icon(iconName));
+  node.append(el("span", { text: label }));
+  return node;
 }
 
 /**
@@ -120,18 +212,26 @@ function describe(error, fallback) {
   return codeText(state.locale, error?.code, fallback ?? t().codes.FAILED);
 }
 
-function formatTime(value) {
-  if (!Number.isFinite(value)) return "";
-  try {
-    return new Intl.DateTimeFormat(state.locale, {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    }).format(new Date(value));
-  } catch {
-    return "";
-  }
+function setBanner(message, isError = false) {
+  state.banner = message ? { message, isError } : null;
+  nodes.banner.textContent = message ?? "";
+  nodes.banner.classList.toggle("is-hidden", !message);
+  nodes.banner.classList.toggle("is-error", Boolean(message) && isError);
+}
+
+/** A short-lived line under the topbar: "moved to the trash", "archived". */
+function setNotice(message, isError = false) {
+  if (noticeTimer) clearTimeout(noticeTimer);
+  state.notice = message ? { message, isError } : null;
+  setBanner(message, isError);
+  if (!message) return;
+  noticeTimer = setTimeout(() => {
+    noticeTimer = null;
+    if (state.notice?.message === message) {
+      state.notice = null;
+      setBanner(null);
+    }
+  }, NOTICE_MS);
 }
 
 function applyAppearance(appearance) {
@@ -153,18 +253,11 @@ async function loadAppearance() {
   }
 }
 
-function setBanner(message, isError = false) {
-  state.banner = message ? { message, isError } : null;
-  nodes.banner.textContent = message ?? "";
-  nodes.banner.classList.toggle("is-hidden", !message);
-  nodes.banner.classList.toggle("is-error", Boolean(message) && isError);
-}
-
 async function refresh({ quiet = false } = {}) {
   try {
     const result = await call("inbox.snapshot");
     state.snapshot = result.snapshot ?? null;
-    if (!quiet) setBanner(null);
+    if (!quiet) setBanner(state.notice?.message ?? null, false);
     render();
   } catch (error) {
     if (!quiet) setBanner(describe(error, t().refreshFailed), true);
@@ -175,138 +268,292 @@ function accountById(instanceId) {
   return state.snapshot?.accounts.find((account) => account.instanceId === instanceId) ?? null;
 }
 
+/**
+ * The account's state as one sentence, for a tooltip.
+ *
+ * The stored error is `CODE: message`; the sentence is the panel's own, and the
+ * code is only worth showing when the panel has no sentence for it. A proxy is
+ * part of how the account connects, so it is appended last: it explains a
+ * connection that fails for a reason the account's own form cannot show.
+ */
 function statusLabel(account) {
   const table = t().status;
   const phase = account.status?.phase ?? "stopped";
   let label;
   if (phase === "error" && account.status?.lastError) {
-    const reason = String(account.status.lastError).split(": ").slice(1).join(": ");
+    const code = String(account.status.lastError).split(":")[0].trim();
+    const reason = codeText(state.locale, code, "");
     label = `${table.error}${reason ? ` · ${reason}` : ""}`;
   } else {
     label = table[phase] ?? table.stopped;
   }
-  // The tooltip is where the proxy belongs: it explains a connection that fails
-  // for a reason the account's own form cannot show.
   if (account.proxy) label += ` · ${t().viaProxy(account.proxy)}`;
   return label;
 }
 
-/** The card's one-word state; the long version is the tooltip. */
-function shortStatus(account) {
-  const table = t().status;
-  const phase = account.status?.phase ?? "stopped";
-  return table.short[phase] ?? table.short.stopped;
+function unreadIn(instanceId) {
+  return (state.snapshot?.messages ?? []).filter(
+    (message) => message.unread && (instanceId === "all" || message.accountId === instanceId),
+  ).length;
 }
 
 function renderStatic() {
   const table = t();
   nodes.title.textContent = table.title;
+  nodes.counts.textContent = state.snapshot ? table.messages(state.snapshot.messages.length) : "";
+  nodes.sidebar.title = table.sidebarToggle;
   nodes.check.textContent = table.check;
   nodes.add.textContent = table.add;
   nodes.accountsTitle.textContent = table.accounts;
   nodes.accountsHint.textContent = table.accountsHint(state.snapshot?.accounts.length ?? 0);
   nodes.accountsEmpty.textContent = table.emptyAccounts;
-  nodes.messagesEmpty.textContent = table.emptyMessages;
-  nodes.importantTitle.textContent = table.groupImportant;
-  nodes.otherTitle.textContent = table.groupOther;
-  nodes.readerEmpty.textContent = table.emptyMessages;
+  nodes.search.placeholder = table.searchPlaceholder;
+  nodes.search.setAttribute("aria-label", table.searchLabel);
+  nodes.searchClear.title = table.searchClear;
+  nodes.back.textContent = table.readerBack;
+  nodes.readerEmpty.textContent = table.readerEmpty;
+  nodes.older.textContent = state.loadingOlder ? table.loadingOlder : table.loadOlder;
+  nodes.filters.setAttribute("aria-label", table.filtersLabel);
 }
 
 function render() {
   renderStatic();
-  renderHeaderCounts();
+  renderFilters();
   renderAccounts();
   renderList();
   renderReader();
-  if (state.snapshot) {
-    nodes.accountsEmpty.hidden = state.snapshot.accounts.length > 0;
-  }
+  const narrow = Boolean(globalThis.matchMedia?.(NARROW).matches);
+  nodes.app.dataset.pane = narrow && state.reader ? "reader" : "list";
+  nodes.sidebar.setAttribute("aria-expanded", String(state.sidebar));
+  nodes.app.classList.toggle("is-sidebar-hidden", !state.sidebar);
 }
 
-function renderHeaderCounts() {
-  const messages = state.snapshot?.messages ?? [];
-  const unread = messages.filter((message) => message.unread).length;
-  const parts = [];
-  if (state.snapshot) {
-    parts.push(t().messages(messages.length));
-    if (unread) parts.push(t().unreadCount(unread));
-  }
-  nodes.counts.textContent = parts.join(" · ");
+function renderFilters() {
+  const table = t();
+  nodes.filters.replaceChildren(
+    ...FILTERS.map((id) =>
+      el("button", {
+        type: "button",
+        class: `filter${state.filter === id ? " is-on" : ""}`,
+        "aria-pressed": state.filter === id ? "true" : "false",
+        text: table.filter[id],
+        onClick: () => {
+          state.filter = id;
+          render();
+        },
+      }),
+    ),
+  );
+  nodes.search.value = state.query;
+  nodes.searchClear.classList.toggle("is-hidden", !state.query);
 }
 
+/**
+ * The sidebar: one fixed "all inboxes" row, then one row per account.
+ *
+ * A row is a button (filter the list) plus a "⋯" button (that account's
+ * actions), which is why the row is a `div` with two controls rather than one
+ * button: a button inside a button is not a thing HTML allows, and a screen
+ * reader needs both names.
+ */
 function renderAccounts() {
+  const table = t();
   const accounts = state.snapshot?.accounts ?? [];
-  nodes.accountList.replaceChildren();
-  for (const account of accounts) {
-    const selected = state.filter === account.instanceId;
-    const pending = account.status?.phase === "needs-provider" || account.status?.phase === "needs-server";
-    const card = el("li", { class: `account${selected ? " is-selected" : ""}${pending ? " is-pending" : ""}` });
+  const rows = [];
 
-    // The card is the control: the whole row filters the list. A button keeps it
-    // reachable from the keyboard and announced as a button by the screen reader.
-    const target = el("button", {
+  const allSelected = state.accountId === "all";
+  const allRow = el("li", { class: `account account-all${allSelected ? " is-selected" : ""}` });
+  allRow.append(
+    el(
+      "button",
+      {
+        type: "button",
+        class: "account-main",
+        "aria-pressed": allSelected ? "true" : "false",
+        onClick: () => {
+          state.accountId = "all";
+          state.menu = null;
+          render();
+        },
+      },
+      el("span", { class: "account-label", text: table.allInboxes }),
+      unreadIn("all") ? el("span", { class: "badge", text: String(unreadIn("all")) }) : null,
+    ),
+  );
+  rows.push(allRow);
+
+  for (const account of accounts) {
+    const selected = state.accountId === account.instanceId;
+    const unread = unreadIn(account.instanceId);
+    const pending = account.status?.phase === "needs-provider" || account.status?.phase === "needs-server";
+    const row = el("li", {
+      class: `account${selected ? " is-selected" : ""}${pending ? " is-pending" : ""}`,
+      dataset: { phase: account.status?.phase ?? "stopped" },
+    });
+    const main = el("button", {
       type: "button",
       class: "account-main",
       "aria-pressed": selected ? "true" : "false",
       title: account.label,
       onClick: () => {
-        state.filter = selected ? "all" : account.instanceId;
+        state.accountId = selected ? "all" : account.instanceId;
+        state.menu = null;
         render();
       },
     });
-    target.append(
-      el("span", { class: "account-label", text: account.label }),
+    main.append(
       el("span", {
-        class: "status",
+        class: "status-dot",
         dataset: { phase: account.status?.phase ?? "stopped" },
         title: statusLabel(account),
-        text: shortStatus(account),
+        "aria-label": statusLabel(account),
+        role: "img",
       }),
+      el("span", { class: "account-label", text: account.label }),
+      unread ? el("span", { class: "badge", text: String(unread) }) : null,
     );
-    card.append(target);
+    const menuButton = iconButton("menu", table.accountMenu, (event) => {
+      event.stopPropagation();
+      state.menu = state.menu === account.instanceId ? null : account.instanceId;
+      state.confirming = null;
+      render();
+    }, { className: "account-menu-btn" });
+    row.append(el("div", { class: "account-row" }, main, menuButton));
 
-    // The reason lives here, muted, and in full in the tooltip: a sidebar card is
-    // not the place for a paragraph.
+    // A failed mailbox explains itself in one folded line here, with the full
+    // sentence in the tooltip: a sidebar is not the place for a paragraph.
     if (account.status?.phase === "error" && account.status?.lastError) {
-      card.append(el("p", { class: "account-error", title: statusLabel(account), text: statusLabel(account) }));
+      row.append(
+        el("p", { class: "account-error", title: String(account.status.lastError), text: statusLabel(account) }),
+      );
     }
     if (account.missingServer) {
-      card.append(el("p", { class: "account-hint", text: t().status["needs-server"] }));
+      row.append(el("p", { class: "account-hint", text: table.status["needs-server"] }));
     }
-    nodes.accountList.append(card);
+    if (state.confirming === account.instanceId) {
+      row.append(
+        el(
+          "div",
+          { class: "account-confirm" },
+          el("p", { text: table.removeConfirm(account.label) }),
+          el(
+            "div",
+            { class: "account-confirm-actions" },
+            button(table.removeYes, {
+              primary: true,
+              onClick: () => {
+                state.confirming = null;
+                void removeAccount(account);
+              },
+            }),
+            button(table.removeNo, {
+              quiet: true,
+              onClick: () => {
+                state.confirming = null;
+                render();
+              },
+            }),
+          ),
+        ),
+      );
+    } else if (state.menu === account.instanceId) {
+      const items = [
+        ['mailOpen', table.menuOnlyThis, () => {
+          state.accountId = account.instanceId;
+          state.menu = null;
+          render();
+        }],
+        ['refresh', table.menuCheckThis, () => {
+          state.menu = null;
+          void checkAccount(account);
+        }],
+      ];
+      if (account.webmail) {
+        items.push(['external', table.menuWebmail, () => {
+          state.menu = null;
+          void openWebmail(account);
+        }]);
+      }
+      items.push(['trash', table.menuRemove, () => {
+        state.menu = null;
+        state.confirming = account.instanceId;
+        render();
+      }]);
+      row.append(
+        el(
+          "div",
+          { class: "menu", role: "menu" },
+          ...items.map(([iconName, label, run]) =>
+            el(
+              "button",
+              { type: "button", class: "menu-item", role: "menuitem", onClick: run },
+              icon(iconName),
+              el("span", { text: label }),
+            ),
+          ),
+        ),
+      );
+    }
+    rows.push(row);
   }
 
-  nodes.all.replaceChildren();
-  nodes.all.textContent = t().all;
-  nodes.all.hidden = accounts.length === 0;
-  nodes.all.classList.toggle("is-on", state.filter === "all");
-  nodes.all.setAttribute("aria-pressed", state.filter === "all" ? "true" : "false");
+  nodes.accountList.replaceChildren(...rows);
+  nodes.accountsEmpty.hidden = accounts.length > 0;
+}
+
+function listOptions() {
+  return { accountId: state.accountId, filter: state.filter, query: state.query };
 }
 
 function renderList() {
-  const messages = (state.snapshot?.messages ?? []).filter(
-    (message) => state.filter === "all" || message.accountId === state.filter,
-  );
-  const important = messages.filter((message) => message.important);
-  const other = messages.filter((message) => !message.important);
-  nodes.importantList.replaceChildren(...important.map((message) => mailRow(message)));
-  nodes.otherList.replaceChildren(...other.map((message) => mailRow(message)));
-  nodes.importantGroup.hidden = important.length === 0;
-  nodes.otherGroup.hidden = other.length === 0;
-  nodes.messagesEmpty.hidden = messages.length > 0;
-  nodes.messagesEmpty.textContent = state.snapshot?.accounts.length ? t().emptyMessages : t().emptyAccounts;
+  const table = t();
+  const messages = state.snapshot?.messages ?? [];
+  const groups = groupMessages(messages, listOptions());
+  const sections = groups.map((group) => {
+    const heading = el("h3", { class: "group-title", text: table.groups[group.id] ?? group.id });
+    const rows = group.items.map((message) => mailRow(message));
+    return el("section", { class: "group", dataset: { group: group.id } }, heading, el("ul", { class: "mail-list" }, ...rows));
+  });
+  nodes.groups.replaceChildren(...sections);
+
+  const visible = visibleMessages(messages, listOptions());
+  const empty = visible.length === 0;
+  nodes.messagesEmpty.hidden = !empty;
+  if (empty) {
+    const accounts = state.snapshot?.accounts?.length ?? 0;
+    if (!accounts) nodes.messagesEmpty.textContent = table.emptyAccounts;
+    else if (state.query) nodes.messagesEmpty.textContent = table.emptySearch;
+    else if (state.filter !== "all") nodes.messagesEmpty.textContent = table.emptyFilter;
+    else nodes.messagesEmpty.textContent = table.emptyMessages;
+  }
+
+  // "Load older" belongs to one account: with "all inboxes" there is no single
+  // mailbox to walk back through, and saying so would be a lie.
+  const account = state.accountId === "all" ? null : accountById(state.accountId);
+  const limit = state.snapshot?.limits?.messagesPerAccount ?? 200;
+  const full = Boolean(account) && (account.messageCount ?? 0) >= limit;
+  nodes.listFoot.classList.toggle("is-hidden", !account);
+  nodes.older.disabled = state.loadingOlder || full;
+  nodes.older.textContent = state.loadingOlder
+    ? table.loadingOlder
+    : full
+      ? table.limitReached
+      : table.loadOlder;
 }
 
+/** One row: avatar, sender, time, subject, preview, tags, and hover actions. */
 function mailRow(message) {
-  const selected =
-    state.reader?.status === "ready" &&
-    state.reader.message.accountId === message.accountId &&
-    state.reader.message.key === message.key;
-  const sender = message.from?.name || message.from?.address || t().unknownSender;
+  const table = t();
+  const account = accountById(message.accountId);
+  const sender = message.from?.name || message.from?.address || table.unknownSender;
+  const active = sameMessage(state.reader?.source, message);
+  const focused = sameMessage(state.selected, message);
   const row = el("li", {
-    class: `mail ${message.unread ? "is-unread" : "is-read"}${selected ? " is-active" : ""}`,
+    class: `mail${message.unread ? " is-unread" : " is-read"}${active ? " is-active" : ""}${focused ? " is-focused" : ""}`,
     tabIndex: 0,
-    role: "button",
+    role: "option",
+    "aria-selected": active ? "true" : "false",
+    dataset: { key: message.key, account: message.accountId },
     onClick: () => void openMessage(message),
     onKeydown: (event) => {
       if (event.key === "Enter" || event.key === " ") {
@@ -315,24 +562,62 @@ function mailRow(message) {
       }
     },
   });
+
+  const avatarIndex = avatarColor(message.from?.address ?? sender);
   row.append(
-    el("span", { class: "mail-dot", "aria-hidden": "true" }),
+    el("span", {
+      class: "avatar",
+      dataset: { tone: avatarIndex },
+      "aria-hidden": "true",
+      text: initials(message.from?.name, message.from?.address),
+    }),
     el(
       "div",
       { class: "mail-main" },
-      // The sender is its own element so a long address truncates with an
-      // ellipsis inside the row instead of spilling over the date column.
-      el("div", { class: "mail-from" }, el("span", { class: "mail-from-name", text: sender })),
-      el("div", { class: "mail-subject", text: message.subject || t().noSubject }),
-      el("div", { class: "mail-account", text: message.accountLabel }),
-    ),
-    el(
-      "div",
-      { class: "mail-meta" },
-      el("span", { text: formatTime(message.receivedAt) }),
-      message.starred ? el("span", { class: "mail-star", text: "★", title: t().starred }) : null,
+      el(
+        "div",
+        { class: "mail-top" },
+        el("span", { class: "mail-from-name", text: sender }),
+        message.starred ? el("span", { class: "mail-star", title: table.starred, text: "★" }) : null,
+        message.hasAttachments
+          ? el("span", { class: "mail-tag", title: table.hasAttachment }, icon("paperclip"))
+          : null,
+        el("span", { class: "mail-time", text: shortTime(message.receivedAt, { locale: state.locale }) }),
+      ),
+      el("div", { class: "mail-subject", text: message.subject || table.noSubject }),
+      el("div", { class: "mail-summary", text: message.summary || "" }),
+      el(
+        "div",
+        { class: "mail-account-row" },
+        el("span", { class: "mail-account", text: account?.label ?? message.accountLabel }),
+      ),
     ),
   );
+
+  // The quick actions appear on hover and on keyboard focus, and only the ones
+  // the account supports: a POP3 mailbox has no star and no flag to flip.
+  const quick = el("div", { class: "mail-quick" });
+  if (message.flagsSupported) {
+    quick.append(
+      iconButton(message.unread ? "mailOpen" : "mail", message.unread ? table.markRead : table.markUnread, (event) => {
+        event.stopPropagation();
+        void setFlag(message, message.unread ? "seen" : "unseen");
+      }),
+      iconButton(message.starred ? "starFilled" : "star", message.starred ? table.unstar : table.star, (event) => {
+        event.stopPropagation();
+        void setFlag(message, message.starred ? "unflagged" : "flagged");
+      }),
+    );
+  }
+  if (account?.canDelete !== false) {
+    quick.append(
+      iconButton("trash", table.deleteMail, (event) => {
+        event.stopPropagation();
+        void deleteMessage(message);
+      }),
+    );
+  }
+  row.append(quick);
   return row;
 }
 
@@ -347,7 +632,7 @@ function renderReader() {
     return;
   }
   if (reader.status === "loading") {
-    nodes.readerState.replaceChildren(el("p", { text: t().loading }));
+    nodes.readerState.replaceChildren(skeleton());
     return;
   }
   if (reader.status === "error") {
@@ -360,55 +645,112 @@ function renderReader() {
   renderMessage(reader);
 }
 
+/**
+ * What is shown while a body is on its way.
+ *
+ * A skeleton rather than "loading…": the shape of the message is already known —
+ * a subject line, a sender, a body — so the pane can hold that space instead of
+ * jumping when the text arrives.
+ */
+function skeleton() {
+  const block = (className) => el("div", { class: `skeleton ${className}` });
+  return el(
+    "div",
+    { class: "skeleton-group", "aria-hidden": "true" },
+    block("skeleton-title"),
+    block("skeleton-line skeleton-short"),
+    block("skeleton-line"),
+    block("skeleton-line"),
+    block("skeleton-line skeleton-short"),
+  );
+}
+
 function renderMessage(reader) {
   const message = reader.message;
   const table = t();
   nodes.readerSubject.textContent = message.subject || table.noSubject;
-  nodes.readerFrom.textContent = message.from?.name
-    ? `${message.from.name} <${message.from.address}>`
-    : message.from?.address || table.unknownSender;
-  nodes.readerTime.textContent = formatTime(message.receivedAt);
-  nodes.readerAccount.textContent = message.accountLabel;
 
-  // Opening a message marks it read, so the pane offers the way back rather than a
-  // "mark read" that has already happened. POP3 reports no flags: read there is a
-  // mark this machine keeps, and a star has no equivalent.
+  const senderName = message.from?.name || message.from?.address || table.unknownSender;
+  const account = accountById(message.accountId);
+  nodes.readerPeople.replaceChildren(
+    el("span", {
+      class: "avatar avatar-lg",
+      dataset: { tone: avatarColor(message.from?.address ?? senderName) },
+      "aria-hidden": "true",
+      text: initials(message.from?.name, message.from?.address),
+    }),
+    el(
+      "div",
+      { class: "people-main" },
+      el("div", { class: "people-name", text: senderName }),
+      el("div", { class: "people-address", text: message.from?.address ?? "" }),
+    ),
+  );
+
+  const summary = recipientSummary(message.to, message.cc, { me: account?.email ?? "" });
+  const recipientLabel = recipientLine(summary);
+  nodes.readerMeta.replaceChildren(
+    el("span", { text: fullTime(message.receivedAt, { locale: state.locale }) }),
+    el("span", { class: "dot", "aria-hidden": "true", text: "·" }),
+    el("span", { text: account?.label ?? message.accountLabel }),
+  );
+  if (recipientLabel) {
+    nodes.readerMeta.append(
+      el("span", { class: "dot", "aria-hidden": "true", text: "·" }),
+      el(
+        "button",
+        {
+          type: "button",
+          class: "recipients-toggle",
+          "aria-expanded": reader.showRecipients ? "true" : "false",
+          title: reader.showRecipients ? table.recipientsHide : table.recipientsShow,
+          text: recipientLabel,
+          onClick: () => {
+            reader.showRecipients = !reader.showRecipients;
+            render();
+          },
+        },
+      ),
+    );
+    if (reader.showRecipients) {
+      nodes.readerMeta.append(recipientList(summary));
+    }
+  }
+
   const flagsSupported = message.flagsSupported !== false;
   const read = flagsSupported ? (message.flags ?? []).includes("\\Seen") : message.readLocally === true;
   const starred = flagsSupported ? (message.flags ?? []).includes("\\Flagged") : false;
-  const actions = [];
-  if (read) {
-    actions.push(button(table.markUnread, { onClick: () => void setFlag(message, "unseen") }));
-  } else if (flagsSupported) {
-    actions.push(button(table.markRead, { onClick: () => void setFlag(message, "seen") }));
-  }
+  const actions = [
+    iconButton(
+      read ? "mailOpen" : "mail",
+      read ? table.markUnread : table.markRead,
+      () => void setFlag(message, read ? "unseen" : "seen"),
+    ),
+  ];
   if (flagsSupported) {
     actions.push(
-      button(starred ? table.unstar : table.star, {
-        onClick: () => void setFlag(message, starred ? "unflagged" : "flagged"),
-      }),
+      iconButton(starred ? "starFilled" : "star", starred ? table.unstar : table.star, () =>
+        void setFlag(message, starred ? "unflagged" : "flagged"),
+      ),
     );
   }
+  actions.push(iconButton("trash", table.deleteMail, () => void deleteMessage(message)));
+  if (account?.canArchive) {
+    actions.push(iconButton("archive", table.archiveMail, () => void archiveMessage(message)));
+  }
   if (message.html) {
-    // HTML is what the message was written in, so the toggle offers the text
-    // alternative — and the way back.
     actions.push(
-      button(reader.showText ? table.showHtml : table.showText, {
-        onClick: () => {
-          reader.showText = !reader.showText;
-          render();
-        },
+      iconButton(reader.showText ? "code" : "text", reader.showText ? table.showHtml : table.showText, () => {
+        reader.showText = !reader.showText;
+        render();
       }),
     );
   }
   if (message.body?.remoteImages) {
     actions.push(
-      button(table.showImages(message.body.remoteImages), {
-        quiet: true,
-        onClick: () => {
-          reader.allowImages = true;
-          render();
-        },
+      iconButton("images", table.showImages(message.body.remoteImages), () => {
+        reader.allowImages = true;
+        render();
       }),
     );
   }
@@ -429,21 +771,66 @@ function renderMessage(reader) {
     nodes.readerBody.append(renderText(message.text ?? ""));
   }
 
-  const extras = [];
+  nodes.readerExtras.replaceChildren(...extras(message));
+}
+
+function recipientLine(summary) {
+  const table = t();
+  if (!summary.to.length && !summary.cc.length) return "";
+  if (summary.directlyToMe && summary.others === 0 && summary.cc.length === 0) return table.toMe;
+  if (summary.directlyToMe) return table.toMeAndOthers(summary.others + summary.cc.length);
+  return table.toOthers(summary.total);
+}
+
+function recipientList(summary) {
+  const table = t();
+  const line = (label, list) =>
+    list.length
+      ? el(
+          "div",
+          { class: "recipients-line" },
+          el("span", { class: "recipients-label", text: label }),
+          el(
+            "span",
+            { class: "recipients-names" },
+            list
+              .map((entry) => entry.name || entry.address)
+              .filter(Boolean)
+              .join(", "),
+          ),
+        )
+      : null;
+  return el("div", { class: "recipients" }, line(table.recipientsTo, summary.to), line(table.recipientsCc, summary.cc));
+}
+
+/** The attachment cards: name, type and size, never downloaded in this release. */
+function extras(message) {
+  const table = t();
+  const list = [];
   if (message.attachments?.length) {
-    extras.push(
+    list.push(
       el("p", { class: "extra-title", text: table.attachments }),
       el(
         "ul",
-        { class: "extra-list" },
+        { class: "attachment-list" },
         ...message.attachments.map((file) =>
-          el("li", {}, el("span", { text: file.filename }), el("span", { text: table.size(file.size) })),
+          el(
+            "li",
+            { class: "attachment", title: file.filename },
+            el("span", { class: "attachment-icon", dataset: { kind: fileKind(file.filename) }, text: fileKind(file.filename).toUpperCase() }),
+            el(
+              "span",
+              { class: "attachment-main" },
+              el("span", { class: "attachment-name", text: file.filename }),
+              el("span", { class: "attachment-meta", text: attachmentMeta(file, state.locale) }),
+            ),
+          ),
         ),
       ),
     );
   }
   if (message.body?.links?.length) {
-    extras.push(
+    list.push(
       el("p", { class: "extra-title", text: table.links }),
       el(
         "ul",
@@ -465,7 +852,7 @@ function renderMessage(reader) {
       ),
     );
   }
-  nodes.readerExtras.replaceChildren(...extras);
+  return list;
 }
 
 /**
@@ -518,6 +905,7 @@ function renderText(text) {
 }
 
 async function openMessage(source) {
+  state.selected = source;
   state.reader = { status: "loading", source };
   render();
   try {
@@ -530,6 +918,7 @@ async function openMessage(source) {
       message: { ...message, body, text: message.text ?? "" },
       allowImages: false,
       showText: false,
+      showRecipients: false,
     };
     render();
     // Opening the message marked it read: the row's dot and the unread count are
@@ -539,6 +928,12 @@ async function openMessage(source) {
     state.reader = { status: "error", source, error };
     render();
   }
+}
+
+function closeReader() {
+  state.reader = null;
+  state.selected = null;
+  render();
 }
 
 async function setFlag(message, flag) {
@@ -562,6 +957,71 @@ async function setFlag(message, flag) {
   }
 }
 
+/**
+ * Delete one message, after confirming when the mailbox cannot undo it.
+ *
+ * IMAP moves the message to the trash and the panel says so; POP3 removes it from
+ * the server for good, which is why that case asks first and says "cannot be
+ * undone" when it is done.
+ */
+async function deleteMessage(message) {
+  if (state.busy) return;
+  const table = t();
+  const account = accountById(message.accountId);
+  if (account?.protocol === "pop3") {
+    const confirmed = globalThis.confirm?.(`${table.deleteMail}: ${message.subject || table.noSubject}\n\n${table.deleteDonePop3}`);
+    if (!confirmed) return;
+  }
+  state.busy = true;
+  try {
+    const result = await call("inbox.delete", { accountId: message.accountId, key: message.key });
+    if (sameMessage(state.reader?.source, message)) closeReader();
+    setNotice(result.final ? table.deleteDonePop3 : table.deleteDone);
+    await refresh({ quiet: true });
+  } catch (error) {
+    setBanner(describe(error, table.deleteFailed), true);
+  } finally {
+    state.busy = false;
+  }
+}
+
+async function archiveMessage(message) {
+  if (state.busy) return;
+  const table = t();
+  state.busy = true;
+  try {
+    await call("inbox.archive", { accountId: message.accountId, key: message.key });
+    if (sameMessage(state.reader?.source, message)) closeReader();
+    setNotice(table.archiveDone);
+    await refresh({ quiet: true });
+  } catch (error) {
+    setBanner(describe(error, table.archiveFailed), true);
+  } finally {
+    state.busy = false;
+  }
+}
+
+async function loadOlder() {
+  if (state.busy || state.loadingOlder) return;
+  const account = state.accountId === "all" ? null : accountById(state.accountId);
+  if (!account) return;
+  const table = t();
+  state.loadingOlder = true;
+  render();
+  try {
+    const result = await call("inbox.loadOlder", { accountId: account.instanceId });
+    if (result.reachedLimit) setNotice(table.limitReached);
+    else if (!result.added) setNotice(table.noOlder);
+    else setNotice(table.oldMailLoaded(result.added));
+    await refresh({ quiet: true });
+  } catch (error) {
+    setBanner(describe(error, table.olderFailed), true);
+  } finally {
+    state.loadingOlder = false;
+    render();
+  }
+}
+
 async function addAccount() {
   if (state.busy) return;
   state.busy = true;
@@ -580,14 +1040,44 @@ async function addAccount() {
   }
 }
 
+async function removeAccount(account) {
+  try {
+    await call("inbox.removeAccount", { instanceId: account.instanceId });
+    if (state.accountId === account.instanceId) state.accountId = "all";
+    setBanner(null);
+    await refresh({ quiet: true });
+  } catch (error) {
+    setBanner(describe(error, t().removeFailed), true);
+  }
+}
+
+async function checkAccount(account) {
+  const table = t();
+  try {
+    const result = await call("inbox.check", { instanceId: account.instanceId });
+    setBanner(result.handled > 0 ? table.messages(result.handled) : table.checkOne(account.label));
+    await refresh({ quiet: true });
+  } catch (error) {
+    setBanner(describe(error, table.checkFailed), true);
+  }
+}
+
 async function checkNow() {
+  const table = t();
   try {
     const result = await call("inbox.check");
-    const table = t();
     setBanner(result.handled > 0 ? table.messages(result.handled) : table.checkedNone);
     await refresh({ quiet: true });
   } catch (error) {
-    setBanner(describe(error), true);
+    setBanner(describe(error, table.checkFailed), true);
+  }
+}
+
+async function openWebmail(account) {
+  try {
+    await call("inbox.openWebmail", { instanceId: account.instanceId });
+  } catch (error) {
+    setBanner(describe(error, t().webmailFailed), true);
   }
 }
 
@@ -599,17 +1089,152 @@ async function openExternal(url) {
   }
 }
 
+/** Whether a key press belongs to a text field rather than to the panel. */
+function inField(target) {
+  const tag = String(target?.tagName ?? "").toLowerCase();
+  return tag === "input" || tag === "textarea" || tag === "select" || target?.isContentEditable === true;
+}
+
+function moveSelection(delta) {
+  const rows = visibleMessages(state.snapshot?.messages ?? [], listOptions());
+  if (!rows.length) return;
+  const current = rows.findIndex((message) => sameMessage(state.selected, message));
+  const next = stepIndex(current, delta, rows.length);
+  const message = rows[next];
+  if (!message) return;
+  state.selected = message;
+  render();
+  const row = nodes.groups.querySelector(`.mail[data-key="${CSS.escape(message.key)}"][data-account="${CSS.escape(message.accountId)}"]`);
+  row?.scrollIntoView({ block: "nearest" });
+}
+
+/** The message the keyboard acts on: the open one, or the highlighted row. */
+function targetMessage() {
+  if (state.reader?.status === "ready") return state.reader.message;
+  if (state.selected) return state.selected;
+  return null;
+}
+
+function handleKey(event) {
+  const action = keyboardAction(event, { inField: inField(event.target) });
+  if (!action) return;
+  const table = t();
+  switch (action) {
+    case "next":
+      event.preventDefault();
+      moveSelection(1);
+      return;
+    case "prev":
+      event.preventDefault();
+      moveSelection(-1);
+      return;
+    case "open": {
+      const message = state.selected;
+      if (!message) return;
+      event.preventDefault();
+      void openMessage(message);
+      return;
+    }
+    case "toggleRead": {
+      const message = targetMessage();
+      if (!message || message.flagsSupported === false) return;
+      event.preventDefault();
+      const read = (message.flags ?? []).includes("\\Seen") || message.readLocally === true;
+      void setFlag(message, read ? "unseen" : "seen");
+      return;
+    }
+    case "toggleStar": {
+      const message = targetMessage();
+      if (!message || message.flagsSupported === false) return;
+      event.preventDefault();
+      const starred = (message.flags ?? []).includes("\\Flagged");
+      void setFlag(message, starred ? "unflagged" : "flagged");
+      return;
+    }
+    case "delete": {
+      const message = targetMessage();
+      if (!message) return;
+      event.preventDefault();
+      void deleteMessage(message);
+      return;
+    }
+    case "archive": {
+      const message = targetMessage();
+      const account = message ? accountById(message.accountId) : null;
+      if (!message || !account?.canArchive) return;
+      event.preventDefault();
+      void archiveMessage(message);
+      return;
+    }
+    case "search":
+      event.preventDefault();
+      nodes.search.focus();
+      nodes.search.select();
+      return;
+    case "clear":
+      // Escape in the search box clears it and gives the keyboard back.
+      event.preventDefault();
+      state.query = "";
+      nodes.search.value = "";
+      nodes.search.blur();
+      render();
+      return;
+    case "close":
+      event.preventDefault();
+      if (state.reader) closeReader();
+      else if (state.query) {
+        state.query = "";
+        render();
+      } else if (state.menu || state.confirming) {
+        state.menu = null;
+        state.confirming = null;
+        render();
+      }
+      return;
+    default:
+      return;
+  }
+}
+
 function wire() {
+  // The two icon-only buttons in the chrome: the sidebar toggle and the search
+  // box's clear button. Both carry their sentence in `aria-label`.
+  nodes.sidebar.append(icon("sidebar"));
+  nodes.searchClear.append(icon("close"));
+  nodes.sidebar.setAttribute("aria-label", t().sidebarToggle);
+  nodes.searchClear.setAttribute("aria-label", t().searchClear);
   nodes.check.addEventListener("click", () => void checkNow());
   nodes.add.addEventListener("click", () => void addAccount());
-  nodes.all.addEventListener("click", () => {
-    state.filter = "all";
+  nodes.older.addEventListener("click", () => void loadOlder());
+  nodes.back.addEventListener("click", () => closeReader());
+  nodes.sidebar.addEventListener("click", () => {
+    state.sidebar = !state.sidebar;
     render();
   });
+  nodes.search.addEventListener("input", () => {
+    state.query = nodes.search.value;
+    render();
+  });
+  nodes.searchClear.addEventListener("click", () => {
+    state.query = "";
+    nodes.search.value = "";
+    nodes.search.focus();
+    render();
+  });
+  // A click anywhere but a menu closes it, which is what a popover owes a user.
+  document.addEventListener("click", (event) => {
+    if (!state.menu && !state.confirming) return;
+    if (event.target.closest?.(".menu, .account-menu-btn, .account-confirm")) return;
+    state.menu = null;
+    state.confirming = null;
+    render();
+  });
+  document.addEventListener("keydown", handleKey);
   const bridge = globalThis.window?.pluginBridge;
   if (bridge && typeof bridge.on === "function") {
     bridge.on("appearance:changed", (appearance) => applyAppearance(appearance ?? null));
   }
+  globalThis.matchMedia?.(NARROW).addEventListener?.("change", () => render());
 }
 
 async function boot() {
