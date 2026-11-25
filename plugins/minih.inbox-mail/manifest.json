@@ -36,6 +36,11 @@
     "shell.openExternal",
     "ui.view"
   ],
+  "fs": {
+    "write": {
+      "root": "userSelected"
+    }
+  },
   "engines": {
     "minihAgent": ">=1.11.0"
   },

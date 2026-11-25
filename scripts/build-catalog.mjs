@@ -125,6 +125,10 @@ async function main() {
       permissions: manifest.permissions ?? [],
       yanked: false,
     };
+    // The market gate reads file scopes from the catalog entry, and the
+    // manifest inside the package is not part of that check. Carry it over so
+    // a plugin declaring fs.write/fs.delete publishes the scope with it.
+    if (manifest.fs) version.fs = manifest.fs;
     const minHost = engines.minihAgent ?? engines.piDesktop ?? engines.minihAgentDesktop;
     if (minHost) version.minMinihAgent = minHost;
     const provenance = PROVENANCE[manifest.id];
