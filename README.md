@@ -43,7 +43,7 @@ keeping its own `LICENSE` and notice files inside its directory.
 | `minih.personal-knowledge` (`Personal Knowledge`) | 0.7.2 | minih-git | MIT | this repository |
 | `minih.selection-translate` (`Selection Translate`) | 0.3.2 | minih-git | MIT | this repository |
 | `minih.cache-keepwarm` (`Cache keep-warm`) | 0.1.0 | minih-git | MIT | this repository |
-| `minih.inbox-mail` (`Inbox mail`) | 0.3.0 | minih-git | MIT | this repository |
+| `minih.inbox-mail` (`Inbox mail`) | 0.5.0 | minih-git | MIT | this repository |
 | `minih.session-titles` (`Session Titles`) | 0.1.0 | minih-git | MIT | this repository |
 | `pi.file-manager` (`File Manager`) | 0.9.0 | Tioit-Wang | not declared by the author | not published by the author |
 
@@ -87,30 +87,44 @@ call. Read failures show the real error with retry, never demo data. File reads
 use a bounded parallel batch, and vault configuration stays available while
 indexing. No permission or data-format changes are needed.
 
-`minih.inbox-mail` 0.3.0 is the resident assistant's first information source:
-it watches your mailboxes and writes what arrives into the notification centre
-— one alert for a message from an important sender, matching one of your
-keywords or marked urgent by its own headers, and one rolling digest per
-account for the rest. Each account is either one of the providers the plugin
-names or a mail server you type in yourself: IMAP or POP3, TLS or STARTTLS, on
-the port you gave. That endpoint belongs to the credential instance, so the app
-injects the password only into the server saved with the account and the plugin
-cannot redirect it. There is no mailbox limit in the plugin (the app keeps its
-own bound of 100), and no connection outlives a check: every account is polled
-in one short session every three minutes, at most four at a time. Its own Inbox
-panel in the sidebar shows every account together, fetches a message body only
-when you open that message — opening is what marks that one message read — and
-changes read or star state otherwise only on your click; a POP3 mailbox has no
-server flags, so read there is a mark kept on this computer and no star is
-offered. An HTML body is shown as it arrives inside a scriptless, origin-less
-sandbox that loads nothing remote, and a plain-text body is laid out as body
-text. A notification opens the Inbox panel instead of checking the account
-again. Collecting, deciding and notifying call no model and download no body,
-so nothing you receive reaches an AI provider. It needs Desktop v1.10.0 or
-newer (`engines.minihAgent` is `>=1.10.0`): a server you typed in — its host,
-port, protocol and transport — is validated and stored as part of the
-credential instance only from 1.10.0 on. The host still performs every sign-in,
-so the plugin never receives a password.
+`minih.inbox-mail` 0.5.0 is the resident assistant's first information source
+and a small mail client of its own: it watches your mailboxes and writes what
+arrives into the notification centre — one alert for a message from an
+important sender, matching one of your keywords or marked urgent by its own
+headers, and one rolling digest per account for the rest. Each account is
+either one of the providers the plugin names or a mail server you type in
+yourself — IMAP or POP3, TLS or STARTTLS, on the port you gave — and that
+endpoint belongs to the credential instance, so the app injects the password
+only into the server saved with the account and the plugin cannot redirect it.
+There is no mailbox limit in the plugin (the app keeps its own bound of 100),
+and no connection outlives a check: every account is polled in one short
+session every three minutes, at most four at a time.
+
+The Inbox panel is laid out like a mail client: three columns from 1100 px
+wide, a list grouped by day with a one-line preview of every message that is
+stored with it, search and filter, load older mail, and keyboard shortcuts. A
+body is downloaded only when you open that message — opening is what marks
+that one message read — and star, delete or archive only the message you
+clicked. A POP3 mailbox has no server flags, so read there is a mark kept on
+this computer, a delete asks in the panel first, and no star is offered.
+
+0.5.0 also writes mail. Write composes a message with recipient chips for
+To/Cc/Bcc, subject, body, attachments and a running size; reply, reply to all
+and forward start from the message you already have open; Send goes through
+the app's own SMTP session (`mail.send`), which logs in with the account's own
+password, keeps Bcc in the envelope, files a copy in the account's Sent folder
+and never hands the plugin the password, the socket or the server's reply. An
+attachment's Save fetches exactly that part and hands it to the host's save
+dialog (`pi.fs.saveAs`), 50 MiB at most, one dialog at a time, nothing written
+into the plugin's data folder. An HTML body is shown as it arrives inside a
+scriptless, origin-less sandbox that loads nothing remote.
+
+Collecting, deciding, notifying, composing and sending call no model, so
+nothing you receive or write reaches an AI provider. It needs Desktop v1.11.0
+or newer (`engines.minihAgent` is `>=1.11.0`): `mail.send` and `pi.fs.saveAs`
+are host capabilities that arrived in 1.11.0, and the marketplace now enforces
+the declared floor, so a 1.10.x app is not offered this version. The host
+still performs every sign-in, so the plugin never receives a password.
 
 The redistributed ones are listed with `trust: "community"` and
 `verified: false`: the `verified` badge is a claim about a publisher this
