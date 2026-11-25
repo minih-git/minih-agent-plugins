@@ -1,8 +1,8 @@
 {
   "name": "@minih-plugin/minih.inbox-mail",
   "private": true,
-  "version": "0.3.0",
-  "description": "Watch up to five mailboxes — a listed provider or a mail server you type in, IMAP or POP3 — notify only what matters, and show them in one Inbox panel: no model calls.",
+  "version": "0.4.0",
+  "description": "Watch your mailboxes — a listed provider, a mail server you type in, or either one through an HTTP/SOCKS5 proxy — notify only what matters, and show them in one Inbox panel: no model calls.",
   "scripts": {
     "test": "node --test tests/*.test.mjs"
   }

@@ -178,11 +178,17 @@ function accountById(instanceId) {
 function statusLabel(account) {
   const table = t().status;
   const phase = account.status?.phase ?? "stopped";
+  let label;
   if (phase === "error" && account.status?.lastError) {
     const reason = String(account.status.lastError).split(": ").slice(1).join(": ");
-    return `${table.error}${reason ? ` · ${reason}` : ""}`;
+    label = `${table.error}${reason ? ` · ${reason}` : ""}`;
+  } else {
+    label = table[phase] ?? table.stopped;
   }
-  return table[phase] ?? table.stopped;
+  // The tooltip is where the proxy belongs: it explains a connection that fails
+  // for a reason the account's own form cannot show.
+  if (account.proxy) label += ` · ${t().viaProxy(account.proxy)}`;
+  return label;
 }
 
 /** The card's one-word state; the long version is the tooltip. */

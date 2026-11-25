@@ -241,6 +241,10 @@ function createRuntime(deps) {
       code === "STARTTLS_UNAVAILABLE" ||
       code === "TLS_FAILED" ||
       code === "TLS_CERTIFICATE" ||
+      // A proxy the user configured is an account setting too: the host never
+      // falls back to a direct connection, so this has to be visible once.
+      code === "PROXY_FAILED" ||
+      code === "PROXY_AUTH_FAILED" ||
       code === "UNSUPPORTED"
     ) {
       void deps.postSetupNotice(account, error);
@@ -322,6 +326,7 @@ function createRuntime(deps) {
           email,
           provider: null,
           custom: null,
+          proxy: null,
           missingServer: false,
           protocol: null,
           connectionKey: "",
@@ -353,6 +358,9 @@ function createRuntime(deps) {
       // nothing to IMAP. The account keeps its identity, its baseline does not.
       const protocolChanged = Boolean(record.protocol && protocol && record.protocol !== protocol);
       record.custom = resolved.custom;
+      // Only the three non-secret fields are published; the proxy credentials
+      // never reach this process, and nothing here needs them.
+      record.proxy = providers.proxyOf(instance.publicFields);
       record.missingServer = resolved.missingServer;
       record.provider = provider ? provider.id : null;
       record.protocol = protocol;
@@ -418,6 +426,11 @@ function createRuntime(deps) {
       label: record.label,
       email: record.email,
       protocol: record.protocol ?? null,
+      // The proxy is part of how the account connects, so the panel can say so
+      // instead of leaving a failing proxy invisible.
+      proxy: record.proxy
+        ? { type: record.proxy.type, host: record.proxy.host, port: record.proxy.port }
+        : null,
       // A `provider: custom` account with no server filled in yet: the panel says
       // so instead of pretending it is connecting.
       missingServer: record.missingServer === true,

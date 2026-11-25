@@ -145,3 +145,33 @@ test("the account's provider is resolved in the order the addendum fixed", () =>
   assert.equal(providers.resolveAccount({ fieldProvider: "outlook" }).provider, null);
   assert.equal(providers.resolveAccount({}).missingServer, false);
 });
+
+test("the proxy an account carries is read from its three non-secret fields", () => {
+  assert.deepEqual(providers.proxyOf({ proxyType: "http", proxyHost: "127.0.0.1", proxyPort: "7897" }), {
+    type: "http",
+    host: "127.0.0.1",
+    port: 7897,
+  });
+  assert.deepEqual(providers.proxyOf({ proxyType: "socks5", proxyHost: "LAN.Example", proxyPort: "1080" }), {
+    type: "socks5",
+    host: "lan.example",
+    port: 1080,
+  });
+  // No type is no proxy, which is the normal case.
+  assert.equal(providers.proxyOf({ proxyType: "" }), null);
+  assert.equal(providers.proxyOf({}), null);
+  assert.equal(providers.proxyOf(undefined), null);
+  // Anything the host would have refused is not turned into a guess.
+  for (const fields of [
+    { proxyType: "https", proxyHost: "127.0.0.1", proxyPort: "7897" },
+    { proxyType: "http", proxyHost: "", proxyPort: "7897" },
+    { proxyType: "http", proxyHost: "http://127.0.0.1", proxyPort: "7897" },
+    { proxyType: "http", proxyHost: "127.0.0.1", proxyPort: "0" },
+    { proxyType: "http", proxyHost: "127.0.0.1", proxyPort: "70000" },
+  ]) {
+    assert.equal(providers.proxyOf(fields), null, JSON.stringify(fields));
+  }
+  // The username and password are never published, so nothing here can read them.
+  assert.equal(providers.proxyLabel({ type: "http", host: "127.0.0.1", port: 7897 }), "http://127.0.0.1:7897");
+  assert.equal(providers.proxyLabel(null), "");
+});

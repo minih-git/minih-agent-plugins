@@ -33,6 +33,9 @@ const TEXT = {
     needsProvider: "Choose a mail provider",
     needsProviderBody: (label) =>
       `${label || "This account"} has no mail service yet, so it is not connected. Open Settings → Plugins → Inbox mail and edit the account: pick your provider there, or “Custom server” and fill in its address.`,
+    // Used when a proxy error arrives for an account whose proxy fields are not
+    // readable: the sentence still has to make sense without an endpoint.
+    proxyWord: "the proxy",
     reasons: {
       missing:
         "The plugin has no mailbox credential yet. Add one from the Inbox panel in the sidebar, or in Settings.",
@@ -42,6 +45,10 @@ const TEXT = {
         "This provider now requires OAuth2 for IMAP, and the app cannot do that yet. Pick another provider for this account.",
       starttls:
         "This mail server does not offer STARTTLS, and the app does not sign in without encryption. In the account settings choose SSL for this mailbox and use the encrypted port your administrator gave you (993 for IMAP, 995 for POP3).",
+      proxyFailed: (label) =>
+        `Could not reach ${label}. Check that it is running and that the address is right; this account is never retried without it.`,
+      proxyAuthFailed: (label) =>
+        `${label} rejected the username or password. Open the account in Settings → Plugins → Inbox mail and enter the proxy credentials again.`,
       tls:
         "The encrypted connection to this mail server could not be established: its certificate did not verify, or that port is not the encrypted one. Check the server, the port and the encryption in the account settings.",
       unsupported:
@@ -64,12 +71,17 @@ const TEXT = {
     needsProvider: "请选择邮箱服务商",
     needsProviderBody: (label) =>
       `${label || "这个账号"}还没指定邮箱服务，所以暂时不连接。请打开 设置 → 插件 → 邮箱收件 编辑这个账号：选择你的服务商，或者选「自定义服务器」并填写服务器信息。`,
+    proxyWord: "代理",
     reasons: {
       missing: "插件还没有邮箱凭据。请在侧栏「收件箱」面板或设置里添加一个账号。",
       rejected: "邮箱拒绝了登录。请核对这个账号在「收件箱」面板里的服务商，并重新生成授权码。",
       oauth2: "该服务商现在要求 IMAP 使用 OAuth2，应用暂不支持。请为这个账号换一个服务商。",
       starttls:
         "这个邮件服务器不提供 STARTTLS，而应用不会在未加密的连接上登录。请在账号设置里把这封邮箱的加密方式改成 SSL，并使用管理员给你的加密端口（IMAP 993，POP3 995）。",
+      proxyFailed: (label) =>
+        `无法连接${label}。请确认代理已启动、地址填写正确；这个账号不会绕过代理直连。`,
+      proxyAuthFailed: (label) =>
+        `${label} 拒绝了用户名或密码。请在 设置 → 插件 → 邮箱收件 里编辑这个账号，重新填写代理凭据。`,
       tls: "无法与这个邮件服务器建立加密连接：证书没有通过校验，或者那个端口并不是加密端口。请核对账号设置里的服务器、端口和加密方式。",
       unsupported: "当前应用版本缺少本插件需要的宿主能力（需要桌面 1.10.0 及以上）。",
       other: "暂时无法连接邮箱，稍后会自动重试。",
@@ -157,7 +169,8 @@ function digestTitle(count, text, accountLabel) {
 }
 
 /** Why nothing is arriving, in the user's language. */
-function setupReason(code, text) {
+function setupReason(code, text, proxy = null) {
+  const label = proxy ? `${text.proxyWord} ${proxy.host}:${proxy.port}` : text.proxyWord;
   switch (String(code ?? "")) {
     case "CREDENTIAL_NOT_CONFIGURED":
     case "CREDENTIAL_INSTANCE_REQUIRED":
@@ -173,6 +186,12 @@ function setupReason(code, text) {
     case "TLS_FAILED":
     case "TLS_CERTIFICATE":
       return text.reasons.tls;
+    // The proxy is an account setting, and the message names the endpoint the
+    // user typed so the fix is obvious. It never quotes what the proxy answered.
+    case "PROXY_FAILED":
+      return text.reasons.proxyFailed(label);
+    case "PROXY_AUTH_FAILED":
+      return text.reasons.proxyAuthFailed(label);
     case "UNSUPPORTED":
       return text.reasons.unsupported;
     default:

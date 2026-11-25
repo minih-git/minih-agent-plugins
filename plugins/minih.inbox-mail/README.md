@@ -77,6 +77,40 @@ never a cloud-metadata address), and the password is injected into that stored
 endpoint and no other. A LAN address is fine — that is where company mail servers
 live.
 
+## When a mailbox needs a proxy
+
+Some mail servers are simply not reachable from where you are. Gmail's IMAP is the
+common case on a mainland-China network: the connection is reset no matter what
+the account is set to, and a system-wide TUN proxy is the only other way out.
+Each mailbox can now go through its own proxy:
+
+1. Open **Settings → Plugins → Inbox mail** and add (or edit) the account.
+2. Open the **Proxy** section of that form: pick **HTTP** or **SOCKS5**, type the
+   host and port, and — only if the proxy asks for them — a username and password.
+   For a local Clash or Mihomo, that is `HTTP`, `127.0.0.1`, `7897`.
+3. Save. The account is dialled through the proxy from then on; the mail server,
+   the port and the encryption stay what you set in the rest of the form.
+
+A few properties are deliberate:
+
+- **The proxy belongs to the account.** It is stored in that credential instance,
+  and only a connection carrying that instance can use it — the same rule as a
+  custom server. Two accounts can use two different proxies, and one can use none.
+- **No fallback.** If the proxy is down or refuses the credentials, the account
+  fails; it is never quietly retried direct, which would leak the mail server
+  address onto the network that blocks it. The notice names the proxy
+  (`无法连接代理 127.0.0.1:7897`) so the fix is obvious, and the account card's
+  tooltip says which proxy it goes through.
+- **The app performs the handshake.** HTTP `CONNECT` or SOCKS5, then the ordinary
+  TLS (or STARTTLS) login to the **mail** server: the certificate is checked
+  against the mail host, never the proxy, and the mail password never crosses the
+  proxy hop unencrypted. The plugin only learns the proxy type, host and port —
+  the proxy username and password stay in the app's credential store.
+- **Proxy credentials are not encrypted to the proxy.** That is how HTTP and
+  SOCKS5 authentication works; it is fine for a proxy on your own machine or LAN,
+  and it is why a proxy username and password have to be re-entered when you edit
+  the account (they are stored as secrets and never read back into the form).
+
 ## The Inbox panel
 
 - **Mailboxes** — one card per account: the address, a small state dot (the word
@@ -238,10 +272,10 @@ belonged to, so the old file is left alone and each account baselines itself.
   fills in the values, and the authorization code has to be entered again).
 - Outlook/Hotmail, which needs XOAUTH2 in the host.
 
-Published in this repository's catalog as `minih.inbox-mail` 0.3.0. It needs
-Minih-Agent-Desktop 1.10.0 or newer — the first release with a per-instance mail
+Published in this repository's catalog as `minih.inbox-mail` 0.4.0. It needs
+Minih-Agent-Desktop 1.11.0 or newer — the first release with a per-instance mail
 endpoint (`userEndpoint` on a credential slot), the POP3 login behind
-`net.tcp.connect`, and the `mail` sidebar icon.
+`net.tcp.connect`, the `mail` sidebar icon, and a per-account proxy (`userProxy`).
 
-`minih.inbox-mail` 0.3.0 is not in the catalog yet: it needs Desktop 1.10.0, and it
+`minih.inbox-mail` 0.4.0 is not in the catalog yet: it needs Desktop 1.11.0, and it
 will be published here once that release ships.

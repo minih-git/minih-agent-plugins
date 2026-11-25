@@ -15,6 +15,7 @@ import {
 } from "../view/policy.js";
 import { SANITIZE_CONFIG, extractStyles } from "../view/sanitize.js";
 import { NEWSLETTER_HTML } from "./helpers/newsletter.mjs";
+import { codeText, strings } from "../view/strings.js";
 
 /**
  * The reading pane's security policy, asserted where it can be asserted without
@@ -209,4 +210,20 @@ test("the banner background is opaque in both themes, so its text stays readable
 test("native controls follow the active theme", () => {
   assert.match(ruleBlock(":root"), /color-scheme:\s*dark/);
   assert.match(ruleBlock(':root[data-theme="light"]'), /color-scheme:\s*light/);
+});
+
+test("the panel explains a proxy failure in both languages", () => {
+  const en = strings("en");
+  const zh = strings("zh-CN");
+  // Every key exists in both tables, codes included: a missing sentence would
+  // otherwise fall back to a generic one for Chinese users only.
+  assert.deepEqual(Object.keys(en).sort(), Object.keys(zh).sort());
+  assert.deepEqual(Object.keys(en.codes).sort(), Object.keys(zh.codes).sort());
+  assert.match(codeText("en", "PROXY_FAILED"), /proxy/);
+  assert.match(codeText("zh-CN", "PROXY_FAILED"), /代理/);
+  assert.match(codeText("en", "PROXY_AUTH_FAILED"), /username or password/);
+  assert.match(codeText("zh-CN", "PROXY_AUTH_FAILED"), /用户名或密码/);
+  // The card's tooltip says which proxy, from the three published fields.
+  assert.equal(en.viaProxy({ host: "127.0.0.1", port: 7897 }), "via proxy 127.0.0.1:7897");
+  assert.equal(zh.viaProxy({ host: "127.0.0.1", port: 7897 }), "经代理 127.0.0.1:7897");
 });

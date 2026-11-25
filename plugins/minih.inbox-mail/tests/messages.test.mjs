@@ -108,3 +108,20 @@ test("the per-account setup reason covers the instance codes", () => {
   assert.match(messages.setupReason("PROVIDER_UNSELECTED", en), /OAuth2/);
   assert.match(messages.setupReason("PROVIDER_UNSELECTED", zh), /OAuth2/);
 });
+
+test("a proxy failure names the proxy the account carries, and never its credentials", () => {
+  const proxy = { host: "127.0.0.1", port: 7897 };
+  const failedEn = messages.setupReason("PROXY_FAILED", en, proxy);
+  assert.match(failedEn, /127\.0\.0\.1:7897/);
+  assert.match(failedEn, /never retried without it/);
+  const authEn = messages.setupReason("PROXY_AUTH_FAILED", en, proxy);
+  assert.match(authEn, /127\.0\.0\.1:7897/);
+  assert.match(authEn, /username or password/);
+  // Chinese says the same two things.
+  assert.match(messages.setupReason("PROXY_FAILED", zh, proxy), /无法连接代理 127\.0\.0\.1:7897/);
+  assert.match(messages.setupReason("PROXY_AUTH_FAILED", zh, proxy), /代理 127\.0\.0\.1:7897 拒绝了用户名或密码/);
+  // An account whose proxy fields are not readable still gets a sentence.
+  assert.match(messages.setupReason("PROXY_FAILED", en, null), /Could not reach the proxy/);
+  // Nothing a proxy answered is ever quoted.
+  assert.doesNotMatch(failedEn, /407|SOCKS|CONNECT/);
+});

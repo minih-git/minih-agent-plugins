@@ -31,10 +31,10 @@ const HOSTNAME = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/;
 const CONTRIB_ID = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 const localized = (value) => Boolean(value && typeof value === "object" && value.en && value["zh-CN"]);
 
-test("the plugin is published as minih.inbox-mail 0.3.0, versioned with its package", () => {
+test("the plugin is published as minih.inbox-mail 0.4.0, versioned with its package", () => {
   assert.equal(manifest.schemaVersion, 1);
   assert.equal(manifest.id, "minih.inbox-mail");
-  assert.equal(manifest.version, "0.3.0");
+  assert.equal(manifest.version, "0.4.0");
   assert.equal(manifest.version, pkg.version);
   assert.equal(manifest.main, "main.js");
   assert.ok(exists(manifest.main), "the entry point must be in the tree");
@@ -63,8 +63,8 @@ test("it asks for exactly the capabilities it uses, including the panel", () => 
 test("it declares the app version that actually has these host capabilities", () => {
   assert.equal(
     manifest.engines.minihAgent,
-    ">=1.10.0",
-    "a custom server needs the credential instance endpoint and the POP3 login of 1.10.0",
+    ">=1.11.0",
+    "a per-account proxy is the host capability of 1.11.0; 1.10.0 would ignore it",
   );
   assert.equal(manifest.activationEvents.includes("onStartup"), true, "a watcher has to start with the app");
 });
@@ -135,6 +135,23 @@ test("the credential slot has no account ceiling and keeps the 0.1.0 field set",
     assert.ok(localized(field.label), "a field label needs both contract locales");
   }
   assert.ok(localized(slot.title));
+});
+
+test("the slot declares a per-account proxy as its own top-level key", () => {
+  const [slot] = manifest.contributes.credentials;
+  // Top-level on purpose: 1.10.0 refuses an unknown key INSIDE `userEndpoint`
+  // ("userEndpoint has an unsupported key"), and a top-level key it does not know
+  // is ignored — which is what lets this manifest still install there.
+  assert.deepEqual(slot.userProxy, { types: ["http", "socks5"] });
+  assert.deepEqual(Object.keys(slot.userEndpoint).sort(), ["protocols"]);
+  assert.equal("proxyType" in slot.userEndpoint, false);
+  for (const reserved of ["proxyType", "proxyHost", "proxyPort", "proxyUsername", "proxyPassword"]) {
+    assert.equal(
+      slot.fields.some((field) => field.key === reserved),
+      false,
+      `${reserved} belongs to the host, not to the slot`,
+    );
+  }
 });
 
 test("the slot admits a server the user types, for both protocols, and nothing more", () => {
@@ -269,12 +286,18 @@ test("the safety notes describe the panel honestly, in both languages", () => {
   assert.match(en, /never more than four sessions at a time/);
   assert.match(en, /never polled sooner than the server's LOGIN-DELAY/);
   assert.match(en, /never sends DELE/);
+  // The proxy is the account's own setting, and its credentials never reach the
+  // plugin.
+  assert.match(en, /HTTP or SOCKS5 proxy configured on that account/);
+  assert.match(en, /only learns the proxy type, host and port/);
   assert.match(en, /A POP3 account has no flags on the server/);
   assert.match(zh, /自己填写的服务器/);
   assert.match(zh, /只会把该实例的密码注入同一个实例里记录的地址/);
   assert.match(zh, /同时最多 4 条/);
   assert.match(zh, /不会早于服务器要求的 LOGIN-DELAY/);
   assert.match(zh, /从不向 POP3 服务器发送 DELE/);
+  assert.match(zh, /本机 Clash/);
+  assert.match(zh, /插件只知道代理类型、地址和端口/);
   assert.match(zh, /POP3 服务器没有任何标记/);
   assert.match(zh, /不发信/);
   assert.match(zh, /不调用模型/);

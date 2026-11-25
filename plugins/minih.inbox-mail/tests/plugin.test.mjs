@@ -1084,6 +1084,49 @@ test("editing an account keeps its baseline, and a protocol change starts a new 
   }
 });
 
+test("an account's proxy is published, and a proxy failure is explained once", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({
+    instances: [
+      {
+        instanceId: "acc_1",
+        username: "me@gmail.com",
+        // The host publishes the three non-secret fields; the proxy username and
+        // password never appear here, and this plugin never asks for them.
+        fields: { provider: "gmail", proxyType: "http", proxyHost: "127.0.0.1", proxyPort: "7897" },
+      },
+    ],
+    servers: { "mailbox#acc_1": server },
+  });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    const snapshot = (await panel(plugin, "inbox.snapshot")).snapshot;
+    assert.deepEqual(snapshot.accounts[0].proxy, { type: "http", host: "127.0.0.1", port: 7897 });
+    // The provider is still the endpoint; the proxy only changes how it is reached,
+    // and the plugin still names no host of its own.
+    assert.equal(snapshot.accounts[0].provider.id, "gmail");
+    assert.equal(host.state.connects[0].host, "imap.gmail.com");
+    assert.equal(host.state.connects[0].endpoint.port, 993);
+
+    // The host refuses the proxy's credentials: one row, naming the proxy.
+    host.pi.net.tcp.connect = async () => {
+      throw coded("PROXY_AUTH_FAILED", "the proxy rejected the credentials");
+    };
+    host.emit("plugin:settingsChanged", {});
+    await waitFor(() => host.notifications.some((row) => row.dedupeKey.includes(":credentials:")), {
+      label: "the proxy notice",
+    });
+    const notice = host.notifications.find((row) => row.dedupeKey.includes(":credentials:"));
+    assert.match(notice.body, /127\.0\.0\.1:7897/);
+    assert.match(notice.body, /username or password/);
+    assert.deepEqual(notice.link, { view: "inbox" });
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
 test("a POP3 mailbox is polled, announced once, and offers no read or star state", async () => {
   const server = createFakePop3Server({ messages: [popMessage({ uidl: "AAA", subject: "already here" })] });
   const host = fakeHost({

@@ -305,6 +305,35 @@ function customEndpointOf(publicFields) {
   return { id: CUSTOM_PROVIDER_ID, host, port, protocol, security };
 }
 
+/**
+ * The proxy an account reaches its server through, or `null`.
+ *
+ * The host performs the proxy handshake, so this file only reads the three
+ * non-secret fields it publishes (`proxyType`, `proxyHost`, `proxyPort`) to label
+ * the account and to say *which* proxy failed. The username and password stay in
+ * the host's credential store and are never published: nothing here may depend on
+ * them, and there is no field for them to leak through.
+ */
+function proxyOf(publicFields) {
+  const fields = publicFields && typeof publicFields === "object" && !Array.isArray(publicFields)
+    ? publicFields
+    : {};
+  const type = String(fields.proxyType ?? "").trim().toLowerCase();
+  if (!type) return null;
+  if (type !== "http" && type !== "socks5") return null;
+  const host = String(fields.proxyHost ?? "").trim().toLowerCase();
+  if (!plausibleHost(host)) return null;
+  const port = Number(String(fields.proxyPort ?? "").trim());
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) return null;
+  return { type, host, port };
+}
+
+/** `http://127.0.0.1:7897` — one label for the panel, the notices and the logs. */
+function proxyLabel(proxy) {
+  if (!proxy) return "";
+  return `${proxy.type}://${proxy.host}:${proxy.port}`;
+}
+
 /** What changes when the user edits the account: protocol, transport, host, port. */
 function endpointKey(endpoint) {
   if (!endpoint) return "";
@@ -342,5 +371,7 @@ module.exports = {
   hosts,
   inferProviderId,
   providerFor,
+  proxyLabel,
+  proxyOf,
   resolveAccount,
 };

@@ -213,7 +213,7 @@ function postSetupNotice(account, error) {
   return postRow({
     kind: "alert",
     title: messages.clamp(strings.needsSetup, messages.MAX_TITLE),
-    body: messages.clamp(messages.setupReason(error?.code, strings), messages.MAX_BODY),
+    body: messages.clamp(messages.setupReason(error?.code, strings, account?.proxy ?? null), messages.MAX_BODY),
     dedupeKey: key,
   });
 }

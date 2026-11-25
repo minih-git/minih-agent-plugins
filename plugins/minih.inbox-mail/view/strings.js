@@ -55,6 +55,9 @@ const TEXT = {
     openError: "This message could not be opened.",
     loadError: "This message could not be shown.",
     retry: "Try again",
+    // Which proxy an account goes through: the three non-secret fields the host
+    // publishes. The proxy username and password are never named here.
+    viaProxy: (proxy) => `via proxy ${proxy.host}:${proxy.port}`,
     readFailed: "This message could not be marked as read on the server. It is shown below anyway.",
     markRead: "Mark as read",
     markUnread: "Mark as unread",
@@ -114,6 +117,8 @@ const TEXT = {
       TLS_FAILED:
         "The encrypted connection failed: the certificate did not verify, or that port is not the encrypted one.",
       CONNECT_FAILED: "The mail server could not be reached.",
+      PROXY_FAILED: "The proxy could not be reached, so this account is not connected.",
+      PROXY_AUTH_FAILED: "The proxy rejected the username or password.",
     },
   },
   "zh-CN": {
@@ -157,6 +162,7 @@ const TEXT = {
     openError: "这封邮件打不开。",
     loadError: "这封邮件显示不出来。",
     retry: "重试",
+    viaProxy: (proxy) => `经代理 ${proxy.host}:${proxy.port}`,
     readFailed: "这封邮件没能在服务器上标记为已读。正文仍照常显示。",
     markRead: "标为已读",
     markUnread: "标为未读",
@@ -214,6 +220,8 @@ const TEXT = {
         "这个服务器不提供 STARTTLS，而应用不会在未加密的连接上登录。请改用 SSL 和对应的加密端口。",
       TLS_FAILED: "加密连接失败：证书没有通过校验，或者那个端口并不是加密端口。",
       CONNECT_FAILED: "无法连接到邮件服务器。",
+      PROXY_FAILED: "无法连接代理，这个账号因此没有连上。",
+      PROXY_AUTH_FAILED: "代理拒绝了用户名或密码。",
     },
   },
 };

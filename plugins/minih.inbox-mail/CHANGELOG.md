@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.0
+
+- **A proxy per mailbox.** The credential slot declares `userProxy: { types:
+  ["http", "socks5"] }` as a top-level key — not inside `userEndpoint`, because a
+  1.10.0 host refuses an unknown key there and ignores an unknown top-level one,
+  which is what lets this manifest still install on 1.10.0 (without a proxy). The
+  host performs the handshake (HTTP `CONNECT` / SOCKS5, optional username and
+  password) and then the usual TLS or STARTTLS login to the mail server, with the
+  certificate checked against the mail host. There is no direct fallback: a
+  failing proxy fails the account.
+- `PROXY_FAILED` and `PROXY_AUTH_FAILED` are mapped: the panel banner, the
+  one-time account notice (naming the proxy endpoint, e.g. `无法连接代理
+  127.0.0.1:7897`) and the account card's tooltip (`经代理 127.0.0.1:7897`, from the
+  published `proxyType`/`proxyHost`/`proxyPort`). The proxy username and password
+  are never published, so the plugin cannot read them and does not ask.
+- Requires Desktop 1.11.0 (`engines.minihAgent` is `>=1.11.0`), the release that
+  ships `userProxy`. Not published to the catalog until that release exists.
+
 ## 0.3.0
 
 - **HTML mail is shown as HTML.** An HTML part is the default view (the "show plain
