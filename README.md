@@ -43,7 +43,7 @@ keeping its own `LICENSE` and notice files inside its directory.
 | `minih.personal-knowledge` (`Personal Knowledge`) | 0.7.2 | minih-git | MIT | this repository |
 | `minih.selection-translate` (`Selection Translate`) | 0.3.2 | minih-git | MIT | this repository |
 | `minih.cache-keepwarm` (`Cache keep-warm`) | 0.1.0 | minih-git | MIT | this repository |
-| `minih.inbox-mail` (`Inbox mail`) | 0.5.0 | minih-git | MIT | this repository |
+| `minih.inbox-mail` (`Inbox mail`) | 0.5.1 | minih-git | MIT | this repository |
 | `minih.session-titles` (`Session Titles`) | 0.1.0 | minih-git | MIT | this repository |
 | `pi.file-manager` (`File Manager`) | 0.9.0 | Tioit-Wang | not declared by the author | not published by the author |
 
@@ -87,7 +87,7 @@ call. Read failures show the real error with retry, never demo data. File reads
 use a bounded parallel batch, and vault configuration stays available while
 indexing. No permission or data-format changes are needed.
 
-`minih.inbox-mail` 0.5.0 is the resident assistant's first information source
+`minih.inbox-mail` 0.5.1 is the resident assistant's first information source
 and a small mail client of its own: it watches your mailboxes and writes what
 arrives into the notification centre — one alert for a message from an
 important sender, matching one of your keywords or marked urgent by its own
@@ -107,6 +107,11 @@ body is downloaded only when you open that message — opening is what marks
 that one message read — and star, delete or archive only the message you
 clicked. A POP3 mailbox has no server flags, so read there is a mark kept on
 this computer, a delete asks in the panel first, and no star is offered.
+As of 0.5.1 a link in the body is followed on click — http(s) opens in your
+browser, a mailto: opens the panel's own composer with the address, subject and
+body it named — the body box grows with its content instead of scrolling inside
+a fixed frame, and selecting and copying text works again because only a click
+on a link (or Enter on it) is intercepted.
 
 0.5.0 also writes mail. Write composes a message with recipient chips for
 To/Cc/Bcc, subject, body, attachments and a running size; reply, reply to all
