@@ -24,8 +24,10 @@
  *   never invents an account and never keeps one the host no longer has.
  */
 
-const body = require("./body");
 const accountsFile = require("./accounts");
+const attachments = require("./attachments");
+const body = require("./body");
+const compose = require("./compose");
 const { createGate } = require("./gate");
 const mailboxes = require("./mailboxes");
 const messages = require("./messages");
@@ -42,6 +44,27 @@ const SLOT_ID = "mailbox";
 const BODY_LIMIT = 1024 * 1024;
 /** A body fetch is interactive: it must finish before the panel's own timeout. */
 const BODY_TIMEOUT_MS = 20_000;
+/**
+ * How large one saved attachment may be.
+ *
+ * The host refuses a file above 50 MiB in `pi.fs.saveAs` anyway; checking first
+ * means the plugin says "too large" instead of failing after a download that
+ * could not have worked.
+ */
+const SAVE_LIMIT = attachments.MAX_ATTACHMENT_BYTES;
+/** An attachment download is minutes of a slow mailbox, not a click. */
+const DOWNLOAD_TIMEOUT_MS = 120_000;
+/** A send is the host's session; the plugin only waits for the answer. */
+const SEND_TIMEOUT_MS = 120_000;
+/**
+ * How many opened messages keep their parsed headers in memory.
+ *
+ * A reply has to know the original's `Message-ID`, `Reply-To` and `References`,
+ * and those come from the body the panel already fetched. Eight is more than the
+ * panel can have open at once and keeps a session's worth of text out of the
+ * plugin's long-lived memory.
+ */
+const OPEN_CACHE_LIMIT = 8;
 /**
  * Sessions this plugin may have open at once.
  *
@@ -79,6 +102,17 @@ function createRuntime(deps) {
    * a delete or an archive button at all.
    */
   const folders = mailboxes.createFolderCache();
+  /**
+   * The last few messages the panel opened: their parsed headers, their text and
+   * their attachment list.
+   *
+   * A reply has to know the original's `Message-ID`, `Reply-To` and `References`,
+   * and a forward needs the original's text and its attachment part numbers. All
+   * of that is already in the body the panel asked for when the user opened the
+   * message, so this cache is what makes "reply" cost no network request at all.
+   * It holds nothing on disk and nothing beyond the last few opens.
+   */
+  const openCache = new Map();
   let loaded = false;
 
   const accountStateOf = (instanceId) => accountsFile.accountState(root, instanceId);
@@ -433,6 +467,7 @@ function createRuntime(deps) {
           provider: null,
           custom: null,
           proxy: null,
+          sendTarget: null,
           missingServer: false,
           protocol: null,
           connectionKey: "",
@@ -467,6 +502,16 @@ function createRuntime(deps) {
       // Only the three non-secret fields are published; the proxy credentials
       // never reach this process, and nothing here needs them.
       record.proxy = providers.proxyOf(instance.publicFields);
+      // How this account sends, decided where the account itself is decided:
+      // a preset provider through its published submission endpoint, a server the
+      // user typed through the outgoing server they typed, and a reason when
+      // neither exists. The panel shows that reason instead of a send button that
+      // would fail.
+      record.sendTarget = providers.sendTargetOf({
+        custom: resolved.custom,
+        provider,
+        publicFields: instance.publicFields,
+      });
       record.missingServer = resolved.missingServer;
       record.provider = provider ? provider.id : null;
       record.protocol = protocol;
@@ -549,6 +594,11 @@ function createRuntime(deps) {
       // needs a mailbox to archive into, which only a `LIST` can tell.
       canDelete: record.protocol === "imap" || record.protocol === "pop3",
       canArchive: Boolean(known?.archive),
+      // Whether this account can send at all, and why not when it cannot. The
+      // panel lists only the accounts that can, and names the reason for the rest
+      // instead of offering a send button the host would refuse.
+      canSend: sendBlockedReasonOf(record) === null,
+      sendBlockedReason: sendBlockedReasonOf(record),
       // The list is bounded per account; once it is full the panel stops offering
       // "load older" and says the limit was reached.
       messageCount: state.messages.length,
@@ -613,6 +663,153 @@ function createRuntime(deps) {
     }
     list.sort((a, b) => (b.receivedAt ?? 0) - (a.receivedAt ?? 0) || b.uid - a.uid);
     return list;
+  }
+
+  /**
+   * Why this account cannot send, or `null` when it can.
+   *
+   * Two refusals come from the account itself (`lib/providers.js` decides them:
+   * a server the user typed with no outgoing server, or a provider with no SMTP
+   * entry), and one from the app: a host without `mail.send` cannot deliver
+   * anything, however the account is configured.
+   */
+  function sendBlockedReasonOf(record) {
+    if (typeof host.mail?.send !== "function") return "send-disabled";
+    return record.sendTarget?.blocked ?? null;
+  }
+
+  /** One timestamp as the attribution line of a reply reads it. */
+  function formatMessageDate(value, locale) {
+    if (!Number.isFinite(value)) return "";
+    try {
+      return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+    } catch {
+      return new Date(value).toISOString();
+    }
+  }
+
+  /** Whether one address is the account's own, compared without case. */
+  function isSelf(record, entry) {
+    const address = String(entry?.address ?? "").toLowerCase();
+    return Boolean(address) && address === String(record.email ?? "").toLowerCase();
+  }
+
+  /**
+   * The message the panel opened, from the cache, or the coded refusal.
+   *
+   * A reply or a forward is built from what opening the message already fetched:
+   * its text, its HTML alternative, its attachment part numbers, and the four
+   * headers that decide threading. No second request, and no guessing from an
+   * `ENVELOPE` that some servers fill with `NIL`.
+   */
+  function openedMessageOf(record, envelope) {
+    const cached = openCache.get(`${record.instanceId}:${envelope.key}`) ?? null;
+    if (!cached) {
+      throw coded("MESSAGE_NOT_OPEN", "open this message before replying to or forwarding it");
+    }
+    return cached;
+  }
+
+  /**
+   * Who a reply goes to, and whether they are copies.
+   *
+   * A reply answers whoever asked for it (`Reply-To`, or the sender when there is
+   * none); reply-all adds the original recipients, never the account itself, and
+   * keeps the original's split between `To` and `Cc` for the ones that survive.
+   */
+  function replyRecipients(record, envelope, headers, { all = false } = {}) {
+    const explicit = compose.parseAddressHeader(headers["reply-to"] ?? "");
+    const sender = envelope.from?.address ? [envelope.from] : [];
+    const to = [];
+    const seen = new Set();
+    const push = (list, target) => {
+      for (const entry of list) {
+        const address = String(entry?.address ?? "").trim();
+        if (!address || isSelf(record, entry)) continue;
+        const key = address.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        target.push({ name: String(entry?.name ?? "").trim(), address });
+      }
+    };
+    push(explicit.length ? explicit : sender, to);
+    if (!to.length) push(sender, to);
+    const cc = [];
+    if (all) {
+      push(Array.isArray(envelope.to) ? envelope.to : [], to);
+      push(Array.isArray(envelope.cc) ? envelope.cc : [], cc);
+    }
+    return { to, cc };
+  }
+
+  /**
+   * One attachment's bytes, fetched the way its protocol allows.
+   *
+   * IMAP asks for the one MIME part `BODYSTRUCTURE` says holds it; POP3 has no
+   * such command, so the whole message is fetched (capped) and the part taken out
+   * of it. Both are bounded by the size one save may write, so an attachment that
+   * could never be saved is refused before the transfer rather than after it.
+   */
+  async function attachmentBytes(record, envelope, index) {
+    if (!record.watcher) throw coded("ACCOUNT_OFFLINE", "this mailbox is not connected yet");
+    if (record.protocol === "pop3") {
+      const fetched = await record.watcher.fetchBody(envelope.key, {
+        maxBytes: SAVE_LIMIT,
+        timeoutMs: DOWNLOAD_TIMEOUT_MS,
+      });
+      // A truncated maildrop message is not the attachment the user asked for.
+      if (fetched.truncated) {
+        throw coded("ATTACHMENT_TOO_LARGE", "this message is larger than one save may write");
+      }
+      const file = body.selectAttachment(fetched.body, index, { maxBytes: SAVE_LIMIT });
+      return { filename: file.filename, type: file.type, data: file.data };
+    }
+    return record.watcher.withSession(async (session, box) => {
+      requireCurrentEra(envelope, box);
+      const structure = await session.fetchStructure(envelope.uid, { timeoutMs: BODY_TIMEOUT_MS });
+      const part = attachments.attachmentAt(structure, index);
+      if (!part) throw coded("ATTACHMENT_NOT_FOUND", "this message has no such attachment");
+      if (part.size > SAVE_LIMIT) {
+        throw coded("ATTACHMENT_TOO_LARGE", "this attachment is larger than one save may write");
+      }
+      const fetched = await session.fetchPart(envelope.uid, part.part, {
+        maxBytes: SAVE_LIMIT,
+        timeoutMs: DOWNLOAD_TIMEOUT_MS,
+      });
+      return {
+        filename: part.name || attachments.suggestedName(`attachment-${Number(index) + 1}`),
+        type: part.type === "message/rfc822" ? "message/rfc822" : part.type,
+        data: attachments.decodePart(fetched.data, part.encoding),
+      };
+    });
+  }
+
+  /**
+   * File one copy of a just-sent message in the account's Sent mailbox.
+   *
+   * SMTP delivers; it does not file. A provider's web interface shows what it
+   * received and, for a submission through its own SMTP, often nothing in Sent —
+   * which is why every desktop client appends a copy. Gmail is the exception: it
+   * files what it sends, so a copy there would be a duplicate.
+   *
+   * This never fails the send. The message is already out, and a mailbox that
+   * refuses `APPEND` cannot make that untrue; the answer reports it in one line.
+   */
+  async function fileSentCopy(record, mime) {
+    if (record.protocol !== "imap") return { filed: false, folder: null, skipped: "no-folders" };
+    if (record.provider === "gmail") return { filed: false, folder: null, skipped: "gmail" };
+    if (!record.watcher) return { filed: false, folder: null, skipped: "offline" };
+    try {
+      return await record.watcher.withSession(async (session, box, capabilities) => {
+        const known = await ensureFolders(record, session, capabilities);
+        if (!known?.sent) return { filed: false, folder: null, skipped: "no-sent-folder" };
+        await session.appendMessage(known.sent, mime, { timeoutMs: DOWNLOAD_TIMEOUT_MS });
+        return { filed: true, folder: known.sent, skipped: null };
+      });
+    } catch (error) {
+      log("warn", `could not file the sent copy: ${error?.code ?? error?.message ?? error}`);
+      return { filed: false, folder: null, skipped: "failed", error: String(error?.code ?? "FAILED") };
+    }
   }
 
   return {
@@ -738,6 +935,21 @@ function createRuntime(deps) {
         }
       }
       const parsed = body.parseMessage(fetched.body);
+      // Kept for a reply or a forward: the same bytes just carried the headers
+      // that decide threading, so asking the server again would be one round trip
+      // for something already in hand. Bounded, and never written anywhere.
+      const cacheKey = `${record.instanceId}:${envelope.key}`;
+      openCache.delete(cacheKey);
+      openCache.set(cacheKey, {
+        headers: parsed.headers,
+        text: parsed.text,
+        html: parsed.html,
+        attachments: parsed.attachments,
+        at: Date.now(),
+      });
+      while (openCache.size > OPEN_CACHE_LIMIT) {
+        openCache.delete(openCache.keys().next().value);
+      }
       return {
         accountId: record.instanceId,
         accountLabel: record.label,
@@ -749,11 +961,16 @@ function createRuntime(deps) {
         uid: envelope.uid,
         subject: envelope.subject,
         from: envelope.from,
+        to: envelope.to,
+        cc: envelope.cc,
         receivedAt: envelope.receivedAt,
+        messageId: (parsed.headers["message-id"] || envelope.messageId || "").trim(),
         flags: store.findEnvelope(state, envelope.key)?.flags ?? envelope.flags,
         text: parsed.text,
         html: parsed.html,
         attachments: parsed.attachments,
+        canSend: sendBlockedReasonOf(record) === null,
+        sendBlockedReason: sendBlockedReasonOf(record),
         limited: BODY_LIMIT,
         truncated: fetched.truncated,
         size: fetched.size,
@@ -907,6 +1124,185 @@ function createRuntime(deps) {
       store.removeEnvelope(state, envelope.key);
       await deps.persist();
       return { accountId: record.instanceId, key: envelope.key, removed: true, ...result };
+    },
+
+    /**
+     * The draft a reply, a reply-all or a forward opens with.
+     *
+     * Everything here comes from the message the panel already opened — its
+     * headers, its text and its attachment part numbers — so pressing "reply"
+     * costs no network request. The panel only renders this and lets the user edit
+     * it; the rules that decide who is answered, what the subject becomes and how
+     * the original is quoted live in `lib/compose.js` and are tested there.
+     */
+    async draft(input) {
+      const record = requireAccount(input?.accountId);
+      const state = accountStateOf(record.instanceId);
+      const envelope = requireEnvelope(state, input?.key);
+      const mode = String(input?.mode ?? "reply");
+      if (mode !== "reply" && mode !== "replyAll" && mode !== "forward") {
+        throw coded("INVALID_ARGUMENT", "unknown draft mode");
+      }
+      const opened = openedMessageOf(record, envelope);
+      const headers = opened.headers ?? {};
+      const locale = deps.locale();
+      const original = {
+        from: envelope.from ?? { name: "", address: "" },
+        to: Array.isArray(envelope.to) ? envelope.to : [],
+        cc: Array.isArray(envelope.cc) ? envelope.cc : [],
+        subject: envelope.subject ?? "",
+        date: formatMessageDate(envelope.receivedAt, locale),
+      };
+      const messageId = String(headers["message-id"] || envelope.messageId || "").trim();
+      const references = String(headers["references"] || "").trim();
+      const blocked = sendBlockedReasonOf(record);
+      const base = {
+        accountId: record.instanceId,
+        mode,
+        inReplyTo: messageId,
+        references: compose.referencesFor({ references, inReplyTo: messageId }),
+        canSend: blocked === null,
+        sendBlockedReason: blocked,
+      };
+      if (mode === "forward") {
+        return {
+          ...base,
+          to: [],
+          cc: [],
+          subject: compose.forwardSubject(original.subject),
+          text: compose.forwardBody({
+            ...original,
+            text: opened.text ?? "",
+            html: opened.html ?? "",
+            locale,
+          }),
+          // The original's attachments are offered as a choice, not attached: the
+          // panel lists them and the send carries only the ones the user ticked.
+          forwardOf: {
+            accountId: record.instanceId,
+            key: envelope.key,
+            attachments: (opened.attachments ?? []).map((file, index) => ({
+              index,
+              filename: file.filename,
+              size: file.size,
+            })),
+          },
+        };
+      }
+      const targets = replyRecipients(record, envelope, headers, { all: mode === "replyAll" });
+      return {
+        ...base,
+        to: targets.to,
+        cc: targets.cc,
+        subject: compose.replySubject(original.subject),
+        text: compose.replyBody({
+          text: opened.text ?? "",
+          html: opened.html ?? "",
+          from: original.from,
+          date: original.date,
+          locale,
+        }),
+        forwardOf: null,
+      };
+    },
+
+    /**
+     * Send one message, because the user pressed send.
+     *
+     * The message is built here (`lib/compose.js`) and delivered by the host
+     * (`pi.mail.send`): the plugin never sees the password, the connection or the
+     * server's text, only the outcome. The endpoint is named for a preset account
+     * and omitted for an account with its own outgoing server, which is the rule
+     * the host enforces and `lib/providers.js` decides.
+     *
+     * A send that succeeded files one copy in the account's Sent mailbox; a send
+     * the host refused throws its own code, and the panel keeps the draft.
+     */
+    async send(input) {
+      const record = requireAccount(input?.accountId);
+      const blocked = sendBlockedReasonOf(record);
+      if (blocked) throw coded(blocked, "this mailbox cannot send mail as it is configured");
+      if (!compose.isAddress(record.email)) {
+        throw coded("BAD_SENDER", "this mailbox has no usable address to send from");
+      }
+      const files = [];
+      for (const file of Array.isArray(input?.attachments) ? input.attachments : []) {
+        const data = Buffer.from(String(file?.data ?? ""), "base64");
+        if (!data.length) continue;
+        files.push({ name: String(file?.name ?? ""), type: String(file?.type ?? ""), data });
+      }
+      let forwarded = null;
+      if (input?.forwardOf?.accountId && input?.forwardOf?.key) {
+        const source = requireAccount(input.forwardOf.accountId);
+        const sourceState = accountStateOf(source.instanceId);
+        const envelope = requireEnvelope(sourceState, input.forwardOf.key);
+        const wanted = Array.isArray(input.forwardOf.attachments) ? input.forwardOf.attachments : [];
+        for (const index of wanted) {
+          const file = await attachmentBytes(source, envelope, index);
+          files.push({ name: file.filename, type: file.type, data: file.data });
+        }
+        forwarded = { accountId: source.instanceId, key: envelope.key, attachments: wanted.length };
+      }
+      const built = compose.buildMessage({
+        // The display name is the account's label only when it says something the
+        // address does not; the address itself is always the account's own.
+        from: { name: record.label && record.label !== record.email ? record.label : "", address: record.email },
+        to: input?.to ?? [],
+        cc: input?.cc ?? [],
+        bcc: input?.bcc ?? [],
+        subject: input?.subject ?? "",
+        text: input?.text ?? "",
+        attachments: files,
+        inReplyTo: input?.inReplyTo ?? "",
+        references: input?.references ?? [],
+      });
+      const request = {
+        credential: { slot: SLOT_ID, instanceId: record.instanceId },
+        envelope: built.envelope,
+        mime: new Uint8Array(built.mime),
+        timeoutMs: SEND_TIMEOUT_MS,
+      };
+      if (record.sendTarget?.endpoint) request.endpoint = record.sendTarget.endpoint;
+      const result = await host.mail.send(request);
+      const filed = await fileSentCopy(record, built.mime);
+      return {
+        accountId: record.instanceId,
+        accepted: Array.isArray(result?.accepted) ? result.accepted : [],
+        rejected: Array.isArray(result?.rejected) ? result.rejected : [],
+        messageId: built.messageId,
+        serverMessageId: result?.messageId ?? null,
+        size: built.size,
+        attachments: files.length,
+        forwarded,
+        filed,
+      };
+    },
+
+    /**
+     * Save one attachment of one message where the user points the save dialog.
+     *
+     * The bytes are fetched for this one click (`attachmentBytes`), written by the
+     * host's own dialog, and dropped: nothing is kept in the plugin's data folder,
+     * and a cancelled dialog is an answer, not an error.
+     */
+    async downloadAttachment(input) {
+      const record = requireAccount(input?.accountId);
+      const state = accountStateOf(record.instanceId);
+      const envelope = requireEnvelope(state, input?.key);
+      if (typeof host.fs?.saveAs !== "function") {
+        throw coded("UNSUPPORTED", "this app version cannot save a file");
+      }
+      const file = await attachmentBytes(record, envelope, input?.index);
+      if (file.data.length > SAVE_LIMIT) {
+        throw coded("ATTACHMENT_TOO_LARGE", "this attachment is larger than one save may write");
+      }
+      const saved = await host.fs.saveAs({
+        suggestedName: attachments.suggestedName(file.filename),
+        data: new Uint8Array(file.data),
+        mimeType: file.type || "application/octet-stream",
+      });
+      if (!saved || !saved.path) return { cancelled: true };
+      return { cancelled: false, name: String(saved.name ?? ""), size: file.data.length };
     },
 
     /** Open a provider's web mailbox in the user's own browser. */

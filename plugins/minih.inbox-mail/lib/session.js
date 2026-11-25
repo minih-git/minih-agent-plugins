@@ -8,15 +8,21 @@
  * the capability reply and the login exchange have all been consumed. This file
  * therefore starts at `CAPABILITY` and owns everything after it:
  *
- *   CAPABILITY, ID, SELECT, UID SEARCH, UID FETCH with BODY.PEEK, UID STORE of
- *   `\Seen` / `\Flagged`, LIST, UID MOVE or UID COPY + UID EXPUNGE, LOGOUT.
+ *   CAPABILITY, ID, SELECT, UID SEARCH, UID FETCH with BODY.PEEK (whole message,
+ *   header block, text fragment, BODYSTRUCTURE, or one numbered MIME part),
+ *   UID STORE of `\Seen` / `\Flagged`, LIST, UID MOVE or UID COPY + UID EXPUNGE,
+ *   APPEND, LOGOUT.
  *
- * There is no `APPEND`, no `COPY` other than the one a delete needs on a server
- * without `MOVE`, and no `EXPUNGE` other than `UID EXPUNGE <one uid>`: nothing
- * here removes mail unless the user clicked delete or archive on that one
- * message, and nothing here can empty a mailbox. A bare `EXPUNGE` — the command
- * that removes every `\Deleted` message in the selected mailbox, including ones
- * another client flagged — is deliberately not implemented.
+ * `APPEND` is the one command here that writes something the user did not pick up
+ * from the mailbox: one copy of a message this plugin just sent, into the
+ * account's Sent mailbox. It is only reachable from a successful send, and a
+ * failure to file it is reported without changing the fact that the message went
+ * out. There is no `COPY` other than the one a delete needs on a server without
+ * `MOVE`, and no `EXPUNGE` other than `UID EXPUNGE <one uid>`: nothing here
+ * removes mail unless the user clicked delete or archive on that one message, and
+ * nothing here can empty a mailbox. A bare `EXPUNGE` — the command that removes
+ * every `\Deleted` message in the selected mailbox, including ones another client
+ * flagged — is deliberately not implemented.
  *
  * `STORE` exists because the user asked for it: the Inbox panel offers "mark as
  * read" and "add star", and each of those is one click that sends exactly one
@@ -138,9 +144,21 @@ function createSession(transport, options = {}) {
 
   function dispatch(tokens) {
     const kind = kindOf(tokens);
-    // No command here has a continuation: without IDLE, a `+` line is a server
-    // that is out of step, and answering nothing is the honest response.
-    if (kind === "cont") return;
+    // A continuation is the server inviting a literal: `APPEND` waits for one
+    // before it sends the message. The command that asked for it owns the reply,
+    // and answers it exactly once.
+    if (kind === "cont") {
+      if (inflight?.onContinuation) {
+        const accept = inflight.onContinuation;
+        inflight.onContinuation = null;
+        try {
+          accept();
+        } catch (error) {
+          fail(Object.assign(error, { code: error?.code ?? "IMAP_SEND_FAILED" }));
+        }
+      }
+      return;
+    }
     if (kind === "untagged") {
       const record = parseUntagged(tokens);
       if (record.kind === "status" && record.status === "BYE") {
@@ -208,7 +226,7 @@ function createSession(transport, options = {}) {
         return;
       }
       const tag = `A${(tagSeq += 1)}`;
-      const entry = { tag, untagged: [], resolve, reject, timer: null };
+      const entry = { tag, untagged: [], resolve, reject, timer: null, onContinuation: options2.onContinuation ?? null };
       inflight = entry;
       entry.timer = setTimeout(() => {
         if (inflight === entry) inflight = null;
@@ -467,6 +485,88 @@ function createSession(transport, options = {}) {
         truncated: size > record.item.body.length,
         flags: record.item.flags,
       };
+    },
+
+    /**
+     * The server's own statement of a message's structure.
+     *
+     * `BODYSTRUCTURE` costs one command and no message body, and it is what tells
+     * a download which numbered part holds an attachment: the number the server
+     * uses is the number `BODY.PEEK[<part>]` answers to.
+     */
+    async fetchStructure(uid, options2 = {}) {
+      if (!Number.isInteger(uid)) {
+        throw Object.assign(new Error("fetchStructure needs an integer UID"), { code: "INVALID_ARGUMENT" });
+      }
+      const reply = await command(`UID FETCH ${uid} (UID BODYSTRUCTURE)`, {
+        timeoutMs: options2.timeoutMs ?? defaultTimeoutMs,
+      });
+      const record = reply.untagged.find((entry) => entry.kind === "fetch" && entry.item.uid === uid);
+      if (!record) {
+        throw Object.assign(new Error(`message ${uid} is not in the mailbox`), { code: "IMAP_NOT_FOUND" });
+      }
+      return record.item.structure;
+    },
+
+    /**
+     * One MIME part of one message, capped: `BODY.PEEK[<section>]`.
+     *
+     * The peek form is mandatory here for the same reason as everywhere else: the
+     * non-peek form would mark the message as read, and a user who saves an
+     * attachment has not read anything. The reply's section number is checked
+     * against the request, so a server that answered about another part is an
+     * error rather than a file with the wrong bytes in it.
+     */
+    async fetchPart(uid, section, options2 = {}) {
+      if (!Number.isInteger(uid)) {
+        throw Object.assign(new Error("fetchPart needs an integer UID"), { code: "INVALID_ARGUMENT" });
+      }
+      const part = String(section ?? "").trim();
+      if (!/^\d+(\.\d+)*$/.test(part)) {
+        throw Object.assign(new Error("fetchPart needs a section number"), { code: "INVALID_ARGUMENT" });
+      }
+      const maxBytes = options2.maxBytes ?? 0;
+      const range = maxBytes > 0 ? `<0.${maxBytes}>` : "";
+      const reply = await command(`UID FETCH ${uid} (UID BODY.PEEK[${part}]${range})`, {
+        timeoutMs: options2.timeoutMs ?? defaultTimeoutMs,
+      });
+      const record = reply.untagged.find(
+        (entry) =>
+          entry.kind === "fetch" &&
+          entry.item.uid === uid &&
+          entry.item.section === part &&
+          entry.item.data,
+      );
+      if (!record) {
+        throw Object.assign(new Error(`the server sent no part ${part} of message ${uid}`), {
+          code: "IMAP_NO_BODY",
+        });
+      }
+      return { uid, section: part, data: record.item.data, truncated: maxBytes > 0 && record.item.data.length >= maxBytes };
+    },
+
+    /**
+     * `APPEND <mailbox> (flags) {bytes}`: one copy of a message into a mailbox.
+     *
+     * This is how a sent message reaches the account's Sent folder, because SMTP
+     * delivery does not file one. The literal waits for the server's continuation
+     * before the bytes go out, as the grammar requires; the flags are the `\Seen`
+     * this plugin files with, so the copy does not look like new mail.
+     *
+     * A server that answers `NO` is reported as a failure — the caller decides
+     * whether that is fatal. Here it never is: the message is already sent.
+     */
+    async appendMessage(mailbox, message, options2 = {}) {
+      const target = String(mailbox ?? "");
+      if (!target) throw Object.assign(new Error("appendMessage needs a mailbox"), { code: "INVALID_ARGUMENT" });
+      const bytes = Buffer.isBuffer(message) ? message : Buffer.from(message ?? []);
+      if (!bytes.length) throw Object.assign(new Error("appendMessage needs a message"), { code: "INVALID_ARGUMENT" });
+      const flags = (options2.flags ?? ["\\Seen"]).filter((flag) => typeof flag === "string" && flag.startsWith("\\"));
+      const flagList = flags.length ? ` (${flags.join(" ")})` : "";
+      return command(`APPEND ${quote(target)}${flagList} {${bytes.length}}`, {
+        timeoutMs: options2.timeoutMs ?? defaultTimeoutMs,
+        onContinuation: () => transport.send(Buffer.concat([bytes, Buffer.from("\r\n")])),
+      });
     },
 
     /**

@@ -220,7 +220,21 @@ function textOf(headers, body) {
   return mime.decodeBytes(decoded, charset);
 }
 
-function walk(entity, state, depth) {
+/**
+ * Walk one MIME entity, collecting what the panel shows.
+ *
+ * `partPrefix` is the IMAP section number this entity occupies, or would pass
+ * down to its children. RFC 3501 numbers the parts of a `multipart` 1, 2, 3 in
+ * document order and nests them as `1.2`; a message that is not multipart has one
+ * part, `1`. The number is carried on every attachment because fetching exactly
+ * that part (`UID FETCH <uid> BODY.PEEK[<part>]`) is what saves a download from
+ * pulling the whole message, and because the server numbers the tree the same way
+ * its `BODYSTRUCTURE` does.
+ *
+ * `state.collectData` keeps each attachment's decoded bytes, which only a
+ * download asks for: listing a message's attachments must not hold their content.
+ */
+function walk(entity, state, depth, partPrefix) {
   if (depth > MAX_DEPTH || state.parts >= MAX_PARTS) return;
   state.parts += 1;
   const headers = mime.parseHeaders(entity.header);
@@ -230,22 +244,31 @@ function walk(entity, state, depth) {
 
   if (type.startsWith("multipart/")) {
     const boundary = contentType.params.get("boundary");
-    for (const part of splitMultipart(entity.body, boundary)) {
+    const children = splitMultipart(entity.body, boundary);
+    for (let index = 0; index < children.length; index += 1) {
       if (state.parts >= MAX_PARTS) return;
-      walk(splitEntity(part), state, depth + 1);
+      const part = `${partPrefix}${index + 1}`;
+      walk(splitEntity(children[index]), state, depth + 1, `${part}.`);
     }
     return;
   }
 
+  const part = partPrefix ? partPrefix.replace(/\.$/, "") : "1";
+  const encoding = mime.headerValue(headers, "content-transfer-encoding");
   const filename = filenameFrom(disposition, contentType);
   const isAttachment =
     disposition.value === "attachment" || Boolean(filename) || type === "message/rfc822";
   if (isAttachment) {
-    const decoded = decodeTransfer(entity.body, mime.headerValue(headers, "content-transfer-encoding"));
-    state.attachments.push({
+    const decoded = decodeTransfer(entity.body, encoding);
+    const entry = {
       filename: filename || (type === "message/rfc822" ? "attached-message.eml" : "attachment"),
       size: decoded.length,
-    });
+      part,
+      type,
+      encoding: String(encoding ?? "").trim().toLowerCase(),
+    };
+    if (state.collectData) entry.data = decoded;
+    state.attachments.push(entry);
     return;
   }
   if (type === "text/plain") {
@@ -257,31 +280,81 @@ function walk(entity, state, depth) {
     return;
   }
   // A part the panel cannot show is still something the user may want to know
-  // about; it is listed by name and size, and never fetched twice.
-  state.attachments.push({ filename: filename || type, size: entity.body.length });
+  // about; it is listed by name and size, and its bytes are only decoded when the
+  // user asks to save it.
+  const entry = {
+    filename: filename || type,
+    size: entity.body.length,
+    part,
+    type,
+    encoding: String(encoding ?? "").trim().toLowerCase(),
+  };
+  if (state.collectData) entry.data = decodeTransfer(entity.body, encoding);
+  state.attachments.push(entry);
 }
 
+/** The header fields a reply or a forward needs, decoded, or `""`. */
+const REPLY_HEADERS = ["message-id", "in-reply-to", "references", "reply-to", "from", "to", "cc", "subject", "date"];
+
 /**
- * One raw message -> `{ text, html, attachments }`.
+ * One raw message -> `{ text, html, attachments, headers }`.
  *
  * Both text alternatives are returned when the message has both: the panel shows
  * the plain one first and offers the HTML one, which is what the user asked for
  * ("show text/plain by preference").
+ *
+ * `headers` is the handful of values a reply sets its `In-Reply-To` and
+ * `References` from. They are read from the same bytes the panel already asked
+ * for — opening a message is the only fetch — so a reply costs no second
+ * request, and a message whose server never reported these in its `ENVELOPE`
+ * still threads correctly.
+ *
+ * `withData` keeps every attachment's bytes, for the one download click that needs
+ * them; without it the list carries names, sizes and part numbers only.
  */
-function parseMessage(raw) {
+function parseMessage(raw, { withData = false } = {}) {
   const entity = splitEntity(raw);
-  const state = { text: null, html: null, attachments: [], parts: 0 };
-  walk(entity, state, 0);
-  return { text: state.text, html: state.html, attachments: state.attachments };
+  const state = { text: null, html: null, attachments: [], parts: 0, collectData: withData };
+  walk(entity, state, 0, "");
+  const root = mime.parseHeaders(entity.header);
+  const headers = {};
+  for (const name of REPLY_HEADERS) {
+    headers[name] = mime.headerValue(root, name).trim();
+  }
+  return { text: state.text, html: state.html, attachments: state.attachments, headers };
+}
+
+/**
+ * The attachment at `index` of one raw message, with its bytes.
+ *
+ * This is the POP3 path: the protocol has no way to ask for one MIME part, so the
+ * caller fetches the message (capped) and this function takes out the part the
+ * user clicked. The index is the position in the list the panel showed, which
+ * came from the same walk.
+ */
+function selectAttachment(raw, index, { maxBytes = 0 } = {}) {
+  const parsed = parseMessage(raw, { withData: true });
+  const file = parsed.attachments[Number(index)];
+  if (!file) {
+    throw Object.assign(new Error("this message has no such attachment"), { code: "ATTACHMENT_NOT_FOUND" });
+  }
+  if (maxBytes > 0 && file.data.length > maxBytes) {
+    throw Object.assign(new Error("this attachment is larger than one save may write"), {
+      code: "ATTACHMENT_TOO_LARGE",
+    });
+  }
+  return file;
 }
 
 module.exports = {
   MAX_DEPTH,
   MAX_PARTS,
+  REPLY_HEADERS,
   decodeQuotedPrintable,
   decodeTransfer,
   parseMessage,
   parseStructured,
+  selectAttachment,
   splitEntity,
   splitMultipart,
 };

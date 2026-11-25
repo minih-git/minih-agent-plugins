@@ -288,6 +288,15 @@ function readFetchItems(list) {
     size: null,
     /** True when the server sent a partial section (`BODY[]<0>`). */
     partial: false,
+    /**
+     * A numbered section (`BODY[2]`): which part came back, and its bytes.
+     *
+     * This is the one-part download: the server echoes the section number it was
+     * asked for, so the caller matches on `section` instead of assuming the reply
+     * holds whatever it requested.
+     */
+    section: null,
+    data: null,
   };
   for (let i = 0; i < list.length; i += 1) {
     const key = list[i];
@@ -328,10 +337,10 @@ function readFetchItems(list) {
       continue;
     }
     // The server echoes the section without the `.PEEK` that asked for it, so
-    // the check is on the prefix, not on an exact name. Three sections matter:
-    // an empty one is the whole message, `HEADER…` is the header block, and
-    // `TEXT` is the body of the message — which is the summary fragment when the
-    // request capped it.
+    // the check is on the prefix, not on an exact name. Four sections matter: an
+    // empty one is the whole message, `HEADER…` is the header block, `TEXT` is the
+    // body — the summary fragment when the request capped it — and a number is one
+    // MIME part, which is what a one-attachment download asks for.
     if (upper.startsWith("BODY[")) {
       const section = /^BODY\[([^\]]*)\]/i.exec(key);
       const name = section ? section[1].trim().toUpperCase() : "";
@@ -342,9 +351,13 @@ function readFetchItems(list) {
         item.text = Buffer.isBuffer(value) ? value : null;
       } else if (name.startsWith("HEADER")) {
         item.headers = Buffer.isBuffer(value) ? value : null;
+      } else if (/^\d+(\.\d+)*$/.test(name) || name === "MIME") {
+        // A numbered section: one MIME part of the message, which is what a
+        // one-attachment download asks for. The number is kept so the caller can
+        // check it got the part it named, not whichever the server preferred.
+        item.section = name;
+        item.data = Buffer.isBuffer(value) ? value : null;
       }
-      // A numbered section (`BODY[1]`) belongs to the full body fetch, which
-      // reads `BODY[]`: nothing here asks for one.
       i += 1;
       continue;
     }

@@ -54,6 +54,29 @@ const ARCHIVE_NAMES = [
 ];
 
 /**
+ * Where a copy of a sent message goes.
+ *
+ * `\Sent` is the RFC 6154 flag; the names are what the providers this plugin
+ * ships actually call the mailbox, in the order a client should prefer them
+ * (`Sent` before `Sent Messages`, because the list is a priority list). Gmail
+ * needs no entry: it files what it sends, so its accounts skip the copy entirely
+ * (see `lib/runtime.js`).
+ */
+const SENT_NAMES = [
+  "sent",
+  "sent items",
+  "sent messages",
+  "sent mail",
+  "sent-mail",
+  "sentmail",
+  "已发送",
+  "已发送邮件",
+  "寄件備份",
+  "寄件备份",
+  "送信済み",
+];
+
+/**
  * The flags that make a mailbox the wrong destination whatever its name.
  *
  * `\Junk` is the important one: 垃圾箱 and 垃圾桶 in the Chinese providers are the
@@ -115,19 +138,25 @@ function pick(entries, flag, names) {
 }
 
 /**
- * The two destinations this account offers.
+ * The destinations this account offers.
  *
- * @returns `{ trash: string|null, archive: string|null }` — the mailbox names as
- *   the server spells them, or `null` when the account has nothing to offer.
+ * @returns `{ trash, archive, sent, specialUse }` — the mailbox names as the
+ *   server spells them, each `null` when the account has nothing to offer.
  */
 function resolveFolders(entries) {
   const list = Array.isArray(entries) ? entries.filter((entry) => entry && typeof entry === "object") : [];
   const trash = pick(list, "\\Trash", TRASH_NAMES);
   const archive = pick(list, "\\Archive", ARCHIVE_NAMES);
+  const sent = pick(list, "\\Sent", SENT_NAMES);
   return {
     trash: trash ? trash.name : null,
     archive: archive ? archive.name : null,
-    specialUse: list.some((entry) => hasFlag(entry, "\\Trash") || hasFlag(entry, "\\Archive")),
+    // Where a copy of a sent message is filed; `null` means this mailbox has no
+    // such folder and the copy is skipped rather than guessed into another one.
+    sent: sent ? sent.name : null,
+    specialUse: list.some(
+      (entry) => hasFlag(entry, "\\Trash") || hasFlag(entry, "\\Archive") || hasFlag(entry, "\\Sent"),
+    ),
   };
 }
 
@@ -166,6 +195,7 @@ function createFolderCache() {
 
 module.exports = {
   ARCHIVE_NAMES,
+  SENT_NAMES,
   TRASH_NAMES,
   createFolderCache,
   leafName,
