@@ -17,11 +17,13 @@ In the notification centre you get:
 - **digest** — everything else, rolled up into one entry per account every N
   minutes. The same entry is updated instead of piling up.
 
-In the panel you get every account's recent mail in one list, and one message at a
-time in a reading pane. A message body is downloaded only when you open that
-message, and opening it marks it read — one `STORE` of `\Seen` after the body has
-actually arrived, never before. The star changes only when you click it, and
-"mark unread" is always there to undo the read.
+In the panel you get every account's recent mail in one list — grouped by day,
+with a one-line preview of each message, a search box and four filters — and one
+message at a time in a reading pane. A message body is downloaded only when you
+open that message, and opening it marks it read — one `STORE` of `\Seen` after the
+body has actually arrived, never before. The star changes only when you click it,
+"mark unread" is always there to undo the read, and delete and archive act on the
+one message you picked (see below for exactly what they send).
 
 ## Set it up
 
@@ -113,30 +115,44 @@ A few properties are deliberate:
 
 ## The Inbox panel
 
-- **Mailboxes** — one card per account: the address, a small state dot (the word
-  and, for a failure, the reason in one muted line and in the tooltip), and the
-  number of accounts in the column head. **Click a card to filter the list**; the
-  **All** entry above the list clears the filter. There is no provider picker, no
-  "open web mailbox" and no remove button here: accounts are added, edited and
-  removed in **Settings → Plugins → Inbox mail**, and the card shows what that
-  form produced (`Custom server mail.example.com:993 · IMAP · SSL`, for instance).
-  The panel states how many accounts you have and never a ceiling: the slot
-  declares no limit (the app keeps its own safety bound of 100).
-- **One list** — every account's mail, newest first, grouped into **Important**
-  (the same rule as the alerts) and **Other**, with a filter per mailbox. Each row
-  shows sender, subject, time, account, unread and star state where the protocol
-  reports them.
-- **One message** — the reading pane. An HTML message is shown as HTML, on white
-  paper, with its own stylesheet; "show plain text" switches to the text
-  alternative and back. A text-only message is shown as prose — proportional font,
-  wrapped, links listed as buttons — not as a monospace block. Also the attachment
-  names and sizes (listed only, never downloaded), and a list of the message's
-  links, which open in your real browser rather than inside the panel.
-- **Actions** — opening a message marks it read (one IMAP `STORE` of `\Seen` after
-  the body arrived, and nothing at all when the message was already read), "mark
-  unread" puts it back, and the star is one more click. A POP3 account has no flags
-  on the server, so read is a mark this computer keeps (at most 500 of them) and a
-  star is not offered; the reading pane says so in one line.
+- **Mailboxes (left)** — a fixed **All inboxes** row, then one row per account: a
+  state dot, the address, and a badge with its unread count. A row filters the
+  list; its **⋯** menu offers **Only this mailbox**, **Check this mailbox now**,
+  **Open web mailbox** (only for a provider this plugin knows) and **Remove this
+  mailbox**, which asks for confirmation in the panel first. A failed mailbox
+  explains itself in one folded line, with the account's stored error in the
+  tooltip. Below 1100 px the column collapses to a rail of dots and the panel's
+  own button hides it entirely.
+- **List (middle)** — a search box (press <kbd>/</kbd>, <kbd>Esc</kbd> clears it)
+  over sender, subject, preview and account; four filters — **All**, **Unread**,
+  **Starred**, **Important**; and mail grouped under **Today / Yesterday / This
+  week / Earlier**. Each row shows a colored initials avatar (one colour per
+  sender address, in both themes), the sender, a short time (a clock time today, a
+  weekday this week, a date this year, a full date before that), the subject, one
+  line of the message's own text, and small tags for a star and an attachment.
+  Hovering a row — or reaching it from the keyboard — reveals its quick actions:
+  read/unread, star, delete. With one mailbox selected, **Load older mail** at the
+  bottom walks further back (50 at a time, up to the 200-message list limit).
+- **Reading pane (right)** — the subject, the sender's avatar, name and address,
+  the full timestamp, the account, and a folded **to me / to me and N more** line
+  that expands into the To and Cc lists. The toolbar is icon buttons with tooltips
+  and `aria-label`s: read/unread, star, delete, archive (only when the mailbox has
+  an archive folder), HTML/text, and "show remote images". Attachments are cards
+  with a type, a name and a size — listed, not downloaded. While a body is on its
+  way the pane shows a skeleton rather than a line of text.
+- **Keyboard** — <kbd>j</kbd>/<kbd>k</kbd> or the arrow keys move, <kbd>Enter</kbd>
+  opens, <kbd>u</kbd> toggles read, <kbd>s</kbd> toggles the star, <kbd>#</kbd> or
+  <kbd>Delete</kbd> deletes, <kbd>e</kbd> archives, <kbd>/</kbd> focuses the
+  search, <kbd>Esc</kbd> closes the reading pane (or clears the search). None of
+  them fire while you are typing in the search box, and a modified key belongs to
+  the app, not to this panel.
+- **Looking at mail** — opening a message marks it read (one IMAP `STORE` of
+  `\Seen` after the body arrived, and nothing at all when it was already read),
+  "mark unread" puts it back, and the star is one more click. A POP3 account has no
+  flags on the server, so read is a mark this computer keeps (at most 500 of them),
+  a star is not offered, and the reading pane says so in one line.
+- **Deleting and archiving** — see [What it changes](#what-it-changes) below. Both
+  act on one message, after your click, and nothing here can empty a mailbox.
 
 HTML bodies are sanitized with a vendored copy of
 [DOMPurify](https://github.com/cure53/DOMPurify) (3.2.7, Apache-2.0 OR MPL-2.0 —
@@ -189,8 +205,9 @@ account is polled instead of connected:
   because it changes as soon as anything is deleted.
 - Opening a message is another short session: `UIDL`, then `RETR` for that one
   message, keeping at most 1 MiB and draining the rest.
-- It **never sends `DELE`** — the command is not implemented at all — so nothing
-  is deleted, and `QUIT` commits nothing.
+- It sends **`DELE` only when you delete that message**, and then `QUIT` to
+  commit it — POP3 has no trash, so the panel asks before the pair is sent. A poll
+  never sends `DELE`, so a `QUIT` from watching commits nothing.
 - Read state is a mark this computer keeps, not a flag the server stores: opening a
   POP3 message adds it to that local list (at most 500), "mark unread" removes it,
   and nothing is written back to the mailbox.
@@ -199,13 +216,15 @@ account is polled instead of connected:
 
 ## What it reads, and what it keeps
 
-- While watching, an IMAP account selects the inbox and for new mail reads only
-  the envelope and a few headers — `BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE
-  MESSAGE-ID IMPORTANCE X-PRIORITY X-MSMail-Priority)]`. `PEEK` is the point: the
-  other form would mark every message the plugin looks at as read; the one `STORE`
-  of `\Seen` happens only after a body you opened has arrived. A POP3 account asks
-  for the header block only (`TOP n 0`, or a capped `RETR` when the server has no
-  `TOP`).
+- While watching, an IMAP account selects the inbox and for new mail reads the
+  envelope, a few headers — `BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE
+  MESSAGE-ID CONTENT-TYPE CONTENT-TRANSFER-ENCODING IMPORTANCE X-PRIORITY
+  X-MSMail-Priority)]` — its `BODYSTRUCTURE` (only to know whether it has an
+  attachment) and the first 4 KiB of the text, all in one `FETCH`. `PEEK` is the
+  point: the other form would mark every message the plugin looks at as read; the
+  one `STORE` of `\Seen` happens only after a body you opened has arrived. A POP3
+  account asks for the headers plus twelve body lines (`TOP n 12`, or a capped
+  `RETR` when the server has no `TOP`).
 - When you open a message it fetches that message only, capped at 1 MiB (IMAP:
   `BODY.PEEK[]<0.1048576>`, POP3: `RETR` with the same cap): truncated with a
   notice beyond that, held in memory for the panel and never written to disk.
@@ -214,13 +233,16 @@ account is polled instead of connected:
   the highest UID already handled (IMAP) or the UIDLs already handled (POP3, at
   most 500), the Message-IDs it has already reported (at most 200), the digest
   queue, the last error, and the envelope of the newest 200 messages (sender,
-  subject, time, flags). No message text is stored.
+  subject, up to 20 To and 20 Cc addresses, time, flags, whether it has an
+  attachment, and **at most 140 characters of plain-text summary** taken from
+  those first bytes). The message body itself is still never written to disk, and
+  the file is replaced atomically so a crash cannot leave half a JSON document
+  behind.
 - Opening a message marks that one message read, once, and after its body arrived:
   a failed fetch leaves it unread. "Mark unread" and the star are your clicks, each
-  sending exactly one `STORE`. It does not send mail, write drafts, delete, move,
-  copy or archive
-  messages. Its only network destination is the server each account is set to;
-  links you open go through the app to your browser.
+  sending exactly one `STORE`. It does not send mail and writes no drafts. Its only
+  network destination is the server each account is set to; links you open go
+  through the app to your browser.
 - Your password never reaches the plugin. The app holds each credential instance
   and performs the login; the plugin gets an already-authenticated connection and
   only learns which accounts exist, their addresses, whether they are filled, and
@@ -263,19 +285,38 @@ provider you had chosen, and then deletes the old file. Re-running is safe. If t
 accounts already exist there is no honest way to tell which one the old cursor
 belonged to, so the old file is left alone and each account baselines itself.
 
+## What it changes
+
+Nothing, until you ask for it. Delete and archive are the only operations that
+move or remove mail, they act on the one message you clicked, and this plugin never
+sends a mailbox-wide `EXPUNGE` — the command that would also remove messages other
+clients flagged for deletion.
+
+| Action | IMAP | POP3 |
+| --- | --- | --- |
+| Delete | `LIST` finds the trash (special-use `\Trash`, else a name such as `Trash`, `Deleted Messages`, `已删除`), then one `UID MOVE <uid> Trash`. Without `MOVE`: `UID COPY <uid> Trash`, `UID STORE <uid> +FLAGS (\Deleted)`, `UID EXPUNGE <uid>`. | `DELE <n>` for that message, then `QUIT` to commit it. |
+| Archive | The same three commands into a special-use `\Archive` mailbox (or Gmail's All Mail), and only when `LIST` found one. | Not offered: POP3 has no folders. |
+
+A server with neither `MOVE` nor `UIDPLUS`, or a mailbox with no trash, is refused
+with a message saying so and the mail stays where it is. On IMAP the message ends
+up in the trash and the panel says "moved to the trash"; on POP3 the delete is
+final, which is why the panel asks first and then says it cannot be undone.
+Archiving is only offered for an account whose mailbox list actually has an
+archive.
+
 ## What is not here yet
 
-- Folders, search, writing or replying, attachments, delete/move/archive.
+- Writing, replying and forwarding (they need the host to send mail), and
+  downloading or saving an attachment (it needs the host to write a binary file).
 - AI triage of what the deterministic rule missed.
 - Anything about an account's own settings inside this panel: the host owns that
   form, and from 1.10.0 it offers an edit entry per account (the connection code
   fills in the values, and the authorization code has to be entered again).
 - Outlook/Hotmail, which needs XOAUTH2 in the host.
 
-Published in this repository's catalog as `minih.inbox-mail` 0.4.0. It needs
-Minih-Agent-Desktop 1.11.0 or newer — the first release with a per-instance mail
-endpoint (`userEndpoint` on a credential slot), the POP3 login behind
-`net.tcp.connect`, the `mail` sidebar icon, and a per-account proxy (`userProxy`).
-
-`minih.inbox-mail` 0.4.0 is not in the catalog yet: it needs Desktop 1.11.0, and it
-will be published here once that release ships.
+`minih.inbox-mail` 0.4.0 needs Minih-Agent-Desktop 1.11.0 or newer — the first
+release with a per-instance mail endpoint (`userEndpoint` on a credential slot),
+the POP3 login behind `net.tcp.connect`, the `mail` sidebar icon, and a per-account
+proxy (`userProxy`). The catalog in this repository still points at 0.3.0:
+publishing 0.4.0 is a separate step that updates `catalog.json` and the release
+history.

@@ -270,6 +270,16 @@ test("the safety notes describe the panel honestly, in both languages", () => {
   // The frame: sanitized, scriptless, no remote images by default.
   assert.match(en, /scriptless, origin-less sandboxed frame/);
   assert.match(en, /remote images stay blocked/i);
+  // The one-line preview and the recipients it now keeps, and their bounds.
+  assert.match(en, /at most 140 characters of plain-text summary/);
+  assert.match(en, /few headers \(sender, subject, to, cc, date, Message-ID/);
+  assert.match(en, /up to 20 to and 20 cc addresses/);
+  // Delete and archive: what they send, and what they refuse to send.
+  assert.match(en, /UID MOVE <uid> <trash>/);
+  assert.match(en, /UID COPY <uid> <trash>/);
+  assert.match(en, /UID EXPUNGE <uid>/);
+  assert.match(en, /never sends a mailbox-wide EXPUNGE|instead of falling back to a mailbox-wide EXPUNGE/);
+  assert.match(en, /Archive works the same way/);
   // Still not a mail client.
   assert.match(en, /does not send mail/);
   assert.match(en, /No model is called/);
@@ -285,7 +295,8 @@ test("the safety notes describe the panel honestly, in both languages", () => {
   assert.match(en, /once every three minutes the plugin opens one short session per account/);
   assert.match(en, /never more than four sessions at a time/);
   assert.match(en, /never polled sooner than the server's LOGIN-DELAY/);
-  assert.match(en, /never sends DELE/);
+  assert.match(en, /DELE <n>/);
+  assert.match(en, /QUIT/);
   // The proxy is the account's own setting, and its credentials never reach the
   // plugin.
   assert.match(en, /HTTP or SOCKS5 proxy configured on that account/);
@@ -295,7 +306,11 @@ test("the safety notes describe the panel honestly, in both languages", () => {
   assert.match(zh, /只会把该实例的密码注入同一个实例里记录的地址/);
   assert.match(zh, /同时最多 4 条/);
   assert.match(zh, /不会早于服务器要求的 LOGIN-DELAY/);
-  assert.match(zh, /从不向 POP3 服务器发送 DELE/);
+  assert.match(zh, /最多 140 个字符的纯文本摘要/);
+  assert.match(zh, /UID MOVE/);
+  assert.match(zh, /UID EXPUNGE/);
+  assert.match(zh, /DELE <n>/);
+  assert.match(zh, /本插件从不发送/);
   assert.match(zh, /本机 Clash/);
   assert.match(zh, /插件只知道代理类型、地址和端口/);
   assert.match(zh, /POP3 服务器没有任何标记/);

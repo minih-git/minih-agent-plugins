@@ -2,6 +2,58 @@
 
 ## 0.4.0
 
+- **The Inbox panel has been rebuilt along the lines of a real mail client.** Three
+  columns stay, but each one now earns its space. The mailbox column is a list of
+  rows — status dot, address, unread count — with the fixed **All inboxes** row on
+  top and a **⋯** menu per account (**Only this mailbox**, **Check this mailbox
+  now**, **Open web mailbox**, **Remove this mailbox**, confirmed in the panel
+  first). The list gained a search box (over sender, subject, preview and account,
+  focused with `/`), four filters (All / Unread / Starred / Important) and
+  **Today / Yesterday / This week / Earlier** headings; the old split into
+  "Important" and "Other" is now the Important filter. Rows show a colored initials
+  avatar, a short time that lengthens with age, the subject, a one-line preview,
+  and star/attachment tags, and reveal read/unread, star and delete on hover or
+  keyboard focus. The reading pane gained a large subject, the sender's avatar and
+  address, a folded "to me and N more" recipient line, the full timestamp, an icon
+  toolbar with tooltips and `aria-label`s, attachment cards, and a skeleton while
+  the body loads.
+- **Keyboard shortcuts, in the panel only:** `j`/`k` or the arrow keys move,
+  `Enter` opens, `u` toggles read, `s` toggles the star, `#` or `Delete` deletes,
+  `e` archives, `/` searches, `Esc` closes the reading pane or clears the search.
+  None of them fire while you are typing in the search box.
+- **Responsive:** three columns at 1100 px and above, a rail of status dots between
+  700 and 1100, and a single pane below 700 with "back" as the way out of a
+  message. The sidebar toggle hides the mailbox column at any width.
+- **A one-line preview of every message, and it is stored.** A new message brings
+  `BODY.PEEK[TEXT]<0.4096>` (IMAP) or `TOP n 12` (POP3) along with its envelope,
+  which `lib/summary.js` turns into at most 140 characters of plain text: transfer
+  encodings and charsets decoded, markup stripped, multipart read part by part, a
+  base64 part skipped rather than previewed as noise. The envelope in the state
+  file now also holds the message's To and Cc (up to 20 addresses each, from
+  `ENVELOPE`) and whether it has an attachment (from `BODYSTRUCTURE`); nothing is
+  downloaded to find that out.
+- **Loading older mail.** With one mailbox selected, the list offers **Load older
+  mail**: IMAP searches below the oldest UID it holds (`UID SEARCH 1:<n>`) and fetches
+  the 50 nearest, POP3 walks back through the UIDLs in maildrop order. The pages are bounded by the same 200-message list, nothing is
+  announced, and the UID cursor does not move.
+- **Delete and archive.** New panel channels `inbox.delete` and `inbox.archive`,
+  both acting on one message after a click. IMAP finds the trash with `LIST` — the
+  special-use `\Trash` flag first, then names such as `Trash`, `Deleted Messages`
+  or `已删除` — and sends one `UID MOVE`; a server without `MOVE` gets `UID COPY`,
+  `UID STORE +FLAGS (\Deleted)` and `UID EXPUNGE <uid>` for that UID. A server with
+  neither, or a mailbox with no trash, is refused with a clear error code; this
+  plugin never sends a mailbox-wide `EXPUNGE`. Archive is the same into a
+  special-use `\Archive` mailbox (or Gmail's All Mail) and is offered only when
+  `LIST` found one, reported per account as `canArchive`/`canDelete`. POP3 delete
+  is `DELE <n>` followed by `QUIT`, so it is final: the panel asks first and then
+  says it cannot be undone. The folder probe is cached per account and re-run when
+  the account's connection changes.
+- **The stored file is written atomically** (temporary file + rename), so a crash
+  cannot leave half a JSON document — and a UID cursor — behind.
+- **Honest docs.** The manifest's safety notes, its description, the README and the
+  manifest test now say what is really stored (the ≤140-character preview, the
+  recipients, the attachment flag) and exactly which commands delete and archive
+  send, instead of promising that no mail is ever moved.
 - **A proxy per mailbox.** The credential slot declares `userProxy: { types:
   ["http", "socks5"] }` as a top-level key — not inside `userEndpoint`, because a
   1.10.0 host refuses an unknown key there and ignores an unknown top-level one,
