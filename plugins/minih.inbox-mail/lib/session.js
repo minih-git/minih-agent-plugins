@@ -62,6 +62,14 @@ const HEADER_FIELDS =
 const PREVIEW_BYTES = 4096;
 /** How many older envelopes one "load older" round asks for. */
 const OLDER_LIMIT = 50;
+/**
+ * How much of an `APPEND` literal goes into one socket write.
+ *
+ * The host caps a single write at 1 MiB; a message can be 25 MiB, so the literal
+ * is sent in 64 KiB pieces. IMAP only requires that exactly the declared bytes
+ * arrive, not that they arrive in one write.
+ */
+const APPEND_CHUNK = 64 * 1024;
 
 function taggedError(status, text) {
   const error = new Error(`IMAP ${status || "failed"}: ${text || "no detail"}`);
@@ -152,7 +160,12 @@ function createSession(transport, options = {}) {
         const accept = inflight.onContinuation;
         inflight.onContinuation = null;
         try {
-          accept();
+          const result = accept();
+          // A literal is written in pieces, so the writer is asynchronous; a failed
+          // write has to end the session rather than become an unhandled rejection.
+          if (result && typeof result.then === "function") {
+            result.catch((error) => fail(Object.assign(error ?? new Error("send failed"), { code: error?.code ?? "IMAP_SEND_FAILED" })));
+          }
         } catch (error) {
           fail(Object.assign(error, { code: error?.code ?? "IMAP_SEND_FAILED" }));
         }
@@ -565,7 +578,16 @@ function createSession(transport, options = {}) {
       const flagList = flags.length ? ` (${flags.join(" ")})` : "";
       return command(`APPEND ${quote(target)}${flagList} {${bytes.length}}`, {
         timeoutMs: options2.timeoutMs ?? defaultTimeoutMs,
-        onContinuation: () => transport.send(Buffer.concat([bytes, Buffer.from("\r\n")])),
+        // The literal is written in bounded pieces: the host caps one socket write
+        // at 1 MiB, so a 25 MiB message would otherwise be refused by its own
+        // buffer rather than by the mail server. IMAP does not care how many
+        // writes make up the literal, only that exactly the declared bytes arrive.
+        onContinuation: async () => {
+          for (let offset = 0; offset < bytes.length; offset += APPEND_CHUNK) {
+            await transport.send(bytes.subarray(offset, Math.min(offset + APPEND_CHUNK, bytes.length)));
+          }
+          await transport.send("\r\n");
+        },
       });
     },
 

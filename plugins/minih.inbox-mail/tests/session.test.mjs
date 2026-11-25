@@ -119,3 +119,44 @@ test("a mailbox name in modified UTF-7 is decoded, and the raw name is kept for 
   await session.close();
 });
 
+
+test("an APPEND waits for the continuation and writes the literal in bounded pieces", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const session = connect(server, { timeoutMs: 400 });
+  // 200 KiB is far more than one socket write should carry: the host caps a write
+  // at 1 MiB, and a message may be 25 MiB, so the literal has to be split.
+  const mime = Buffer.alloc(200 * 1024, 0x41);
+  await session.appendMessage("Sent", mime, { timeoutMs: 400 });
+  const line = server.sentLines.find((entry) => entry.startsWith("A1 APPEND"));
+  assert.equal(line, `A1 APPEND "Sent" (\\Seen) {${mime.length}}`);
+  // The fake reassembles what arrived between the continuation and the command's
+  // own CRLF, so this equality proves every byte made it, in any number of writes.
+  assert.equal(server.appends.length, 1);
+  assert.equal(server.appends[0].mailbox, "Sent");
+  assert.deepEqual(server.appends[0].flags, ["\\Seen"]);
+  assert.equal(server.appends[0].message.equals(mime), true);
+  const literals = server.sent.filter((entry) => entry.length > 0 && /^A\d+ [A-Z]/.test(entry) === false);
+  assert.ok(literals.length > 1, "the literal arrived in more than one write");
+  for (const piece of literals) assert.ok(piece.length <= 64 * 1024 + 2, "no write is unbounded");
+  await session.close();
+});
+
+test("a structure fetch and a one-part fetch ask for exactly one message's part", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  server.add(message({ uid: 1, subject: "Invoice", attachment: true }));
+  const session = connect(server, { timeoutMs: 400 });
+  const structure = await session.fetchStructure(1);
+  assert.ok(Array.isArray(structure), "the structure is the server's own nested list");
+  const part = await session.fetchPart(1, "2");
+  assert.equal(part.section, "2");
+  assert.equal(
+    Buffer.from(part.data).toString("latin1"),
+    Buffer.from("%PDF-1.4 fake attachment").toString("base64"),
+  );
+  // Both are peeks: a section fetch without `.PEEK` would mark the message read.
+  assert.equal(
+    server.sentLines.some((line) => /BODY\[/.test(line) && !/BODY\.PEEK\[/.test(line)),
+    false,
+  );
+  await session.close();
+});
