@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.5.1
+
+- **A link in a message is a link.** Pressing one opens the address in your browser,
+  and a `mailto:` opens this panel's composer with the recipient, subject and body the
+  link named — nothing is sent without a press of Send. The separate "Links (opened in
+  your browser)" list under the body is gone, and so is its wording: a link now works
+  where the message wrote it. A plain-text message keeps its link buttons in place.
+- **Same origin, still no script.** The body frame is
+  `<iframe sandbox="allow-same-origin">`. The origin is what lets the panel read that
+  document and answer a click inside it; `allow-scripts` is never set, so no
+  `<script>`, no `on…=` handler and no `javascript:` URL in a message can run, and the
+  pairing that would let a message script the panel is never produced. Sanitizing
+  (DOMPurify), the frame's own `default-src 'none'` policy and the panel's
+  `frame-src 'self'` stay: nothing remote loads by default, and a click cannot
+  navigate the frame.
+- **Only an address this panel acts on survives sanitizing.** `http`, `https` and
+  `mailto` keep their `href`; `javascript:`, `data:`, `file:`, protocol-relative and
+  relative addresses lose it. `target` is removed and `rel="noreferrer noopener"` is
+  added, so a message never chooses where — or in what — its link opens.
+- **The status line a browser has.** Hovering a link shows the address at the bottom
+  of the reading pane. When the link's own words name a different site than the one
+  it opens (`https://your-bank.com/…` pointing at another host), the line says so
+  instead of quietly showing a lookalike.
+- **The body is as tall as the mail.** The frame's height follows its document —
+  `scrollHeight`, re-measured by `ResizeObserver` and when an image loads — so the
+  reading pane scrolls as one page: subject, actions, body, attachments. The
+  attachment area no longer scrolls on its own and is no longer capped at 38vh, and a
+  mail wider than the pane scrolls sideways inside the frame instead of widening the
+  panel.
+- Tests: 290 → 294. `tests/view.test.mjs` now asserts the sandbox string (and that the
+  forbidden tokens never reach a sandbox attribute), the keep-or-drop rule for `href`
+  through `frameHref`, the sanitizer's `target`/`rel` handling, `mailto:` parsing
+  (including that `attach` and `in-reply-to` are ignored), the lookalike-address check,
+  and that the panel renders no link list at all.
+
 ## 0.5.0
 
 - **The panel writes mail, not only reads it.** A **Write** button in the header

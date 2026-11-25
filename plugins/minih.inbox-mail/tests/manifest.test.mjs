@@ -31,10 +31,10 @@ const HOSTNAME = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/;
 const CONTRIB_ID = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 const localized = (value) => Boolean(value && typeof value === "object" && value.en && value["zh-CN"]);
 
-test("the plugin is published as minih.inbox-mail 0.5.0, versioned with its package", () => {
+test("the plugin is published as minih.inbox-mail 0.5.1, versioned with its package", () => {
   assert.equal(manifest.schemaVersion, 1);
   assert.equal(manifest.id, "minih.inbox-mail");
-  assert.equal(manifest.version, "0.5.0");
+  assert.equal(manifest.version, "0.5.1");
   assert.equal(manifest.version, pkg.version);
   assert.equal(manifest.main, "main.js");
   assert.ok(exists(manifest.main), "the entry point must be in the tree");
@@ -296,8 +296,12 @@ test("the safety notes describe the panel honestly, in both languages", () => {
   assert.match(en, /Opening a message marks that one message read/);
   assert.match(en, /IMAP STORE/);
   assert.match(en, /read there is a mark kept on this computer/);
-  // The frame: sanitized, scriptless, no remote images by default.
-  assert.match(en, /scriptless, origin-less sandboxed frame/);
+  // The frame: sanitized, no script, no remote images by default, and a link is
+  // answered by the panel instead of navigating the frame.
+  assert.match(en, /runs no script and, by default, loads nothing remote/);
+  assert.match(en, /allow-scripts is never set/);
+  assert.match(en, /same-origin only so that the panel can answer those clicks/);
+  assert.match(en, /a mailto: link opens the panel's own composer/);
   assert.match(en, /remote images stay blocked/i);
   // The one-line preview and the recipients it now keeps, and their bounds.
   assert.match(en, /at most 140 characters of plain-text summary/);
@@ -327,7 +331,9 @@ test("the safety notes describe the panel honestly, in both languages", () => {
   assert.match(zh, /不设账号上限/);
   assert.match(zh, /只有你在「收件箱」面板里点开/);
   assert.match(zh, /打开一封邮件会把这封标为已读/);
-  assert.match(zh, /无脚本/);
+  assert.match(zh, /不执行脚本/);
+  assert.match(zh, /从不放开脚本/);
+  assert.match(zh, /mailto 链接则打开面板自己的写信界面/);
   assert.match(zh, /远程图片默认拦截/);
   // The other way in: a server the user typed, and the protocol with no flags.
   assert.match(en, /a server you typed into the account form yourself/);

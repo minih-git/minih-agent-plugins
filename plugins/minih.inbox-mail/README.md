@@ -228,10 +228,27 @@ A few properties are deliberate:
 
 HTML bodies are sanitized with a vendored copy of
 [DOMPurify](https://github.com/cure53/DOMPurify) (3.2.7, Apache-2.0 OR MPL-2.0 —
-see `view/vendor/`) and rendered in an `<iframe sandbox="">`: no scripts, no
-same-origin access, and its own `default-src 'none'` policy. Remote images stay
-blocked until you press "show remote images" for that one message, so a tracking
-pixel never learns that you opened the mail. The frame is white paper whatever the
+see `view/vendor/`) and rendered in an `<iframe sandbox="allow-same-origin">`.
+Same-origin is what lets the panel read that document and answer a click inside it;
+`allow-scripts` is never set, so nothing in a message runs — and the frame also
+carries its own `default-src 'none'` policy, so nothing remote loads either. Remote
+images stay blocked until you press "show remote images" for that one message, so a
+tracking pixel never learns that you opened the mail.
+
+**A link works where it is written.** Pressing one inside the body opens the address
+in your browser, through the host (`inbox.openExternal`); a `mailto:` opens this
+panel's composer with the recipient, subject and body the link named. Only an address
+this panel acts on keeps its `href` — `http`, `https`, `mailto` — and every other one
+is removed before the frame is built, with `target` dropped and
+`rel="noreferrer noopener"` added. Hovering a link shows the real address in a status
+line at the bottom of the pane, and says so when the link's own words name a different
+site than the one it opens. There is no separate list of links under the body; a
+plain-text message keeps its links as buttons in the text.
+
+The body's frame is as tall as the message (`scrollHeight`, re-measured by a
+`ResizeObserver` and when an image loads), so the reading pane scrolls as one page —
+subject, actions, body, attachments — and a mail wider than the pane scrolls sideways
+inside the frame instead of pushing the panel. The frame is white paper whatever the
 app theme is, and the message keeps its own colors: a mail is designed for a white
 page, and re-tinting it is how a newsletter becomes unreadable. DOMPurify removes
 `<style>` blocks, so the message's stylesheet is taken out of the raw document,
