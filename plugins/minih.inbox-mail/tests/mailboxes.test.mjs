@@ -65,11 +65,31 @@ test("the shallowest match wins, so a folder called Trash inside another is not 
   assert.equal(folders.trash, "Trash");
 });
 
-test("an account with nothing to offer says so twice", () => {
-  const folders = mailboxes.resolveFolders(list(["INBOX"], ["Sent"]));
-  assert.deepEqual(folders, { trash: null, archive: null, specialUse: false });
-  assert.deepEqual(mailboxes.resolveFolders([]), { trash: null, archive: null, specialUse: false });
-  assert.deepEqual(mailboxes.resolveFolders(null), { trash: null, archive: null, specialUse: false });
+test("an account with nothing to offer names no destination at all", () => {
+  // A mailbox called `Sent` is not a trash, an archive or a copy target of itself:
+  // `sent` answers where a *copy* of an outgoing message goes, and a mailbox with
+  // none of the three leaves every destination null.
+  const folders = mailboxes.resolveFolders(list(["INBOX"], ["Projects"]));
+  assert.deepEqual(folders, { trash: null, archive: null, sent: null, specialUse: false });
+  assert.deepEqual(mailboxes.resolveFolders([]), { trash: null, archive: null, sent: null, specialUse: false });
+  assert.deepEqual(mailboxes.resolveFolders(null), { trash: null, archive: null, sent: null, specialUse: false });
+});
+
+test("the sent copy goes to the special-use Sent mailbox, then to its usual names", () => {
+  const declared = mailboxes.resolveFolders(list(["INBOX"], ["Sent", ["\\Sent"], ["Sent Items"]]));
+  assert.equal(declared.sent, "Sent");
+  assert.equal(declared.specialUse, true);
+  // A server that declares nothing falls back to the name table, in its order.
+  const byName = mailboxes.resolveFolders(list(["INBOX"], ["Sent Items"], ["Sent"]));
+  assert.equal(byName.sent, "Sent");
+  // The Chinese and Taiwanese spellings providers actually use.
+  assert.equal(mailboxes.resolveFolders(list(["INBOX"], ["已发送"])).sent, "已发送");
+  assert.equal(mailboxes.resolveFolders(list(["INBOX"], ["寄件備份"])).sent, "寄件備份");
+  // Gmail's All Mail is an archive, not a copy target: only `[Gmail]/Sent Mail` is.
+  assert.equal(mailboxes.resolveFolders(list(["INBOX"], ["[Gmail]/All Mail"])).sent, null);
+  assert.equal(mailboxes.resolveFolders(list(["INBOX"], ["[Gmail]/Sent Mail"])).sent, "[Gmail]/Sent Mail");
+  // A junk folder that also claims `\Sent` is still never a destination.
+  assert.equal(mailboxes.resolveFolders(list(["INBOX"], ["垃圾邮件", ["\\Sent", "\\Junk"]])).sent, null);
 });
 
 test("the cache is keyed by the connection it was learned from", () => {

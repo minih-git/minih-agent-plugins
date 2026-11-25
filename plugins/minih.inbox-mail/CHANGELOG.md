@@ -1,5 +1,72 @@
 # Changelog
 
+## 0.5.0
+
+- **The panel writes mail, not only reads it.** A **Write** button in the header
+  (and <kbd>c</kbd>) opens a composer: from-account picker, recipient chips for
+  To/Cc/Bcc, subject, a plain-text body, files chosen from your disk, a running
+  size, and **Send**/**Discard**. Only accounts that can actually send are offered;
+  the rest are listed with the reason (an account with its own server and no
+  outgoing server, a provider with no known submission endpoint, an app without the
+  grant). While a message is on its way the buttons are disabled; a refusal keeps
+  every field as it was and names the reason; discarding a half-written message
+  asks first. The composer is modal — the panel's own shortcuts do not fire behind
+  it — and <kbd>Esc</kbd> asks before throwing work away.
+- **Reply, reply to all and forward** (<kbd>r</kbd>, <kbd>a</kbd>, <kbd>f</kbd>).
+  The draft is built from the message the panel already opened, so answering costs
+  no network request: recipients from `Reply-To` (else the sender), reply-all adds
+  the original To/Cc minus your own address, the subject gains `Re:`/`Fwd:` only
+  when it does not already have one, `In-Reply-To`/`References` keep the thread,
+  and the original is quoted with `>` under an attribution line (an HTML-only mail
+  is converted to text first). A forward carries the original's header summary and
+  its attachments as a list you tick.
+- **One message builder, tested on its own.** New `lib/compose.js` produces RFC
+  5322 bytes: CRLF, `Date` with the sender's own offset, `Message-ID` in the
+  account's domain, RFC 2047 encoded words for a non-ASCII subject or display name
+  (folded, never splitting a character), quoted-printable text wrapped at 76
+  columns, base64 attachments in 76 columns, RFC 2231 file names (with
+  continuations, never split inside a `%XX` triplet), and **no `Bcc:` header ever**
+  — blind recipients travel in the SMTP envelope. Internal transfer encoding is
+  identical for ASCII and for Chinese mail: everything is 7-bit, so a server
+  without `8BITMIME` can still take it, and a Chinese subject never becomes
+  `MAIL_EIGHT_BIT_UNSUPPORTED`.
+- **Sending is the host's session.** New `pi.mail.send` call and panel channel
+  `inbox.send`. A preset account names its provider's submission endpoint, which is
+  now also declared in `manifest.net.tcp` (`smtp.qq.com:465`, `smtp.163.com:465`,
+  `smtp.126.com:465`, `smtp.gmail.com:465`, `smtp.exmail.qq.com:465`, and
+  `smtp.office365.com:587` for STARTTLS, each with its vendor page cited in the
+  README); an account that stores its own outgoing server names none, and one that
+  has an incoming server but no outgoing one is refused before anything is dialled.
+  Every refusal the host reports has its own sentence in both languages
+  (`MAIL_SEND_NOT_CONFIGURED`, `MAIL_FROM_MISMATCH`, `MAIL_BCC_HEADER`,
+  `MAIL_TOO_LARGE`, `MAIL_RATE_LIMITED`, `AUTH_FAILED`, `RECIPIENT_REJECTED`,
+  `MAIL_EIGHT_BIT_UNSUPPORTED`, `STARTTLS_UNAVAILABLE`, `TLS_CERTIFICATE`, …).
+- **A copy in Sent.** After a successful send an IMAP account gets one `APPEND` of
+  the same bytes into its Sent mailbox (`\Sent` first, then `Sent`, `Sent Items`,
+  `已发送`, `寄件備份`, …), with `\Seen`. Gmail files what it sends, so Gmail
+  accounts skip it. A failed copy is reported in one line and does not change the
+  answer that the message was sent; a POP3 account has no folders and files nothing.
+- **Attachments can be saved.** Every attachment card has **Save**, which fetches
+  exactly that part — `UID FETCH <uid> (UID BODYSTRUCTURE)` to find it, then
+  `UID FETCH <uid> BODY.PEEK[<part>]`, never a non-peek fetch — decodes it by its
+  `Content-Transfer-Encoding` and hands the bytes to the host's own save dialog
+  (`pi.fs.saveAs`, permission `fs.write`). POP3 fetches the one message it must and
+  takes the part out of it. Bounded at 50 MiB per file and refused above it rather
+  than truncated, one dialog at a time (`SAVE_AS_BUSY`), a cancelled dialog writes
+  nothing, and the bytes never enter the plugin's data folder. The reading pane
+  shows progress on the card and cannot be clicked twice.
+- **The manifest says what is true now.** Permissions add `mail.send` and
+  `fs.write`; the slot declares `userSend: { security: ["tls", "starttls"] }`; the
+  scope admits the submission hosts. The English and Chinese `safetyNotes`,
+  `description` and README no longer claim that the plugin never sends mail and
+  never downloads an attachment — they describe when it does, through which server,
+  and what it files afterwards.
+- Tests: 227 → 276. New suites for the message builder (`tests/compose.test.mjs`)
+  and part location (`tests/attachments.test.mjs`), plus fake-host coverage for the
+  endpoint rules, a refused send, the Sent copy (and Gmail skipping it), reply /
+  reply-all / forward drafts, a one-part download that sets no `\Seen`, a cancelled
+  and a busy save dialog, the size limit, and the POP3 path.
+
 ## 0.4.0
 
 - **The Inbox panel has been rebuilt along the lines of a real mail client.** Three

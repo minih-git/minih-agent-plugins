@@ -244,3 +244,94 @@ test("the sidebar never hands a null child to the DOM", () => {
   assert.match(appSource, /function unreadBadge\(count, table\) \{\n  if \(!count\) return null;/);
 });
 
+
+test("the composer is a module of its own, drawn into its own container", () => {
+  assert.ok(statSync(join(root, "view/compose.js"), { throwIfNoEntry: false })?.isFile());
+  // The page owns one element for it and nothing inside: the composer builds its
+  // own form, so the panel's markup stays one screen of structure.
+  assert.match(indexSource, /<div class="compose-backdrop is-hidden" id="compose" role="dialog"/);
+  assert.match(appSource, /import \{ createComposer \} from "\.\/compose\.js";/);
+  assert.match(appSource, /composer = createComposer\(nodes\.composeLayer,/);
+  // The topbar button is the fifth way in, and it is in the markup.
+  assert.match(indexSource, /id="btn-compose"/);
+});
+
+test("the composer takes every key while it is open, and Escape asks before discarding", () => {
+  // A modal surface: the panel's own shortcuts must not fire behind it, or a `c`
+  // typed into a subject line would open a second composer.
+  assert.match(appSource, /if \(composer\?\.isOpen\) \{/);
+  assert.match(appSource, /composer\.handleKey\(event\);/);
+  const composeSource = readFileSync(join(root, "view/compose.js"), "utf8");
+  assert.match(composeSource, /if \(event\.key !== "Escape"\) return false;/);
+  assert.match(composeSource, /requestClose\(\);\n\s+return true;/);
+  // The confirmation is a card inside the composer, not `window.confirm`.
+  assert.equal(composeSource.includes("window.confirm"), false);
+  assert.match(composeSource, /compose\.discardTitle/);
+});
+
+test("a failed send keeps the draft, and never shows the plugin's English text", () => {
+  const composeSource = readFileSync(join(root, "view/compose.js"), "utf8");
+  // The code is what the panel can translate; the raw message would be an English
+  // sentence from the plugin process, in a Chinese panel.
+  assert.match(composeSource, /state\.error = codeText\(locale\(\), error\?\.code, t\(\)\.sendFailed\);/);
+  // A rejection leaves the fields as they were: `close()` is only called on success.
+  assert.match(composeSource, /const result = await onSend\(\{/);
+  assert.match(composeSource, /close\(\);\n      onClosed\(result \?\? \{\}\);/);
+});
+
+test("a reply is sent from the mailbox that received the message, never from another one", () => {
+  const composeSource = readFileSync(join(root, "view/compose.js"), "utf8");
+  // Falling back to an account that can send would silently change who answers.
+  assert.match(composeSource, /A reply goes out from the account that received the message/);
+  assert.match(composeSource, /const wanted = source\.accountId/);
+  assert.match(composeSource, /state\.accountId = \(wanted \?\? fallback\)\?\.instanceId \?\? "";/);
+  // And an account that cannot send keeps the composer open with the reason, with
+  // Send disabled rather than hidden.
+  assert.match(composeSource, /sendButton\.disabled = state\.sending \|\| over \|\| !account\?\.canSend;/);
+});
+
+test("the panel's words cover sending and saving in both languages", () => {
+  for (const locale of ["en", "zh-CN"]) {
+    const table = strings(locale);
+    for (const key of ["reply", "replyAll", "forward", "newMessage", "send", "sending", "discard", "attach", "noRecipient", "originalAttachments"]) {
+      assert.equal(typeof table.compose[key], "string", `${locale}: compose.${key} is not a sentence`);
+      assert.ok(String(table.compose[key]).length > 0, `${locale}: compose.${key} is empty`);
+    }
+    for (const reason of ["send-disabled", "send-no-server", "send-no-preset"]) {
+      assert.ok(String(table.compose.blocked[reason]).length > 0, `${locale}: ${reason} has no sentence`);
+    }
+    for (const key of ["sent", "saveAttachment", "savingAttachment", "sendFailed", "saveFailed", "replyHint"]) {
+      assert.ok(String(table[key]).length > 0, `${locale}: ${key} is empty`);
+    }
+    // Every refusal the host can report has a sentence of its own.
+    for (const code of [
+      "MAIL_SEND_NOT_CONFIGURED",
+      "MAIL_FROM_MISMATCH",
+      "MAIL_BCC_HEADER",
+      "MAIL_TOO_LARGE",
+      "MAIL_RATE_LIMITED",
+      "MAIL_EIGHT_BIT_UNSUPPORTED",
+      "AUTH_FAILED",
+      "SENDER_REJECTED",
+      "RECIPIENT_REJECTED",
+      "MESSAGE_REJECTED",
+      "SMTP_FAILED",
+      "STARTTLS_UNAVAILABLE",
+      "TLS_CERTIFICATE",
+      "ATTACHMENT_NOT_FOUND",
+      "ATTACHMENT_TOO_LARGE",
+      "SAVE_AS_BUSY",
+      "SAVE_AS_FAILED",
+      "MESSAGE_NOT_OPEN",
+    ]) {
+      assert.equal(codeText(locale, code, undefined) !== codeText(locale, "FAILED", undefined), true, `${locale}: ${code} falls back to the generic sentence`);
+    }
+  }
+});
+
+test("nothing in the panel still claims attachments are never downloaded or mail never sent", () => {
+  const table = strings("en");
+  assert.equal(table.attachments, "Attachments");
+  assert.equal(strings("zh-CN").attachments, "附件");
+  assert.doesNotMatch(indexSource, /only listed|not downloaded/i);
+});

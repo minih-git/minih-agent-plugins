@@ -86,7 +86,7 @@ test("quoted-printable soft line breaks do not leave stray equals signs", () => 
   assert.equal(body.parseMessage(raw).text, "a very long line that waswrapped by the sender");
 });
 
-test("an attachment is listed by name and size, and never decoded as text", () => {
+test("an attachment is listed by name, size and the MIME part it occupies", () => {
   const raw = Buffer.from(
     [
       'Content-Type: multipart/mixed; boundary="M"',
@@ -108,7 +108,19 @@ test("an attachment is listed by name and size, and never decoded as text", () =
   );
   const parsed = body.parseMessage(raw);
   assert.equal(parsed.text.trim(), "see attached");
-  assert.deepEqual(parsed.attachments, [{ filename: "quarterly report.pdf", size: 3 }]);
+  // `part` is the IMAP section number the same attachment is downloaded from; it
+  // is what makes a save fetch one part instead of the whole message.
+  assert.deepEqual(parsed.attachments, [
+    {
+      filename: "quarterly report.pdf",
+      size: 3,
+      part: "2",
+      type: "application/pdf",
+      encoding: "base64",
+    },
+  ]);
+  // Listing never carries the bytes: a download asks for them separately.
+  assert.equal(parsed.attachments[0].data, undefined);
 });
 
 test("an RFC 2047 filename is decoded for display", () => {

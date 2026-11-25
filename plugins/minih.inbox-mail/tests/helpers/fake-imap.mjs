@@ -48,8 +48,26 @@ export function message({
   bodyText = "Hello from the test mailbox.",
   /** Whether the BODYSTRUCTURE should describe an attachment part. */
   attachment = false,
+  /** The octet count the structure reports for that part, when a test needs one. */
+  attachmentSize,
 } = {}) {
-  return { uid, from, to, cc, subject, rawSubject, rawName, messageId, date, extraHeaders, flags, raw, bodyText, attachment };
+  return {
+    uid,
+    from,
+    to,
+    cc,
+    subject,
+    rawSubject,
+    rawName,
+    messageId,
+    date,
+    extraHeaders,
+    flags,
+    raw,
+    bodyText,
+    attachment,
+    attachmentSize,
+  };
 }
 
 function envelopeOf(entry) {
@@ -80,8 +98,12 @@ function structureOf(entry) {
   const size = Buffer.byteLength(String(entry.bodyText ?? ""), "utf8");
   const text = `("TEXT" "PLAIN" ("CHARSET" "UTF-8") NIL NIL "8BIT" ${size} 3)`;
   if (!entry.attachment) return text;
+  // `attachmentSize` lets a test describe an attachment the plugin must refuse
+  // without building 50 MiB of bytes for it.
+  const fileSize = entry.attachmentSize ?? 512;
   const file =
-    '("APPLICATION" "PDF" ("NAME" "report.pdf") NIL NIL "BASE64" 512 NIL ("ATTACHMENT" ("FILENAME" "report.pdf")))';
+    `("APPLICATION" "PDF" ("NAME" "report.pdf") NIL NIL "BASE64" ${fileSize} NIL ` +
+    '("ATTACHMENT" ("FILENAME" "report.pdf")))';
   return `(${text}${file} "MIXED" ("BOUNDARY" "B0"))`;
 }
 
@@ -128,6 +150,8 @@ export function createFakeServer(options = {}) {
     bodyFetches: [],
     /** Every STORE the plugin sent, as the raw command line. */
     stores: [],
+    /** Every `BODY.PEEK[<part>]` fetch, so a test can prove only one part was asked for. */
+    partFetches: [],
     /**
      * The mailboxes `LIST` reports.
      *
@@ -140,6 +164,10 @@ export function createFakeServer(options = {}) {
     moves: [],
     copies: [],
     expunges: [],
+    /** Every `APPEND`: the mailbox, the flags and the exact bytes filed. */
+    appends: [],
+    /** What a one-part attachment fetch answers with, before base64 encoding. */
+    attachmentData: options.attachmentData ?? "%PDF-1.4 fake attachment",
   };
   let dataListener = null;
   let closeListener = null;
@@ -226,6 +254,23 @@ export function createFakeServer(options = {}) {
             `${cap ? "BODY[]<0>" : "BODY[]"} {${body.length}}\r\n`,
         );
         pushBuffer(body);
+        push(")\r\n");
+      }
+      push(`${tag} OK FETCH completed\r\n`);
+      return;
+    }
+    // A one-part fetch: `BODY.PEEK[2]` is exactly one attachment's bytes. The fake
+    // answers with the scripted payload in the encoding the structure declares, so
+    // a test can check the plugin decodes rather than trusting the reply.
+    const partSection = /BODY\.PEEK\[(\d+(?:\.\d+)*)\]/i.exec(command);
+    if (partSection) {
+      const section = partSection[1];
+      for (const entry of wanted) {
+        if (!entry.attachment) continue;
+        const payload = Buffer.from(String(entry.attachmentData ?? server.attachmentData), "utf8").toString("base64");
+        server.partFetches.push({ uid: entry.uid, section });
+        push(`* ${sequenceOf(entry.uid)} FETCH (UID ${entry.uid} BODY[${section}] {${payload.length}}\r\n`);
+        push(payload);
         push(")\r\n");
       }
       push(`${tag} OK FETCH completed\r\n`);
@@ -355,11 +400,34 @@ export function createFakeServer(options = {}) {
     else push(`${tag} OK EXPUNGE completed\r\n`);
   }
 
+  /**
+   * The literal an `APPEND` is waiting for.
+   *
+   * A real server answers the command with `+ Ready for literal data` and only
+   * then does the client send the message bytes. The fake keeps that shape so a
+   * test can prove the plugin waits instead of writing the literal unsolicited.
+   */
+  let pendingAppend = null;
+
   const transport = {
     async send(data) {
       const text = typeof data === "string" ? data : Buffer.from(data).toString("latin1");
       server.sent.push(text);
       if (server.offline) return;
+      if (pendingAppend) {
+        const bytes = typeof data === "string" ? Buffer.from(data, "latin1") : Buffer.from(data);
+        pendingAppend.chunks.push(bytes);
+        const total = pendingAppend.chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+        // The command's own trailing CRLF belongs to the command line, not to the
+        // literal: the append is complete once the declared bytes are in.
+        if (total < pendingAppend.size) return;
+        const literal = Buffer.concat(pendingAppend.chunks).subarray(0, pendingAppend.size);
+        server.appends.push({ mailbox: pendingAppend.mailbox, flags: pendingAppend.flags, message: literal });
+        const tag = pendingAppend.tag;
+        pendingAppend = null;
+        push(`${tag} OK APPEND completed\r\n`);
+        return;
+      }
       for (const line of text.split("\r\n").filter(Boolean)) {
         if (line === "DONE") {
           if (!server.answerDone) continue;
@@ -394,6 +462,14 @@ export function createFakeServer(options = {}) {
           expungeReply(tag, command);
         } else if (upper.startsWith("LIST")) {
           listReply(tag, command);
+        } else if (upper.startsWith("APPEND")) {
+          // `APPEND "Sent" (\Seen) {123}`: answer with a continuation and wait for
+          // the literal the plugin sends next.
+          const literal = /\{(\d+)\+?\}$/.exec(command);
+          const mailbox = /^APPEND\s+"((?:[^"\\]|\\.)*)"/i.exec(command)?.[1] ?? "";
+          const flags = /\(([^)]*)\)/.exec(command)?.[1]?.split(/\s+/).filter(Boolean) ?? [];
+          pendingAppend = { tag, size: Number(literal?.[1] ?? 0), mailbox, flags, chunks: [] };
+          push("+ Ready for literal data\r\n");
         } else if (upper === "IDLE") {
           idleTag = tag;
           push("+ idling\r\n");

@@ -82,7 +82,19 @@ function fakeHost({ instances = [], settings = {}, locale = "en", servers = {}, 
   const commands = new Map();
   const connections = new Map();
   const accounts = instances.map((entry) => ({ ...entry }));
-  const state = { closed: 0, connects: [] };
+  const state = {
+    closed: 0,
+    connects: [],
+    /** Every `pi.mail.send` request, in order. */
+    sends: [],
+    /** Every `pi.fs.saveAs` call: what was suggested, and the bytes handed over. */
+    saves: [],
+    /** What the fake save dialog does next: `save`, `cancel` or `busy`. */
+    saveBehaviour: "save",
+    /** What `mail.send` answers with, or the coded refusal it throws. */
+    sendAnswer: null,
+    sendError: null,
+  };
   let connectionSeq = 0;
   let instanceSeq = 100;
 
@@ -138,6 +150,30 @@ function fakeHost({ instances = [], settings = {}, locale = "en", servers = {}, 
         accounts.splice(index, 1);
         emit("credentials:changed", { slotId });
         return { removed: true };
+      },
+    },
+    // `mail.send`: the host's own submission session. It records exactly what the
+    // plugin asked for — the endpoint it named or the fact that it named none —
+    // and answers with the outcome the host would.
+    mail: {
+      send: async (request) => {
+        state.sends.push(request);
+        if (state.sendError) throw state.sendError;
+        return state.sendAnswer ?? { accepted: [...request.envelope.to], rejected: [] };
+      },
+    },
+    // `fs.saveAs`: the host's own save dialog. A test decides whether it writes,
+    // returns nothing (a cancelled dialog) or answers `SAVE_AS_BUSY`.
+    fs: {
+      saveAs: async ({ suggestedName, data, mimeType }) => {
+        state.saves.push({
+          name: suggestedName,
+          mimeType,
+          bytes: Buffer.from(data),
+        });
+        if (state.saveBehaviour === "busy") throw coded("SAVE_AS_BUSY", "a save dialog is already open");
+        if (state.saveBehaviour === "cancel") return null;
+        return { path: `${dataPath}/${suggestedName}`, name: suggestedName };
       },
     },
     net: {
@@ -1595,3 +1631,513 @@ test("a trash folder spelled in modified UTF-7 is where delete moves the message
   }
 });
 
+
+/**
+ * A server whose `LIST` reports a Sent mailbox, which is what filing a copy of a
+ * sent message needs.
+ */
+function serverWithSent(options = {}) {
+  return createFakeServer({
+    uidNext: 1,
+    mailboxes: [
+      { name: "INBOX", flags: ["\\HasNoChildren"], delimiter: "/" },
+      { name: "Sent", flags: ["\\Sent", "\\HasNoChildren"], delimiter: "/" },
+    ],
+    ...options,
+  });
+}
+
+test("a preset account sends through its own submission endpoint, and files a copy", async () => {
+  const server = serverWithSent();
+  const host = fakeHost({ instances: [oneAccount("owner@qq.com")], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    const result = await panel(plugin, "inbox.send", {
+      accountId: "acc_1",
+      to: ["ann@example.com"],
+      bcc: ["blind@example.com"],
+      subject: "第三季度的数字",
+      text: "你好",
+    });
+    assert.equal(result.ok, true);
+    assert.equal(host.state.sends.length, 1);
+    const request = host.state.sends[0];
+    // A preset account names the endpoint its provider publishes, and names its
+    // own instance, never the bare slot.
+    assert.deepEqual(request.credential, { slot: "mailbox", instanceId: "acc_1" });
+    assert.deepEqual(request.endpoint, { host: "smtp.qq.com", port: 465 });
+    assert.equal(request.envelope.from, "owner@qq.com");
+    assert.deepEqual(request.envelope.to, ["ann@example.com"]);
+    assert.deepEqual(request.envelope.bcc, ["blind@example.com"]);
+    const mime = Buffer.from(request.mime);
+    assert.match(mime.toString("latin1"), /^From: .*owner@qq\.com/m);
+    assert.equal(/^Bcc:/im.test(mime.toString("latin1")), false);
+    assert.ok([...mime].every((byte) => byte < 128), "the message is 7-bit");
+    // The sender is the account's own address, and the display name is absent
+    // because this account's label *is* its address.
+    assert.match(mime.toString("latin1"), /^From: owner@qq\.com$/m);
+    // The copy is filed in Sent, with the Seen flag, and it is the same bytes.
+    assert.equal(server.appends.length, 1);
+    assert.equal(server.appends[0].mailbox, "Sent");
+    assert.deepEqual(server.appends[0].flags, ["\\Seen"]);
+    assert.equal(server.appends[0].message.equals(mime), true);
+    assert.deepEqual(result.filed, { filed: true, folder: "Sent", skipped: null });
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("an account with its own incoming server cannot send until it stores an outgoing one", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({
+    instances: [
+      oneAccount("owner@example.com", {
+        fields: { server: "mail.example.com", port: "993", protocol: "imap", security: "tls" },
+      }),
+    ],
+    servers: { "mailbox#acc_1": server },
+  });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    const { snapshot } = await panel(plugin, "inbox.snapshot");
+    assert.equal(snapshot.accounts[0].canSend, false);
+    assert.equal(snapshot.accounts[0].sendBlockedReason, "send-no-server");
+    const result = await panel(plugin, "inbox.send", {
+      accountId: "acc_1",
+      to: ["ann@example.com"],
+      subject: "Hi",
+      text: "Body",
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "send-no-server");
+    // Nothing was delivered: the refusal happens before the host is asked.
+    assert.equal(host.state.sends.length, 0);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("an account with its own outgoing server sends without naming an endpoint", async () => {
+  const server = serverWithSent();
+  const host = fakeHost({
+    instances: [
+      oneAccount("owner@example.com", {
+        fields: {
+          server: "mail.example.com",
+          port: "993",
+          protocol: "imap",
+          security: "tls",
+          sendServer: "smtp.example.com",
+          sendPort: "465",
+          sendSecurity: "tls",
+        },
+      }),
+    ],
+    servers: { "mailbox#acc_1": server },
+  });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    const { snapshot } = await panel(plugin, "inbox.snapshot");
+    assert.equal(snapshot.accounts[0].canSend, true);
+    assert.equal(snapshot.accounts[0].sendBlockedReason, null);
+    const result = await panel(plugin, "inbox.send", {
+      accountId: "acc_1",
+      to: ["ann@example.com"],
+      subject: "Hi",
+      text: "Body",
+    });
+    assert.equal(result.ok, true);
+    // The account already decided where it sends from; naming one is refused by
+    // the host, so this must be absent rather than equal to the stored server.
+    assert.equal("endpoint" in host.state.sends[0], false);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("Gmail files its own copy, so a send appends nothing there", async () => {
+  const server = serverWithSent();
+  const host = fakeHost({ instances: [oneAccount("owner@gmail.com")], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    const result = await panel(plugin, "inbox.send", {
+      accountId: "acc_1",
+      to: ["ann@example.com"],
+      subject: "Hi",
+      text: "Body",
+    });
+    assert.equal(result.ok, true);
+    assert.equal(server.appends.length, 0);
+    assert.deepEqual(result.filed, { filed: false, folder: null, skipped: "gmail" });
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("a refusal from the host reaches the panel as its code, with nothing appended", async () => {
+  const server = serverWithSent();
+  const host = fakeHost({ instances: [oneAccount("owner@qq.com")], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    host.state.sendError = coded("MAIL_RATE_LIMITED", "as many messages as the host allows per hour");
+    const result = await panel(plugin, "inbox.send", {
+      accountId: "acc_1",
+      to: ["ann@example.com"],
+      subject: "Hi",
+      text: "Body",
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "MAIL_RATE_LIMITED");
+    // A refused send files nothing: there is no message to file.
+    assert.equal(server.appends.length, 0);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+
+test("a reply is drafted from the message the panel opened, with no second fetch", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount("owner@qq.com")], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.add(
+      message({
+        uid: 1,
+        subject: "Quarterly numbers",
+        messageId: "<orig@example.com>",
+        from: { name: "Boss", address: "boss@example.com" },
+        to: [{ name: "Me", address: "owner@qq.com" }],
+        extraHeaders: ["Reply-To: Assistant <assistant@example.com>", "References: <root@example.com>"],
+        bodyText: "The numbers are attached.",
+      }),
+    );
+    const snapshot = await checkUntil(plugin, 1);
+    const target = snapshot.messages[0];
+    // Before the message is opened there is nothing to reply to: the draft is
+    // built from the body the panel already fetched, never from a new request.
+    const tooEarly = await panel(plugin, "inbox.draft", { accountId: "acc_1", key: target.key, mode: "reply" });
+    assert.equal(tooEarly.ok, false);
+    assert.equal(tooEarly.code, "MESSAGE_NOT_OPEN");
+    await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
+    const connectsBefore = host.state.connects.length;
+    const result = await panel(plugin, "inbox.draft", { accountId: "acc_1", key: target.key, mode: "reply" });
+    assert.equal(result.ok, true);
+    const draft = result.draft;
+    assert.deepEqual(draft.to, [{ name: "Assistant", address: "assistant@example.com" }]);
+    assert.deepEqual(draft.cc, []);
+    assert.equal(draft.subject, "Re: Quarterly numbers");
+    assert.equal(draft.inReplyTo, "<orig@example.com>");
+    assert.deepEqual(draft.references, ["<root@example.com>", "<orig@example.com>"]);
+    assert.match(draft.text, /wrote:/);
+    assert.match(draft.text, /> The numbers are attached\./);
+    assert.equal(host.state.connects.length, connectsBefore, "a draft opens no connection of its own");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("reply-all keeps the other recipients and never answers the account itself", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount("owner@qq.com")], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.add(
+      message({
+        uid: 1,
+        subject: "Planning",
+        messageId: "<plan@example.com>",
+        from: { name: "Ann", address: "ann@example.com" },
+        to: [
+          { name: "Me", address: "owner@qq.com" },
+          { name: "Bob", address: "bob@example.com" },
+        ],
+        cc: [{ name: "Cara", address: "cara@example.com" }],
+        bodyText: "Plan?",
+      }),
+    );
+    const snapshot = await checkUntil(plugin, 1);
+    const target = snapshot.messages[0];
+    await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
+    const result = await panel(plugin, "inbox.draft", { accountId: "acc_1", key: target.key, mode: "replyAll" });
+    assert.equal(result.ok, true);
+    assert.deepEqual(
+      result.draft.to.map((entry) => entry.address),
+      ["ann@example.com", "bob@example.com"],
+    );
+    assert.deepEqual(result.draft.cc.map((entry) => entry.address), ["cara@example.com"]);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("a forward lists the original's attachments and carries its headers in the body", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount("owner@qq.com")], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    // A raw message whose body really is multipart: the panel lists attachments
+    // by parsing the bytes it fetched, so a structure-only fake would prove
+    // nothing about the forward.
+    const raw = [
+      "From: Vendor <billing@vendor.example>",
+      "Subject: Invoice",
+      "Message-ID: <inv@example.com>",
+      'Content-Type: multipart/mixed; boundary="M"',
+      "",
+      "--M",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "Invoice attached.",
+      "--M",
+      'Content-Type: application/pdf; name="report.pdf"',
+      'Content-Disposition: attachment; filename="report.pdf"',
+      "Content-Transfer-Encoding: base64",
+      "",
+      Buffer.from("%PDF-1.4 fake attachment").toString("base64"),
+      "--M--",
+      "",
+    ].join("\r\n");
+    server.add(
+      message({
+        uid: 1,
+        subject: "Invoice",
+        messageId: "<inv@example.com>",
+        from: { name: "Vendor", address: "billing@vendor.example" },
+        raw,
+        attachment: true,
+      }),
+    );
+    const snapshot = await checkUntil(plugin, 1);
+    const target = snapshot.messages[0];
+    await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
+    const result = await panel(plugin, "inbox.draft", { accountId: "acc_1", key: target.key, mode: "forward" });
+    assert.equal(result.ok, true);
+    assert.equal(result.draft.subject, "Fwd: Invoice");
+    assert.deepEqual(result.draft.to, [], "a forward names no recipient until the user does");
+    assert.match(result.draft.text, /Forwarded message/);
+    assert.match(result.draft.text, /From: Vendor <billing@vendor\.example>/);
+    assert.deepEqual(
+      result.draft.forwardOf.attachments.map((file) => [file.index, file.filename]),
+      [[0, "report.pdf"]],
+    );
+  } finally {
+    await plugin.onUnload();
+
+test("an attachment is saved from the one part the server numbers, decoded", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount("owner@qq.com")], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.add(
+      message({ uid: 1, subject: "Invoice", raw: rawWithAttachment(), attachment: true }),
+    );
+    const snapshot = await checkUntil(plugin, 1);
+    const target = snapshot.messages[0];
+    const opened = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
+    assert.equal(opened.message.attachments[0].part, "2");
+    const storesBefore = server.stores.length;
+    const result = await panel(plugin, "inbox.downloadAttachment", {
+      accountId: "acc_1",
+      key: target.key,
+      index: 0,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.name, "report.pdf");
+    // Only the one part was fetched, and fetching it marked nothing as read.
+    assert.deepEqual(server.partFetches, [{ uid: 1, section: "2" }]);
+    assert.equal(server.stores.length, storesBefore, "a download sends no STORE");
+    assert.equal(host.state.saves[0].bytes.toString("utf8"), "%PDF-1.4 fake attachment");
+    assert.equal(host.state.saves[0].mimeType, "application/pdf");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("a cancelled save dialog writes nothing and is not an error", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount("owner@qq.com")], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.add(message({ uid: 1, subject: "Invoice", raw: rawWithAttachment(), attachment: true }));
+    const snapshot = await checkUntil(plugin, 1);
+    const target = snapshot.messages[0];
+    await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
+    host.state.saveBehaviour = "cancel";
+    const result = await panel(plugin, "inbox.downloadAttachment", {
+      accountId: "acc_1",
+      key: target.key,
+      index: 0,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.cancelled, true);
+    assert.equal("name" in result, false, "nothing was written, so nothing is named");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("a save dialog that is already open is reported as a code", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount("owner@qq.com")], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.add(message({ uid: 1, subject: "Invoice", raw: rawWithAttachment(), attachment: true }));
+    const snapshot = await checkUntil(plugin, 1);
+    const target = snapshot.messages[0];
+    await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
+    host.state.saveBehaviour = "busy";
+    const result = await panel(plugin, "inbox.downloadAttachment", {
+      accountId: "acc_1",
+      key: target.key,
+      index: 0,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "SAVE_AS_BUSY");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("an attachment above the save limit is refused before its bytes are fetched", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount("owner@qq.com")], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.add(
+      message({
+        uid: 1,
+        subject: "Huge",
+        raw: rawWithAttachment(),
+        attachment: true,
+        attachmentSize: 60 * 1024 * 1024,
+      }),
+    );
+    const snapshot = await checkUntil(plugin, 1);
+    const target = snapshot.messages[0];
+    await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
+    const result = await panel(plugin, "inbox.downloadAttachment", {
+      accountId: "acc_1",
+      key: target.key,
+      index: 0,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "ATTACHMENT_TOO_LARGE");
+    assert.equal(server.partFetches.length, 0, "nothing was downloaded to find that out");
+    assert.equal(host.state.saves.length, 0);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+  }
+});
+
+/**
+ * One raw message whose body really is `multipart/mixed` with one attachment.
+ *
+ * The panel lists attachments by parsing the bytes it fetched, so a message that
+ * only *declares* an attachment in `BODYSTRUCTURE` would prove nothing about the
+ * reading pane or about a forward — this fake carries both halves.
+ */
+function rawWithAttachment(text = "Invoice attached.", payload = "%PDF-1.4 fake attachment") {
+  return [
+    "From: Vendor <billing@vendor.example>",
+    "Subject: Invoice",
+    "Message-ID: <inv@example.com>",
+    'Content-Type: multipart/mixed; boundary="M"',
+    "",
+    "--M",
+    "Content-Type: text/plain; charset=utf-8",
+    "",
+    text,
+    "--M",
+    'Content-Type: application/pdf; name="report.pdf"',
+    'Content-Disposition: attachment; filename="report.pdf"',
+    "Content-Transfer-Encoding: base64",
+    "",
+    Buffer.from(payload).toString("base64"),
+    "--M--",
+    "",
+  ].join("\r\n");
+}
+
+test("a POP3 attachment is taken out of the one message the server may RETR", async () => {
+  const boundary = "PB";
+  const pop = createFakePop3Server({ messages: [] });
+  const host = fakeHost({
+    instances: [
+      oneAccount("owner@example.com", {
+        fields: { server: "pop.example.com", port: "995", protocol: "pop3", security: "tls" },
+      }),
+    ],
+    servers: { "mailbox#acc_1": pop },
+  });
+  const plugin = await loadWith(host);
+  try {
+    // The first POP3 poll is a baseline: mail that was already there is not
+    // announced. The message therefore arrives after it, as new mail does.
+    await waitForPolls(host);
+    pop.deliver(
+      popMessage({
+        uidl: "uidl-1",
+        subject: "Invoice",
+        extraHeaders: ['Content-Type: multipart/mixed; boundary="PB"'],
+        body: [
+          `--${boundary}`,
+          "Content-Type: text/plain; charset=utf-8",
+          "",
+          "Invoice attached.",
+          `--${boundary}`,
+          'Content-Type: application/pdf; name="report.pdf"',
+          'Content-Disposition: attachment; filename="report.pdf"',
+          "Content-Transfer-Encoding: base64",
+          "",
+          Buffer.from("%PDF pop3 attachment").toString("base64"),
+          `--${boundary}--`,
+          "",
+        ].join("\r\n"),
+      }),
+    );
+    const snapshot = await checkUntil(plugin, 1);
+    const target = snapshot.messages[0];
+    const opened = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
+    assert.equal(opened.message.attachments.length, 1);
+    assert.equal(opened.message.attachments[0].filename, "report.pdf");
+    const result = await panel(plugin, "inbox.downloadAttachment", {
+      accountId: "acc_1",
+      key: target.key,
+      index: 0,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.name, "report.pdf");
+    // POP3 has no way to ask for one part, so the whole message comes over and the
+    // part is taken out of it — decoded, not as the base64 the server sent.
+    assert.equal(host.state.saves[0].bytes.toString("utf8"), "%PDF pop3 attachment");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});

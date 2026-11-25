@@ -18,6 +18,10 @@ import {
   sameMessage,
   shortTime,
   stepIndex,
+  chipLabel,
+  isValidAddress,
+  parseRecipientInput,
+  totalBytes,
   visibleMessages,
 } from "../view/model.js";
 
@@ -233,4 +237,71 @@ test("the keyboard map is the one the panel documents, and fields keep their key
   assert.equal(keyboardAction({ key: "#" }, { inField: true }), null);
   assert.equal(keyboardAction({ key: "Escape" }, { inField: true }), "clear");
   assert.equal(keyboardAction(null), null);
+});
+
+
+test("the composer's shortcuts are four unmodified keys, and none fires in a field", () => {
+  assert.equal(keyboardAction({ key: "c" }), "compose");
+  assert.equal(keyboardAction({ key: "r" }), "reply");
+  assert.equal(keyboardAction({ key: "a" }), "replyAll");
+  assert.equal(keyboardAction({ key: "f" }), "forward");
+  // The panel's own keys still win where they already existed.
+  assert.equal(keyboardAction({ key: "/" }), "search");
+  assert.equal(keyboardAction({ key: "e" }), "archive");
+  // Nothing fires while the user is typing a recipient or a subject.
+  for (const key of ["c", "r", "a", "f"]) {
+    assert.equal(keyboardAction({ key }, { inField: true }), null);
+  }
+  // A shortcut with a modifier belongs to the app, not to this panel.
+  assert.equal(keyboardAction({ key: "c", metaKey: true }), null);
+  assert.equal(keyboardAction({ key: "r", ctrlKey: true }), null);
+});
+
+test("a recipient field splits a pasted list into addresses", () => {
+  const one = parseRecipientInput("ann@example.com");
+  assert.deepEqual(one.entries, [{ name: "", address: "ann@example.com" }]);
+  assert.deepEqual(one.invalid, []);
+
+  const listed = parseRecipientInput("ann@example.com, Bob <bob@example.com>; cara@example.com");
+  assert.deepEqual(
+    listed.entries.map((entry) => entry.address),
+    ["ann@example.com", "bob@example.com", "cara@example.com"],
+  );
+  assert.equal(listed.entries[1].name, "Bob");
+
+  // A space-separated paste is a list too, but only when every word is an address.
+  assert.deepEqual(
+    parseRecipientInput("ann@example.com bob@example.com").entries.map((entry) => entry.address),
+    ["ann@example.com", "bob@example.com"],
+  );
+  // A display name keeps its spaces, and a comma inside quotes is not a separator.
+  assert.deepEqual(parseRecipientInput('"Doe, Jane" <jane@example.com>').entries, [
+    { name: "Doe, Jane", address: "jane@example.com" },
+  ]);
+  // Anything that is not an address is reported, not silently dropped.
+  assert.deepEqual(parseRecipientInput("not-an-address").invalid, ["not-an-address"]);
+  assert.deepEqual(parseRecipientInput("Ann Lee").invalid, ["Ann Lee"]);
+  assert.equal(parseRecipientInput("   ").entries.length, 0);
+});
+
+test("an address has a local part, one at sign and a real domain", () => {
+  assert.equal(isValidAddress("a@b.co"), true);
+  assert.equal(isValidAddress("first.last+tag@mail.example.com"), true);
+  assert.equal(isValidAddress("a@b"), false, "a bare host is not a domain");
+  assert.equal(isValidAddress("a b@example.com"), false);
+  assert.equal(isValidAddress("@example.com"), false);
+  assert.equal(isValidAddress(""), false);
+});
+
+test("a chip reads as its name when it has one, and as its address otherwise", () => {
+  assert.equal(chipLabel({ name: "Ann Lee", address: "ann@example.com" }), "Ann Lee");
+  assert.equal(chipLabel({ name: "", address: "ann@example.com" }), "ann@example.com");
+  assert.equal(chipLabel(null), "");
+});
+
+test("the composer's running total adds every file's size", () => {
+  assert.equal(totalBytes([{ size: 10 }, { size: 32 }]), 42);
+  assert.equal(totalBytes([{ size: "20" }]), 20);
+  assert.equal(totalBytes(null), 0);
+  assert.equal(totalBytes([{}, { size: 5 }]), 5);
 });

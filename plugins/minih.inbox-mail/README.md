@@ -1,8 +1,15 @@
 # Inbox mail
 
-Watches your mailboxes — as many as you add — and does two things with them: puts
-only the mail you care about into the app's notification centre, and shows all of
-them in one **Inbox** panel in the sidebar. Nothing here calls a model.
+Watches your mailboxes — as many as you add — and does three things with them: puts
+only the mail you care about into the app's notification centre, shows all of them
+in one **Inbox** panel in the sidebar, and sends mail from that same panel.
+Nothing here calls a model.
+
+Since 0.5.0 the panel writes as well as reads: **write**, **reply**, **reply to
+all** and **forward**, with attachments picked from your disk, delivered by the app
+itself — it logs in with the account's own password, which this plugin never sees.
+Every message you send is filed in the mailbox's Sent folder, and every attachment
+you open can be saved wherever the save dialog points.
 
 A mailbox is either one of the providers listed below or **a mail server you type
 in yourself** — IMAP or POP3, implicit TLS or STARTTLS — which is what makes a
@@ -79,6 +86,53 @@ never a cloud-metadata address), and the password is injected into that stored
 endpoint and no other. A LAN address is fine — that is where company mail servers
 live.
 
+## How a message leaves
+
+Sending is performed by the app, not by this plugin: `pi.mail.send` names the
+account, the envelope and the finished message, and the host dials, logs in with
+that account's password and delivers. The plugin never holds the password, the
+socket or the server's own words — only the outcome, as a code.
+
+Where a message leaves from is the account's decision, and it is shown in the
+account form:
+
+- **a provider this plugin names** is reached at its published submission
+  endpoint, which is the one entry in `manifest.net.tcp` for that host. The ports
+  and transports below come from each provider's own documentation, and the same
+  page is the source for the IMAP row above:
+
+  | Provider | SMTP submission | TLS | Source |
+  | --- | --- | --- | --- |
+  | QQ Mail | `smtp.qq.com:465` | implicit TLS | [help.mail.qq.com](https://help.mail.qq.com/detail/108/1090/) |
+  | NetEase 163 | `smtp.163.com:465` | implicit TLS | [help.mail.163.com](https://help.mail.163.com/faqDetail.do?code=d7a5dc8471cd0c0e8b4b8f4f8e49998b374173cfe9171305fa1ce630d7f67ac22b85ac2e7c90cd63) |
+  | NetEase 126 | `smtp.126.com:465` | implicit TLS | [help.mail.163.com](https://help.mail.163.com/faqDetail.do?code=d7a5dc8471cd0c0e8b4b8f4f8e49998b374173cfe9171305fa1ce630d7f67ac22b85ac2e7c90cd63) |
+  | Gmail | `smtp.gmail.com:465` | implicit TLS | [developers.google.com](https://developers.google.com/gmail/imap/imap-smtp) |
+  | Tencent Exmail | `smtp.exmail.qq.com:465` | implicit TLS | [open.work.weixin.qq.com](https://open.work.weixin.qq.com/help2/pc/19886) |
+  | Outlook / Hotmail | `smtp.office365.com:587` | STARTTLS | [support.microsoft.com](https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040) |
+
+  A `587` entry is a STARTTLS entry: the host requires the upgrade to succeed
+  before it sends the credential, so a declared submission endpoint is never used
+  in the clear.
+- **a mailbox whose server you typed** sends only through the outgoing server you
+  typed in that same account (`Send server`, `Port`, `Encryption` in the host's
+  form). One that has an incoming server but no outgoing one cannot send at all —
+  the composer says so and points at the account form. That is deliberate: the
+  password belongs to the server you typed, and it is not handed to a server this
+  plugin chose.
+
+What the plugin builds is one message the host accepts: the sender is the
+account's own address, blind recipients travel in the SMTP envelope and never as a
+`Bcc:` header, the text is quoted-printable, attachments are base64, names that are
+not ASCII are encoded as RFC 2231, and the whole message is 7-bit — so a server
+without `8BITMIME` can still take it. The host's own limits apply: 50 recipients,
+25 MiB per message and 30 messages per hour for this plugin.
+
+After a successful send the plugin appends one copy to the account's Sent mailbox
+over IMAP (`LIST` finds `\Sent`, else `Sent`, `Sent Items`, `已发送`, …; then
+`APPEND` with `\Seen`). Gmail files its own copy, so Gmail accounts skip this. A
+failed copy is reported in one line and does not change the fact that the message
+was sent.
+
 ## When a mailbox needs a proxy
 
 Some mail servers are simply not reachable from where you are. Gmail's IMAP is the
@@ -137,20 +191,38 @@ A few properties are deliberate:
   the full timestamp, the account, and a folded **to me / to me and N more** line
   that expands into the To and Cc lists. The toolbar is icon buttons with tooltips
   and `aria-label`s: read/unread, star, delete, archive (only when the mailbox has
-  an archive folder), HTML/text, and "show remote images". Attachments are cards
-  with a type, a name and a size — listed, not downloaded. While a body is on its
-  way the pane shows a skeleton rather than a line of text.
+  an archive folder), reply / reply to all / forward, HTML/text, and "show remote
+  images". Attachments are cards with a type, a name, a size and a **Save** button
+  that opens the app's own save dialog for exactly that one file. While a body is on
+  its way the pane shows a skeleton rather than a line of text.
 - **Keyboard** — <kbd>j</kbd>/<kbd>k</kbd> or the arrow keys move, <kbd>Enter</kbd>
   opens, <kbd>u</kbd> toggles read, <kbd>s</kbd> toggles the star, <kbd>#</kbd> or
-  <kbd>Delete</kbd> deletes, <kbd>e</kbd> archives, <kbd>/</kbd> focuses the
+  <kbd>Delete</kbd> deletes, <kbd>e</kbd> archives, <kbd>c</kbd> writes a new
+  message, <kbd>r</kbd> replies, <kbd>a</kbd> replies to all, <kbd>f</kbd>
+  forwards, <kbd>/</kbd> focuses the
   search, <kbd>Esc</kbd> closes the reading pane (or clears the search). None of
-  them fire while you are typing in the search box, and a modified key belongs to
+  them fire while you are typing in a field, and a modified key belongs to
   the app, not to this panel.
 - **Looking at mail** — opening a message marks it read (one IMAP `STORE` of
   `\Seen` after the body arrived, and nothing at all when it was already read),
   "mark unread" puts it back, and the star is one more click. A POP3 account has no
   flags on the server, so read is a mark this computer keeps (at most 500 of them),
   a star is not offered, and the reading pane says so in one line.
+- **Writing and answering** — the panel's **Write** button (or <kbd>c</kbd>) opens
+  the composer: a from-account picker (only accounts that can send are offered;
+  the rest say why), recipient chips for To/Cc/Bcc that accept a pasted list,
+  a subject, a plain-text body and files chosen from your disk. Reply, reply-all
+  and forward open it pre-filled from the message you are reading — the
+  recipients, a `Re:`/`Fwd:` subject that is never doubled, the original quoted
+  with `>` under an attribution line, and, for a forward, the original's
+  attachments as a list you tick. The running total is shown, and anything above
+  25 MiB is refused before the send. While sending, the buttons are disabled; a
+  refusal keeps every field as it was and names the reason; discarding a
+  half-written message asks first.
+- **Saving an attachment** — each attachment card has **Save**, which asks the
+  plugin for that one part and hands it to the app's save dialog. Nothing is
+  written anywhere else, a file above 50 MiB is refused instead of truncated, and
+  a cancelled dialog changes nothing.
 - **Deleting and archiving** — see [What it changes](#what-it-changes) below. Both
   act on one message, after your click, and nothing here can empty a mailbox.
 
@@ -228,7 +300,11 @@ account is polled instead of connected:
 - When you open a message it fetches that message only, capped at 1 MiB (IMAP:
   `BODY.PEEK[]<0.1048576>`, POP3: `RETR` with the same cap): truncated with a
   notice beyond that, held in memory for the panel and never written to disk.
-  Attachments are listed by name and size and are never downloaded.
+  Attachments are listed by name and size; one is fetched only when you press
+  **Save** on it — IMAP asks for that one MIME part
+  (`UID FETCH <uid> BODY.PEEK[<part>]`, which never sets `\Seen`), POP3 fetches the
+  message it already has to, and the bytes go straight from memory into the app's
+  save dialog. A file above 50 MiB is refused rather than truncated.
 - It keeps one small file in its own data folder: per account `UIDVALIDITY` and
   the highest UID already handled (IMAP) or the UIDLs already handled (POP3, at
   most 500), the Message-IDs it has already reported (at most 200), the digest
@@ -240,9 +316,10 @@ account is polled instead of connected:
   behind.
 - Opening a message marks that one message read, once, and after its body arrived:
   a failed fetch leaves it unread. "Mark unread" and the star are your clicks, each
-  sending exactly one `STORE`. It does not send mail and writes no drafts. Its only
-  network destination is the server each account is set to; links you open go
-  through the app to your browser.
+  sending exactly one `STORE`. Sending happens only when you press **Send**, and
+  the only places it goes are the submission server the account names and — after a
+  successful send — the account's own Sent folder, over the same IMAP server it
+  already reads. Links you open go through the app to your browser.
 - Your password never reaches the plugin. The app holds each credential instance
   and performs the login; the plugin gets an already-authenticated connection and
   only learns which accounts exist, their addresses, whether they are filled, and
@@ -287,13 +364,16 @@ belonged to, so the old file is left alone and each account baselines itself.
 
 ## What it changes
 
-Nothing, until you ask for it. Delete and archive are the only operations that
-move or remove mail, they act on the one message you clicked, and this plugin never
-sends a mailbox-wide `EXPUNGE` — the command that would also remove messages other
-clients flagged for deletion.
+Nothing, until you ask for it. Sending, saving an attachment, and delete/archive
+are the only operations that leave a trace, each one after a click of yours. Delete
+and archive act on the one message you clicked, and this plugin never sends a
+mailbox-wide `EXPUNGE` — the command that would also remove messages other clients
+flagged for deletion.
 
 | Action | IMAP | POP3 |
 | --- | --- | --- |
+| Send | `mail.send` through the host: the provider's submission endpoint, or the one you typed. Afterwards one `APPEND` of the same bytes into Sent with `\Seen`. | Same send; no Sent copy (POP3 has no folders). |
+| Save an attachment | `UID FETCH <uid> (UID BODYSTRUCTURE)` to locate the part, then `UID FETCH <uid> BODY.PEEK[<part>]` — never a non-peek fetch, so nothing is marked read. | `RETR` of that one message (capped at 50 MiB), then the part is taken out of it. |
 | Delete | `LIST` finds the trash (special-use `\Trash`, else a name such as `Trash`, `Deleted Messages`, `已删除`), then one `UID MOVE <uid> Trash`. Without `MOVE`: `UID COPY <uid> Trash`, `UID STORE <uid> +FLAGS (\Deleted)`, `UID EXPUNGE <uid>`. | `DELE <n>` for that message, then `QUIT` to commit it. |
 | Archive | The same three commands into a special-use `\Archive` mailbox (or Gmail's All Mail), and only when `LIST` found one. | Not offered: POP3 has no folders. |
 
@@ -306,17 +386,20 @@ archive.
 
 ## What is not here yet
 
-- Writing, replying and forwarding (they need the host to send mail), and
-  downloading or saving an attachment (it needs the host to write a binary file).
+- A rich-text composer: the body is plain text, and a reply quotes the original as
+  text (an HTML-only message is converted for the quote). Signatures, drafts saved
+  between launches, and scheduled send are not implemented either.
 - AI triage of what the deterministic rule missed.
 - Anything about an account's own settings inside this panel: the host owns that
   form, and from 1.10.0 it offers an edit entry per account (the connection code
   fills in the values, and the authorization code has to be entered again).
 - Outlook/Hotmail, which needs XOAUTH2 in the host.
 
-`minih.inbox-mail` 0.4.0 needs Minih-Agent-Desktop 1.11.0 or newer — the first
-release with a per-instance mail endpoint (`userEndpoint` on a credential slot),
-the POP3 login behind `net.tcp.connect`, the `mail` sidebar icon, and a per-account
-proxy (`userProxy`). The catalog in this repository still points at 0.3.0:
-publishing 0.4.0 is a separate step that updates `catalog.json` and the release
-history.
+`minih.inbox-mail` 0.5.0 needs Minih-Agent-Desktop 1.11.0 or newer — the first
+release with a per-instance mail endpoint (`userEndpoint` on a credential slot), the
+POP3 login behind `net.tcp.connect`, the `mail` sidebar icon, and a per-account
+proxy (`userProxy`). Sending needs the `mail.send` grant (the host dials, logs in and
+delivers) and `userSend` on the slot for an account with its own outgoing server;
+saving an attachment needs `fs.saveAs`, which writes the one path the user picks.
+The catalog in this repository still points at an older release: publishing 0.5.0 is
+a separate step that updates `catalog.json` and the release history.

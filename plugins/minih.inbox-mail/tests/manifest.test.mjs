@@ -31,10 +31,10 @@ const HOSTNAME = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/;
 const CONTRIB_ID = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 const localized = (value) => Boolean(value && typeof value === "object" && value.en && value["zh-CN"]);
 
-test("the plugin is published as minih.inbox-mail 0.4.0, versioned with its package", () => {
+test("the plugin is published as minih.inbox-mail 0.5.0, versioned with its package", () => {
   assert.equal(manifest.schemaVersion, 1);
   assert.equal(manifest.id, "minih.inbox-mail");
-  assert.equal(manifest.version, "0.4.0");
+  assert.equal(manifest.version, "0.5.0");
   assert.equal(manifest.version, pkg.version);
   assert.equal(manifest.main, "main.js");
   assert.ok(exists(manifest.main), "the entry point must be in the tree");
@@ -42,9 +42,11 @@ test("the plugin is published as minih.inbox-mail 0.4.0, versioned with its pack
   assert.ok(exists("CHANGELOG.md"), "a released plugin records what changed");
 });
 
-test("it asks for exactly the capabilities it uses, including the panel", () => {
+test("it asks for exactly the capabilities it uses, including writing and sending", () => {
   assert.deepEqual([...manifest.permissions].sort(), [
     "credentials.use",
+    "fs.write",
+    "mail.send",
     "net.tcp",
     "notify.center",
     "shell.openExternal",
@@ -52,7 +54,8 @@ test("it asks for exactly the capabilities it uses, including the panel", () => 
   ]);
   // Polling is the plugin's own timer, so the host scheduler is not asked for.
   assert.equal(manifest.permissions.includes("scheduler"), false);
-  // Sending is not implemented by the host and must not be claimed.
+  // `mail.draft` is a different grant — drafting never sends — and this plugin
+  // sends, so claiming it would describe the wrong thing.
   assert.equal(manifest.permissions.includes("mail.draft"), false);
   assert.equal(manifest.permissions.includes("renderer.extension"), false);
   assert.equal(manifest.renderer, undefined);
@@ -80,7 +83,13 @@ test("every TCP endpoint is a literal host on an encrypted port", () => {
     assert.match(entry.host, HOSTNAME);
     assert.equal(Number.isInteger(entry.port), true);
     assert.ok(entry.port >= 1 && entry.port <= 65535);
-    assert.equal(entry.tls, true, "the host performs an IMAP login only over implicit TLS");
+    // `tls: true` is implicit TLS; `tls: false` is STARTTLS, which `mail.send`
+    // requires to succeed before it sends the credential.
+    assert.equal(typeof entry.tls, "boolean");
+    if (entry.tls === false) {
+      assert.match(entry.host, /^smtp\./, "only a submission endpoint may declare STARTTLS");
+      assert.equal(entry.port, 587);
+    }
     const key = `${entry.host}:${entry.port}`;
     assert.equal(seen.has(key), false, `${key} is listed twice`);
     seen.add(key);
@@ -173,6 +182,21 @@ test("the slot admits a server the user types, for both protocols, and nothing m
   assert.equal(providers.catalogue("en").some((entry) => entry.id === "custom"), false);
 });
 
+test("the slot collects an outgoing server for an account that has no preset", () => {
+  const [slot] = manifest.contributes.credentials;
+  // Top-level on purpose, like `userProxy`: a 1.10.0 host ignores a key it does
+  // not know, so the same package still installs there and keeps the preset path.
+  assert.deepEqual(slot.userSend, { security: ["tls", "starttls"] });
+  assert.deepEqual(Object.keys(slot.userSend), ["security"]);
+  for (const reserved of ["sendServer", "sendPort", "sendSecurity"]) {
+    assert.equal(
+      slot.fields.some((field) => field.key === reserved),
+      false,
+      `${reserved} belongs to the host, not to the slot`,
+    );
+  }
+});
+
 test("the slot's scope admits every provider host it will be injected into", () => {
   const scope = manifest.contributes.credentials[0].scope.domains;
   assert.ok(Array.isArray(scope) && scope.length > 0, "a slot with no scope authorizes nothing");
@@ -181,6 +205,11 @@ test("the slot's scope admits every provider host it will be injected into", () 
   }
   for (const provider of providers.PROVIDERS) {
     assert.ok(scope.includes(provider.host), `${provider.host} is not in the credential scope`);
+    // A preset account sends through the provider's submission endpoint, and the
+    // host checks that endpoint against this same scope.
+    if (provider.smtp) {
+      assert.ok(scope.includes(provider.smtp.host), `${provider.smtp.host} is not in the credential scope`);
+    }
   }
 });
 
@@ -280,8 +309,19 @@ test("the safety notes describe the panel honestly, in both languages", () => {
   assert.match(en, /UID EXPUNGE <uid>/);
   assert.match(en, /never sends a mailbox-wide EXPUNGE|instead of falling back to a mailbox-wide EXPUNGE/);
   assert.match(en, /Archive works the same way/);
-  // Still not a mail client.
-  assert.match(en, /does not send mail/);
+  // Sending: only on the click, by the app, from the account's own address, with
+  // a Sent copy filed afterwards.
+  assert.match(en, /nothing is sent on a timer, on arrival or from a rule/);
+  assert.match(en, /The sender is locked to the account's own address/);
+  assert.match(en, /never carries a Bcc header/);
+  assert.match(en, /one copy appended to their Sent mailbox/);
+  assert.match(en, /Gmail files what it sends already/);
+  // Saving one attachment: on the click, into the dialog's path, capped.
+  assert.match(en, /A file above 50 MiB is refused/);
+  assert.match(en, /never written to this plugin's data folder/);
+  // The old release claimed neither happened, and that claim is gone.
+  assert.doesNotMatch(en, /does not send mail/);
+  assert.doesNotMatch(en, /never downloaded/);
   assert.match(en, /No model is called/);
   // And the Chinese notes say the same things.
   assert.match(zh, /不设账号上限/);
@@ -314,6 +354,11 @@ test("the safety notes describe the panel honestly, in both languages", () => {
   assert.match(zh, /本机 Clash/);
   assert.match(zh, /插件只知道代理类型、地址和端口/);
   assert.match(zh, /POP3 服务器没有任何标记/);
-  assert.match(zh, /不发信/);
+  assert.match(zh, /只有你按下「发送」才会发信/);
+  assert.match(zh, /发件人被锁定为账号本人的地址/);
+  assert.match(zh, /「已发送」/);
+  assert.match(zh, /超过 50 MiB 的附件会被直接拒绝/);
+  assert.doesNotMatch(zh, /不发信/);
+  assert.doesNotMatch(zh, /从不下载/);
   assert.match(zh, /不调用模型/);
 });
