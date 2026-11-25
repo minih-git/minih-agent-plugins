@@ -1203,3 +1203,287 @@ test("a POP3 mailbox is polled, announced once, and offers no read or star state
     rmSync(host.dataPath, { recursive: true, force: true });
   }
 });
+
+/**
+ * Check until the panel's list holds what the test just delivered.
+ *
+ * A poll that is still in flight swallows one `inbox.check` (its own search ran
+ * before the message was added), so this retries instead of assuming the first
+ * call saw the new mail — which is also how a real user experiences it.
+ */
+async function checkUntil(plugin, count, label = "the new mail") {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await panel(plugin, "inbox.check");
+    const { snapshot } = await panel(plugin, "inbox.snapshot");
+    if ((snapshot?.messages ?? []).length >= count) return snapshot;
+    await new Promise((resolve) => setTimeout(resolve, 15));
+  }
+  throw new Error(`timed out waiting for ${label}`);
+}
+
+/**
+ * 0.4.0's data: the list's preview, the recipients, and the attachment flag.
+ */
+test("a new message brings its preview, its recipients and its attachment flag", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.add(
+      message({
+        uid: 1,
+        from: { name: "Boss", address: "boss@example.com" },
+        to: [
+          { name: "Me", address: "owner@qq.com" },
+          { name: "Ann", address: "ann@example.com" },
+        ],
+        cc: [{ name: "Cara", address: "cara@example.com" }],
+        subject: "Numbers",
+        bodyText: "Here are the numbers you asked for.",
+        attachment: true,
+      }),
+    );
+    const snapshot = await checkUntil(plugin, 1);
+    const [entry] = snapshot.messages;
+    assert.equal(entry.summary, "Here are the numbers you asked for.");
+    assert.deepEqual(entry.to.map((one) => one.address), ["owner@qq.com", "ann@example.com"]);
+    assert.deepEqual(entry.cc.map((one) => one.address), ["cara@example.com"]);
+    assert.equal(entry.hasAttachments, true, "the BODYSTRUCTURE says there is one");
+    assert.equal(
+      server.sentLines.some((line) => line.includes("BODY.PEEK[TEXT]<0.4096>")),
+      true,
+      server.sentLines.join(" | "),
+    );
+    assert.equal(server.bodyFetches.length, 0, "no body was downloaded");
+    assert.equal(server.stores.length, 0, "watching marked nothing as read");
+    const saved = readState(host);
+    assert.equal(saved.accounts.acc_1.messages[0].summary, "Here are the numbers you asked for.");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+/** A mailbox that can be deleted from: an inbox, a trash and an archive. */
+function deletableServer(extra = {}) {
+  return createFakeServer({
+    uidNext: 1,
+    capabilities: ["IMAP4rev1", "ID", "MOVE", "SPECIAL-USE"],
+    mailboxes: [
+      { name: "INBOX", flags: [] },
+      { name: "Trash", flags: ["\\Trash"] },
+      { name: "Archive", flags: ["\\Archive"] },
+    ],
+    ...extra,
+  });
+}
+
+/** One message in the list, so a delete has something to act on. */
+async function seedOneMessage(plugin, server, uid = 1) {
+  server.add(message({ uid, subject: "Delete me", bodyText: "Body text." }));
+  await checkUntil(plugin, 1, "the message to delete");
+}
+
+test("delete moves the one message to the trash with a single MOVE", async () => {
+  const server = deletableServer();
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    await seedOneMessage(plugin, server);
+    const { snapshot } = await panel(plugin, "inbox.snapshot");
+    assert.equal(snapshot.accounts[0].canDelete, true);
+    assert.equal(snapshot.accounts[0].canArchive, true, "the LIST found an archive");
+    const result = await panel(plugin, "inbox.delete", { accountId: "acc_1", key: snapshot.messages[0].key });
+    assert.equal(result.ok, true);
+    assert.equal(result.removed, true);
+    assert.equal(result.final, false, "an IMAP delete is a move, not a removal");
+    assert.equal(result.folder, "Trash");
+    assert.deepEqual(server.moves, [{ uid: 1, mailbox: "Trash" }], "exactly one message, to the trash");
+    assert.deepEqual(server.expunges, [], "no separate expunge was needed");
+    assert.deepEqual(server.copies, []);
+    const after = (await panel(plugin, "inbox.snapshot")).snapshot;
+    assert.equal(after.messages.length, 0);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("without MOVE, delete copies, marks deleted and expunges exactly that UID", async () => {
+  const server = deletableServer({ capabilities: ["IMAP4rev1", "ID", "UIDPLUS"] });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    await seedOneMessage(plugin, server);
+    const { snapshot } = await panel(plugin, "inbox.snapshot");
+    const result = await panel(plugin, "inbox.delete", { accountId: "acc_1", key: snapshot.messages[0].key });
+    assert.equal(result.how, "copy-expunge");
+    assert.deepEqual(server.copies, [{ uid: 1, mailbox: "Trash" }]);
+    assert.deepEqual(server.expunges.map((entry) => entry.uid), [1], "one UID, never the whole mailbox");
+    assert.equal(server.expunges[0].command, "UID EXPUNGE 1");
+    assert.equal(
+      server.sentLines.some((line) => /^A\d+ EXPUNGE$/i.test(line)),
+      false,
+      "a bare EXPUNGE would remove other clients' deleted messages too",
+    );
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("a mailbox with no trash refuses the delete and sends nothing", async () => {
+  const server = createFakeServer({
+    uidNext: 1,
+    capabilities: ["IMAP4rev1", "ID", "MOVE", "SPECIAL-USE"],
+    mailboxes: [{ name: "INBOX", flags: [] }, { name: "Archive", flags: ["\\Archive"] }],
+  });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    await seedOneMessage(plugin, server);
+    const { snapshot } = await panel(plugin, "inbox.snapshot");
+    const result = await panel(plugin, "inbox.delete", { accountId: "acc_1", key: snapshot.messages[0].key });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "NO_TRASH_FOLDER");
+    assert.deepEqual(server.moves, []);
+    assert.deepEqual(server.expunges, []);
+    assert.equal((await panel(plugin, "inbox.snapshot")).snapshot.messages.length, 1);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("a server that can neither move nor expunge one message is refused, not emptied", async () => {
+  const server = deletableServer({ capabilities: ["IMAP4rev1", "ID"] });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    await seedOneMessage(plugin, server);
+    const { snapshot } = await panel(plugin, "inbox.snapshot");
+    const result = await panel(plugin, "inbox.delete", { accountId: "acc_1", key: snapshot.messages[0].key });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "MOVE_UNSUPPORTED");
+    assert.equal(server.sentLines.some((line) => /EXPUNGE|MOVE|COPY/i.test(line)), false);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("archive is offered only where a LIST found an archive, and moves there", async () => {
+  const withArchive = deletableServer();
+  const withoutArchive = createFakeServer({
+    uidNext: 1,
+    capabilities: ["IMAP4rev1", "ID", "MOVE"],
+    mailboxes: [{ name: "INBOX", flags: [] }, { name: "Trash", flags: [] }],
+  });
+  const host = fakeHost({
+    instances: [oneAccount(), { instanceId: "acc_2", username: "someone@163.com" }],
+    servers: { "mailbox#acc_1": withArchive, "mailbox#acc_2": withoutArchive },
+  });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host, ["acc_1", "acc_2"]);
+    withArchive.add(message({ uid: 1, subject: "Archive me" }));
+    withoutArchive.add(message({ uid: 1, subject: "No archive here" }));
+    const snapshot = await checkUntil(plugin, 2, "one message per mailbox");
+    const first = snapshot.accounts.find((account) => account.instanceId === "acc_1");
+    const second = snapshot.accounts.find((account) => account.instanceId === "acc_2");
+    assert.equal(first.canArchive, true);
+    assert.equal(second.canArchive, false, "no archive folder means no archive button");
+    const target = snapshot.messages.find((entry) => entry.accountId === "acc_1");
+    const result = await panel(plugin, "inbox.archive", { accountId: "acc_1", key: target.key });
+    assert.equal(result.ok, true);
+    assert.deepEqual(withArchive.moves, [{ uid: 1, mailbox: "Archive" }]);
+    const refused = await panel(plugin, "inbox.archive", {
+      accountId: "acc_2",
+      key: snapshot.messages.find((entry) => entry.accountId === "acc_2").key,
+    });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.code, "NO_ARCHIVE_FOLDER");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("deleting on POP3 sends DELE for that one message and forgets it locally", async () => {
+  const server = createFakePop3Server({ messages: [popMessage({ uidl: "AAA" })] });
+  const host = fakeHost({
+    instances: [
+      {
+        instanceId: "acc_1",
+        username: "owner@example.com",
+        fields: { server: "pop.example.com", port: "995", protocol: "pop3", security: "tls" },
+      },
+    ],
+    servers: { "mailbox#acc_1": server },
+  });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(popMessage({ uidl: "BBB", subject: "Delete me on the server" }));
+    const snapshot = await checkUntil(plugin, 1, "the new POP3 message");
+    assert.equal(snapshot.accounts[0].canDelete, true);
+    assert.equal(snapshot.accounts[0].canArchive, false, "POP3 has no folders to archive into");
+    const [entry] = snapshot.messages;
+    const result = await panel(plugin, "inbox.delete", { accountId: "acc_1", key: entry.key });
+    assert.equal(result.ok, true);
+    assert.equal(result.final, true, "POP3 cannot undo a delete, and the panel says so");
+    assert.deepEqual(server.deleteRequests, [2], "the second message in the maildrop");
+    assert.equal((await panel(plugin, "inbox.snapshot")).snapshot.messages.length, 0);
+    const saved = readState(host);
+    assert.equal(saved.accounts.acc_1.pop3.uidls.includes("BBB"), false, "the UIDL is forgotten with it");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("load older walks back through the mailbox and announces nothing", async () => {
+  // `uidNext` is what the first poll baselines on: starting at 4 means the three
+  // messages already in the mailbox are behind the cursor, which is exactly the
+  // case "load older" exists for.
+  const server = createFakeServer({ uidNext: 4 });
+  server.add(message({ uid: 1, subject: "Older one" }));
+  server.add(message({ uid: 2, subject: "Older two" }));
+  server.add(message({ uid: 3, subject: "Older three" }));
+  const host = fakeHost({
+    instances: [oneAccount()],
+    servers: { "mailbox#acc_1": server },
+    settings: { importantSenders: "boss@example.com" },
+  });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    // The baseline is "watch from here": the three messages already there are
+    // behind the cursor and are not in the list.
+    assert.equal((await panel(plugin, "inbox.snapshot")).snapshot.messages.length, 0);
+    server.add(message({ uid: 4, subject: "Newest", bodyText: "The newest one." }));
+    const before = await checkUntil(plugin, 1, "the newest message");
+    const notified = host.notifications.length;
+    const result = await panel(plugin, "inbox.loadOlder", { accountId: "acc_1" });
+    assert.equal(result.ok, true);
+    assert.equal(result.added, 3, "the three messages below the oldest UID the panel had");
+    const after = (await panel(plugin, "inbox.snapshot")).snapshot;
+    assert.deepEqual(
+      after.messages.map((entry) => entry.subject),
+      ["Newest", "Older three", "Older two", "Older one"],
+    );
+    assert.equal(host.notifications.length, notified, "browsing older mail is not news");
+    assert.equal(readState(host).accounts.acc_1.cursor.maxUid, 4, "the cursor did not move");
+    const again = await panel(plugin, "inbox.loadOlder", { accountId: "acc_1" });
+    assert.equal(again.added, 0);
+    assert.equal(again.atEnd, true);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});

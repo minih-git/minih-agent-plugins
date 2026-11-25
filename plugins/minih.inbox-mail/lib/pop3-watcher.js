@@ -8,9 +8,9 @@
  * user's phone. This file is therefore the opposite of `lib/watcher.js` — no
  * IDLE, no long-lived socket, one short session per poll:
  *
- *   connect → CAPA (for LOGIN-DELAY) → STAT → UIDL → TOP n 0 per new UIDL → QUIT
+ *   connect → CAPA (for LOGIN-DELAY) → STAT → UIDL → TOP n 12 per new UIDL → QUIT
  *
- * The three rules that shape it:
+ * The rules that shape it:
  *
  * - **Baseline first.** The first poll only records the UIDLs already there. A
  *   mailbox is not a queue of new mail, and a watcher that announced an archive
@@ -18,8 +18,13 @@
  * - **UIDL is the identity.** A message number is only valid inside one session,
  *   so what is remembered is the UIDL, bounded (`store.POP3_UIDL_LIMIT`), and the
  *   number is looked up again every time a message has to be read.
- * - **Never `DELE`.** `lib/pop3.js` has no `DELE` at all, so nothing here can
- *   remove the user's mail, and `QUIT` therefore commits nothing.
+ * - **`DELE` only from a click.** Nothing in the poll path can send it: the one
+ *   caller is `deleteMessage`, which the panel reaches after the user confirmed,
+ *   and it ends with `QUIT` so the removal is committed. A poll that sends
+ *   `QUIT` without a `DELE` commits nothing.
+ * - **`TOP n 12` for the preview.** Twelve body lines are enough for the list's
+ *   one-line summary and are not the message; opening a message is still the only
+ *   way to read it.
  *
  * The poll interval is five minutes by default and never shorter than the
  * `LOGIN-DELAY` the server advertises; a failure backs off 5 s doubling to five
@@ -27,9 +32,11 @@
  * waiting for the next interval.
  */
 
+const body = require("./body");
 const mime = require("./mime");
 const rules = require("./rules");
 const store = require("./store");
+const summary = require("./summary");
 
 /** Every account is checked this often, POP3 included. */
 const DEFAULT_POLL_MS = 3 * 60 * 1000;
@@ -45,6 +52,15 @@ const LOGIN_DELAY_MARGIN_MS = 5_000;
 const HEADER_FALLBACK_BYTES = 64 * 1024;
 /** A backlog is drained a batch per second rather than a batch per interval. */
 const CATCH_UP_MS = 1_000;
+/**
+ * Body lines `TOP` returns with the headers, for the list's preview.
+ *
+ * `TOP n 0` is headers only; twelve lines of body is what a preview needs and is
+ * far less than a message, so a poll still never downloads mail.
+ */
+const PREVIEW_LINES = 12;
+/** How many older headers one "load older" round reads. */
+const OLDER_LIMIT = 50;
 
 function coded(code, message) {
   return Object.assign(new Error(message), { code });
@@ -63,12 +79,53 @@ function senderOf(headers) {
 }
 
 /**
+ * The addresses one header field carries, as `{ name, address }`.
+ *
+ * A header block is what POP3 gives before the body: `To:` and `Cc:` are lists
+ * separated by commas, with display names either quoted or before the angle
+ * brackets. Splitting on a comma that sits inside quotes would break
+ * `"Doe, Jane" <j@example.com>`, so the split tracks quotes and angle brackets.
+ */
+function recipientsOf(headers, field) {
+  const raw = mime.headerValue(headers, field).trim();
+  if (!raw) return [];
+  const parts = [];
+  let current = "";
+  let quoted = false;
+  let angle = 0;
+  for (const char of raw) {
+    if (char === '"') quoted = !quoted;
+    else if (!quoted && char === "<") angle += 1;
+    else if (!quoted && char === ">") angle = Math.max(0, angle - 1);
+    if (char === "," && !quoted && angle === 0) {
+      parts.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  parts.push(current);
+  const list = [];
+  for (const part of parts) {
+    const angleMatch = /<([^>]+)>\s*$/.exec(part);
+    const address = (angleMatch ? angleMatch[1] : part).replace(/^"|"$/g, "").trim();
+    if (!address) continue;
+    const name = angleMatch ? part.slice(0, angleMatch.index).trim().replace(/^"|"$/g, "").trim() : "";
+    list.push({ name, address });
+    if (list.length >= store.MAX_RECIPIENTS) break;
+  }
+  return list;
+}
+
+/**
  * One message's identity and envelope, from its header block.
  *
  * `key` is the UIDL-derived name the panel, the digest queue and the notification
  * dedupe key all use, because the message number in `uid` moves between sessions.
+ * `preview` is the first lines of the body `TOP` brought along, summarized the
+ * same way an IMAP fragment is.
  */
-function toMessage(headers, entry) {
+function toMessage(headers, entry, preview = null) {
   const received = Date.parse(mime.headerValue(headers, "date"));
   return {
     key: store.pop3Key(entry.uidl),
@@ -78,6 +135,12 @@ function toMessage(headers, entry) {
     from: senderOf(headers),
     subject: mime.headerValue(headers, "subject"),
     receivedAt: Number.isFinite(received) ? received : null,
+    to: recipientsOf(headers, "to"),
+    cc: recipientsOf(headers, "cc"),
+    summary: preview && preview.bytes ? summary.summarizeFragment(preview.bytes, preview) : "",
+    // POP3 has no `BODYSTRUCTURE`; the header block is all this protocol offers,
+    // so the attachment icon stays off rather than guessing.
+    hasAttachments: false,
   };
 }
 
@@ -160,19 +223,42 @@ function createPop3Watcher(deps) {
   }
 
   /**
-   * The header block of one message.
+   * One message's header block, and the first body lines behind it.
    *
-   * `TOP n 0` is what the plan asks for, and it is the right command: headers
-   * only, no body, no read state. `TOP` is optional (RFC 2449), so a server that
-   * refuses it gets a capped `RETR` instead — the headers are the first bytes of
-   * a message, and the rest is drained and dropped by the client.
+   * `TOP n <lines>` is the right command: headers, plus as many body lines as the
+   * list's preview needs, and no read state either way. `TOP` is optional
+   * (RFC 2449), so a server that refuses it gets a capped `RETR` instead — the
+   * headers are the first bytes of a message, and the rest is drained and dropped
+   * by the client.
+   *
+   * @returns `{ headers, preview }` where `preview` is `{ bytes, contentType,
+   *   transferEncoding }` or `null` when the server sent no body at all.
    */
   async function headerBlock(client, entry) {
-    const top = await client.top(entry.number, 0);
-    if (top) return top;
+    const top = await client.top(entry.number, PREVIEW_LINES);
+    if (top) return splitMessage(top);
     deps.log("info", "this POP3 server has no TOP; reading headers with a capped RETR");
     const partial = await client.retr(entry.number, { maxBytes: options.headerFallbackBytes });
-    return partial.body;
+    return splitMessage(partial.body);
+  }
+
+  /**
+   * One raw message prefix as `{ headers, preview }`.
+   *
+   * The same split `lib/body.js` does for a whole message, reused here so a
+   * `TOP` reply and a capped `RETR` are read the same way.
+   */
+  function splitMessage(bytes) {
+    const entity = body.splitEntity(bytes);
+    const headers = mime.parseHeaders(entity.header);
+    const preview = entity.body.length
+      ? {
+          bytes: entity.body,
+          contentType: mime.headerValue(headers, "content-type"),
+          transferEncoding: mime.headerValue(headers, "content-transfer-encoding"),
+        }
+      : null;
+    return { headers, preview };
   }
 
   async function flushDigest(settings, force) {
@@ -216,8 +302,8 @@ function createPop3Watcher(deps) {
       let handled = 0;
       for (const entry of batch) {
         try {
-          const headers = mime.parseHeaders(await headerBlock(client, entry));
-          const message = toMessage(headers, entry);
+          const { headers, preview } = await headerBlock(client, entry);
+          const message = toMessage(headers, entry, preview);
           const verdict = rules.classify(message, settings, headers);
           // The panel's list is filled from the same headers the notification
           // decided on, so the two can never disagree about importance.
@@ -232,6 +318,10 @@ function createPop3Watcher(deps) {
             // POP3 reports no flags at all: nothing here is read or starred.
             flags: [],
             important: verdict.level === "alert",
+            summary: message.summary,
+            to: message.to,
+            cc: message.cc,
+            hasAttachments: message.hasAttachments,
           });
           if (verdict.level === "alert") {
             store.rememberSeen(state, message.key);
@@ -398,6 +488,68 @@ function createPop3Watcher(deps) {
       });
     },
 
+    /**
+     * The headers of the messages just before `key` in the maildrop, oldest first.
+     *
+     * POP3 has no ordering beyond maildrop order, which is arrival order: "older"
+     * therefore means "the messages whose UIDL the server lists before this one".
+     * The list is bounded so one click cannot turn into a full-mailbox transfer.
+     */
+    async loadOlder({ beforeKey, limit = OLDER_LIMIT } = {}) {
+      const wanted = String(beforeKey ?? "");
+      if (!wanted) throw coded("INVALID_ARGUMENT", "a message key is required");
+      return withConnection(async (client) => {
+        const listing = await client.uidl();
+        const index = listing.findIndex((entry) => store.pop3Key(entry.uidl) === wanted);
+        if (index < 0) throw coded("MESSAGE_NOT_FOUND", "the mailbox no longer holds this message");
+        const slice = listing.slice(Math.max(0, index - Math.max(1, limit)), index);
+        const messages = [];
+        for (const entry of slice) {
+          try {
+            const { headers, preview } = await headerBlock(client, entry);
+            const message = toMessage(headers, entry, preview);
+            store.recordEnvelope(state, {
+              key: message.key,
+              uid: message.uid,
+              uidValidity: null,
+              messageId: message.messageId,
+              from: message.from,
+              subject: message.subject,
+              receivedAt: message.receivedAt,
+              flags: store.findEnvelope(state, message.key)?.flags ?? [],
+              important: store.findEnvelope(state, message.key)?.important ?? false,
+              summary: message.summary,
+              to: message.to,
+              cc: message.cc,
+              hasAttachments: message.hasAttachments,
+            });
+            messages.push(message);
+          } catch (error) {
+            deps.log("warn", `POP3: could not read message ${entry.number}: ${error?.message ?? error}`);
+          }
+        }
+        return messages;
+      });
+    },
+
+    /**
+     * `DELE` one message, then end the session so `QUIT` commits it.
+     *
+     * This is the only path to `DELE` in the plugin, and it exists because the
+     * user pressed delete and confirmed it. POP3 cannot undo it: there is no
+     * trash, so the panel asks first and says so.
+     */
+    async deleteMessage(key) {
+      const wanted = String(key ?? "");
+      if (!wanted) throw coded("INVALID_ARGUMENT", "a message key is required");
+      return withConnection(async (client) => {
+        const listing = await client.uidl();
+        const target = listing.find((entry) => store.pop3Key(entry.uidl) === wanted);
+        if (!target) throw coded("MESSAGE_NOT_FOUND", "the mailbox no longer holds this message");
+        await client.dele(target.number);
+        return { number: target.number, uidl: target.uidl };
+      });
+    },
     async stop() {
       stopped = true;
       stopTimer();
@@ -413,7 +565,10 @@ module.exports = {
   DEFAULT_POLL_MS,
   HEADER_FALLBACK_BYTES,
   MAX_FETCH_PER_CYCLE,
+  OLDER_LIMIT,
+  PREVIEW_LINES,
   createPop3Watcher,
+  recipientsOf,
   senderOf,
   toMessage,
 };

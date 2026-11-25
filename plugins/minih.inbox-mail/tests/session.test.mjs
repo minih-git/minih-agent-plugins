@@ -58,7 +58,7 @@ test("a BYE rejects whatever was waiting and closes the session", async () => {
   await assert.rejects(() => pending, (error) => ["IMAP_BYE", "IMAP_CLOSED", "CONNECT_FAILED"].includes(error.code));
 });
 
-test("a fetch asks for headers only, never for the body", async () => {
+test("a fetch asks for headers, a capped text preview and the structure, never the body", async () => {
   const server = createFakeServer({ uidNext: 1 });
   server.add(message({ uid: 1 }));
   const session = connect(server, { timeoutMs: 500 });
@@ -66,10 +66,20 @@ test("a fetch asks for headers only, never for the body", async () => {
   const [item] = await session.fetch([1]);
   assert.equal(item.uid, 1);
   const fetchLine = server.sentLines.find((line) => line.includes("UID FETCH"));
-  assert.match(fetchLine, /BODY\.PEEK\[HEADER\.FIELDS \(FROM SUBJECT DATE MESSAGE-ID IMPORTANCE X-PRIORITY X-MSMail-Priority\)\]/);
+  // The headers, the type and encoding the preview needs, and the structure that
+  // says whether there is an attachment: one command, no second round trip.
+  assert.match(
+    fetchLine,
+    /BODY\.PEEK\[HEADER\.FIELDS \(FROM SUBJECT DATE MESSAGE-ID CONTENT-TYPE CONTENT-TRANSFER-ENCODING IMPORTANCE X-PRIORITY X-MSMail-Priority\)\]/,
+  );
+  assert.match(fetchLine, /BODYSTRUCTURE/);
+  // A capped peek of the text, which is what the list's summary is built from.
+  assert.match(fetchLine, /BODY\.PEEK\[TEXT\]<0\.4096>/);
+  // And never the whole message: that is what opening it is for.
+  assert.doesNotMatch(fetchLine, /BODY\.PEEK\[\]/);
+  assert.equal(server.bodyFetches.length, 0, "no body was downloaded");
   await session.close();
 });
-
 test("search above the cursor never returns the mailbox's last message again", async () => {
   const server = createFakeServer({ uidNext: 3 });
   server.add(message({ uid: 1 }));

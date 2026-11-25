@@ -152,27 +152,25 @@ test("a server without TOP is answered with null, not an exception", async () =>
   await client.close();
 });
 
-test("the client cannot delete: there is no DELE, and a whole session never sends one", async () => {
+test("DELE is one explicit call, and a reading session never sends it", async () => {
   const server = createFakePop3Server({ messages: [popMessage({ uidl: "AAA" }), popMessage({ uidl: "BBB" })] });
   const client = createClient(server.accept(), { timeoutMs: 400 });
-  assert.equal(typeof client.dele, "undefined");
   await client.capabilities();
   await client.stat();
   await client.uidl();
-  await client.top(1, 0);
+  await client.top(1, 12);
   await client.retr(2, { maxBytes: 1024 });
+  // Nothing above this line may delete: not CAPA, not a poll, not a read.
+  assert.deepEqual(server.deleteRequests, []);
+  await client.dele(1);
   await client.close();
-  assert.equal(
-    server.sentLines.some((line) => /^DELE\b/i.test(line)),
-    false,
-    "deleting the user's mail is not a thing this client can do",
-  );
+  assert.deepEqual(server.deleteRequests, [1], "exactly the message the caller named");
   assert.deepEqual(
     server.sentLines.map((line) => line.split(" ")[0]),
-    ["CAPA", "STAT", "UIDL", "TOP", "RETR", "QUIT"],
+    ["CAPA", "STAT", "UIDL", "TOP", "RETR", "DELE", "QUIT"],
+    "the session ends with QUIT, which is what commits the removal",
   );
 });
-
 test("a server that stops answering fails the command instead of hanging", async () => {
   const transport = scriptedTransport();
   const client = createClient(transport, { timeoutMs: 20 });

@@ -8,12 +8,13 @@
  * `net.tcp.connect` resolves the socket is in the transaction state and this
  * file owns everything after it:
  *
- *   CAPA, STAT, UIDL, TOP, RETR, QUIT — and no `DELE`, no `LIST`, no `RSET`.
+ *   CAPA, STAT, UIDL, TOP, RETR, DELE, QUIT — and no `LIST`, no `RSET`.
  *
- * `DELE` is the one POP3 command that changes the user's mail, and this plugin
- * promises not to change it, so the command is not implemented at all: a caller
- * cannot send it by mistake. A message is read with `TOP n 0` while watching and
- * with a capped `RETR` when the user opens it.
+ * `DELE` is the one POP3 command that removes the user's mail, so it is
+ * reachable from exactly one place: `deleteMessage` in `lib/pop3-watcher.js`,
+ * which the Inbox panel calls after the user confirmed. Polling, reading and
+ * opening a message never send it; a message is read with `TOP n 0` while
+ * watching and with a capped `RETR` when the user opens it.
  *
  * Parsing is the whole job here. A POP3 response is one status line and, for the
  * multi-line commands, a run of lines ended by a line containing a single dot;
@@ -283,12 +284,30 @@ function createClient(transport, options = {}) {
         truncated: maxBytes > 0 && reply.size > body.length,
       };
     },
+    /**
+     * `DELE n`: mark one message for removal in this session.
+     *
+     * POP3 is two-phase: `DELE` only marks the message, and the removal happens
+     * when the session ends with `QUIT` — which `close()` sends. That is exactly
+     * the semantics the panel needs ("delete" is final, there is no undo), and it
+     * is also why the caller has to confirm with the user first: a later `RSET`
+     * would be the only way back, and this client does not offer one.
+     *
+     * Reachable only from `deleteMessage` in `lib/pop3-watcher.js`.
+     */
+    async dele(number) {
+      if (!Number.isInteger(number) || number < 1) {
+        throw coded("INVALID_ARGUMENT", "DELE needs a message number");
+      }
+      must(await request(`DELE ${number}`), "DELE");
+      return { number };
+    },
 
     /**
      * Best-effort `QUIT`, then drop the socket. Never throws.
      *
-     * `QUIT` in the transaction state leaves every message in the maildrop: it
-     * commits nothing, because nothing was marked.
+     * `QUIT` in the transaction state commits whatever was marked with `DELE` —
+     * and, when nothing was marked, it simply leaves the maildrop as it was.
      */
     close() {
       if (closing) return closing;

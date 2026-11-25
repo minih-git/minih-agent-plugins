@@ -248,8 +248,10 @@ function addressesFromList(list) {
 }
 
 /**
- * ENVELOPE is ten positional fields; only the six this plugin uses are read, and
- * they are read by position because that is the only thing the server sends.
+ * ENVELOPE is ten positional fields; only the eight this plugin uses are read,
+ * and they are read by position because that is the only thing the server sends:
+ * date, subject, from, sender, reply-to, **to**, **cc**, bcc, in-reply-to,
+ * message-id.
  */
 function parseEnvelope(list) {
   if (!Array.isArray(list)) return null;
@@ -260,6 +262,8 @@ function parseEnvelope(list) {
     from: addressesFromList(list[2]),
     sender: addressesFromList(list[3]),
     replyTo: addressesFromList(list[4]),
+    to: addressesFromList(list[5]),
+    cc: addressesFromList(list[6]),
     messageId: text(list[9]).trim(),
   };
 }
@@ -273,6 +277,13 @@ function readFetchItems(list) {
     headers: null,
     /** The whole message, when the fetch asked for `BODY[]`. */
     body: null,
+    /**
+     * `BODY[TEXT]<0.N>`: the first bytes of the message's text, asked for only
+     * to build the list's one-line summary. Never the whole body.
+     */
+    text: null,
+    /** `BODYSTRUCTURE`, so the list can show an attachment icon. */
+    structure: null,
     /** `RFC822.SIZE`, the message's real size, so a capped fetch knows what it lost. */
     size: null,
     /** True when the server sent a partial section (`BODY[]<0>`). */
@@ -303,22 +314,37 @@ function readFetchItems(list) {
       i += 1;
       continue;
     }
+    // `BODYSTRUCTURE` (and its short form `BODY`) is what says whether a
+    // message carries an attachment; every server that can serve IMAP at all
+    // answers it, and it costs no extra command when it rides along a FETCH.
+    if (upper === "BODYSTRUCTURE" || upper === "BODY") {
+      item.structure = Array.isArray(value) ? value : null;
+      i += 1;
+      continue;
+    }
     if (upper === "RFC822.SIZE") {
       item.size = typeof value === "string" ? Number(value) : null;
       i += 1;
       continue;
     }
     // The server echoes the section without the `.PEEK` that asked for it, so
-    // the check is on the prefix, not on an exact name. An empty section name is
-    // the whole message; a named one is the header block this plugin asks for.
+    // the check is on the prefix, not on an exact name. Three sections matter:
+    // an empty one is the whole message, `HEADER…` is the header block, and
+    // `TEXT` is the body of the message — which is the summary fragment when the
+    // request capped it.
     if (upper.startsWith("BODY[")) {
       const section = /^BODY\[([^\]]*)\]/i.exec(key);
-      if (section && section[1].trim() === "") {
+      const name = section ? section[1].trim().toUpperCase() : "";
+      if (!section || !name) {
         item.body = Buffer.isBuffer(value) ? value : null;
         item.partial = /^BODY\[\s*\]<\d+>/i.test(key);
-      } else {
+      } else if (name === "TEXT" || name.startsWith("TEXT.")) {
+        item.text = Buffer.isBuffer(value) ? value : null;
+      } else if (name.startsWith("HEADER")) {
         item.headers = Buffer.isBuffer(value) ? value : null;
       }
+      // A numbered section (`BODY[1]`) belongs to the full body fetch, which
+      // reads `BODY[]`: nothing here asks for one.
       i += 1;
       continue;
     }
@@ -334,6 +360,38 @@ function readFetchItems(list) {
     }
   }
   return item;
+}
+
+/**
+ * Whether a `BODYSTRUCTURE` describes a message with an attachment.
+ *
+ * The structure is the server's own tree: nested lists for multipart bodies,
+ * each leaf ending in its type, parameters, size and optional disposition. What
+ * matters for the list's icon is whether any part declares an attachment
+ * disposition or carries a file name — nothing is downloaded to find out.
+ */
+function hasAttachments(structure) {
+  const walk = (node) => {
+    if (!Array.isArray(node)) return false;
+    for (let i = 0; i < node.length; i += 1) {
+      const child = node[i];
+      if (Array.isArray(child)) {
+        if (walk(child)) return true;
+        continue;
+      }
+      if (typeof child !== "string") continue;
+      const upper = child.toUpperCase();
+      if (upper === "ATTACHMENT") return true;
+      // A `("FILENAME" "x.pdf")` or `("NAME" "y.png")` parameter pair. `NIL` is
+      // the server saying "no value", not a file called NIL.
+      if (upper === "FILENAME" || upper === "NAME") {
+        const next = node[i + 1];
+        if (typeof next === "string" && next.trim() && next.toUpperCase() !== "NIL") return true;
+      }
+    }
+    return false;
+  };
+  return walk(structure);
 }
 
 /**
@@ -358,6 +416,13 @@ function parseUntagged(tokens) {
   }
   if (typeof second === "string") {
     const upper = second.toUpperCase();
+    // `* LIST (\\HasNoChildren \\Trash) "/" "Trash"`: the flags a special-use
+    // mailbox declares, then the delimiter, then the name.
+    if (upper === "LIST" || upper === "LSUB") {
+      const flags = Array.isArray(tokens[2]) ? tokens[2].filter((token) => typeof token === "string") : [];
+      const rest = tokens.slice(3).filter((token) => typeof token === "string");
+      return { kind: "list", flags, delimiter: rest.length > 1 ? rest[0] : "", name: rest[rest.length - 1] ?? "" };
+    }
     if (upper === "OK" || upper === "NO" || upper === "BAD" || upper === "BYE" || upper === "PREAUTH") {
       const code = parseResponseCode(tokens, 2);
       const number = code ? /^([0-9]+)$/.exec(code.args.trim()) : null;
@@ -409,6 +474,7 @@ function parseTagged(tokens) {
 
 module.exports = {
   createParser,
+  hasAttachments,
   kindOf,
   parseEnvelope,
   parseResponseCode,

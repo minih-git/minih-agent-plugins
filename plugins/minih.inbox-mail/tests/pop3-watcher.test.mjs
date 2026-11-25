@@ -103,8 +103,8 @@ test("a message that arrives after the baseline is announced once, by UIDL", asy
     assert.equal(alert.kind, "alert");
     assert.equal(alert.message.subject, "预算");
     assert.equal(alert.message.key, "pop3:CCC");
-    // The header block came from TOP, never from a whole message.
-    assert.ok(server.sentLines.includes("TOP 2 0"), server.sentLines.join(" | "));
+    // The header block came from TOP, with the few body lines the preview needs.
+    assert.ok(server.sentLines.includes("TOP 2 12"), server.sentLines.join(" | "));
     assert.equal(server.sentLines.some((line) => line.startsWith("RETR")), false);
 
     const envelope = harness.state.messages.find((entry) => entry.key === "pop3:CCC");

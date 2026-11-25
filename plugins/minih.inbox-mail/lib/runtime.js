@@ -27,6 +27,7 @@
 const body = require("./body");
 const accountsFile = require("./accounts");
 const { createGate } = require("./gate");
+const mailboxes = require("./mailboxes");
 const messages = require("./messages");
 const pop3 = require("./pop3");
 const { createPop3Watcher } = require("./pop3-watcher");
@@ -51,6 +52,14 @@ const BODY_TIMEOUT_MS = 20_000;
 const MAX_CONNECTIONS = 4;
 /** Accounts start their first poll this far apart. */
 const STAGGER_MS = 1_500;
+/**
+ * How many older envelopes one "load older" click asks for.
+ *
+ * Fifty is a few screens of list and about two hundred kilobytes of envelope,
+ * which is what keeps a mailbox with tens of thousands of messages responsive on
+ * a connection that is one short session.
+ */
+const OLDER_PAGE_SIZE = 50;
 
 function coded(code, message) {
   return Object.assign(new Error(message), { code });
@@ -62,10 +71,80 @@ function createRuntime(deps) {
   const log = deps.log ?? (() => {});
   const accounts = new Map();
   const gate = deps.gate ?? createGate(MAX_CONNECTIONS);
+  /**
+   * Which mailbox is the trash and which the archive, per account.
+   *
+   * Learned with one `LIST` on a session the account already had, cached until
+   * the account's connection changes, and used to decide whether the panel shows
+   * a delete or an archive button at all.
+   */
+  const folders = mailboxes.createFolderCache();
   let loaded = false;
 
   const accountStateOf = (instanceId) => accountsFile.accountState(root, instanceId);
   const providerOf = (instanceId) => accountsFile.providerOf(root, instanceId);
+
+  /**
+   * The folders this account offers, or `null` when the answer is not known yet.
+   *
+   * POP3 has no folders at all, so its answer is a constant; IMAP needs one
+   * `LIST`, which the first poll of a session does and this cache then keeps.
+   */
+  function foldersOf(record) {
+    if (record.protocol === "pop3") return { trash: null, archive: null, specialUse: false };
+    return folders.get(record.instanceId, record.connectionKey);
+  }
+
+  /**
+   * Learn (once) which mailbox is the trash and which is the archive.
+   *
+   * Called from a session the caller already opened, so it costs one `LIST` per
+   * account and connection — never one per click.
+   */
+  async function ensureFolders(record, session, capabilities) {
+    const cached = foldersOf(record);
+    if (cached) return cached;
+    const list = await session.listMailboxes({ specialUse: capabilities.includes("SPECIAL-USE") });
+    return folders.set(record.instanceId, record.connectionKey, mailboxes.resolveFolders(list));
+  }
+
+  /**
+   * Take one message out of the inbox and put it in `destination`.
+   *
+   * Three commands at most, in the order that leaves the mailbox consistent if
+   * one of them fails: a `MOVE` where the server has one, otherwise a `COPY` that
+   * is then deleted exactly. A server with neither is refused with a code instead
+   * of falling back to a mailbox-wide `EXPUNGE`, which would remove other
+   * clients' `\Deleted` messages too.
+   */
+  async function moveOutOfInbox(session, capabilities, uid, destination) {
+    const supported = new Set(capabilities.map((value) => String(value).toUpperCase()));
+    if (supported.has("MOVE")) {
+      await session.moveMessage(uid, destination);
+      return "move";
+    }
+    if (supported.has("UIDPLUS")) {
+      await session.copyMessage(uid, destination);
+      await session.storeFlags(uid, { add: ["\\Deleted"], remove: [] });
+      await session.expungeUid(uid);
+      return "copy-expunge";
+    }
+    throw coded("MOVE_UNSUPPORTED", "this server can neither move nor expunge a single message");
+  }
+
+  /** The account a panel call names, or the coded refusal the panel can translate. */
+  function requireAccount(instanceId) {
+    const record = accounts.get(String(instanceId ?? ""));
+    if (!record) throw coded("ACCOUNT_NOT_FOUND", "this mailbox is not in the list");
+    return record;
+  }
+
+  /** One message's envelope from this account's list, or a coded refusal. */
+  function requireEnvelope(state, key) {
+    const envelope = store.findEnvelope(state, String(key ?? ""));
+    if (!envelope) throw coded("MESSAGE_NOT_FOUND", "this message is not in the list");
+    return envelope;
+  }
 
   /**
    * Wrap the host's TCP handle as the stream `lib/session.js` speaks.
@@ -275,6 +354,12 @@ function createRuntime(deps) {
       // account so a restart does not connect every mailbox in the same second.
       gate,
       staggerMs: [...accounts.keys()].indexOf(record.instanceId) * STAGGER_MS,
+      // One `LIST` per account and connection, on a session the poll already
+      // opened: that is what tells the panel whether delete and archive exist.
+      probeFolders: async (session, capabilities) => {
+        if (foldersOf(snapshot)) return;
+        await ensureFolders(snapshot, session, capabilities);
+      },
     };
     // One protocol, one watcher: both poll, but IMAP and POP3 speak differently.
     // The panel and the notifications are the same code for both, which is why the
@@ -312,6 +397,7 @@ function createRuntime(deps) {
     for (const instanceId of removed) {
       const record = accounts.get(instanceId);
       accounts.delete(instanceId);
+      folders.forget(instanceId);
       if (record) await stopAccount(record);
     }
     let startedAny = false;
@@ -421,6 +507,8 @@ function createRuntime(deps) {
 
   function accountView(record, locale) {
     const provider = record.custom ? null : providers.findProvider(record.provider);
+    const state = accountStateOf(record.instanceId);
+    const known = foldersOf(record);
     return {
       instanceId: record.instanceId,
       label: record.label,
@@ -436,6 +524,14 @@ function createRuntime(deps) {
       missingServer: record.missingServer === true,
       // What the panel may offer: a POP3 mailbox has no read or starred state.
       flagsSupported: record.protocol !== "pop3",
+      // Delete moves the message to the trash on IMAP, and is final on POP3; both
+      // are offered, and the panel is what asks before the final one. Archive
+      // needs a mailbox to archive into, which only a `LIST` can tell.
+      canDelete: record.protocol === "imap" || record.protocol === "pop3",
+      canArchive: Boolean(known?.archive),
+      // The list is bounded per account; once it is full the panel stops offering
+      // "load older" and says the limit was reached.
+      messageCount: state.messages.length,
       provider: record.custom
         ? {
             id: providers.CUSTOM_PROVIDER_ID,
@@ -486,6 +582,12 @@ function createRuntime(deps) {
           readLocally: flagsSupported ? null : store.hasReadLocally(state, envelope.key),
           starred: flagsSupported ? envelope.flags.includes("\\Flagged") : null,
           important: envelope.important,
+          // The list's second line, and the two facts the reading pane shows
+          // without opening the message body.
+          summary: envelope.summary,
+          to: envelope.to,
+          cc: envelope.cc,
+          hasAttachments: envelope.hasAttachments,
         });
       }
     }
@@ -679,6 +781,106 @@ function createRuntime(deps) {
       return { accountId: record.instanceId, key: envelope.key, flags: flags ?? envelope.flags };
     },
 
+    /**
+     * Walk back through one mailbox for the panel's "load older".
+     *
+     * Bounded twice: the panel's list holds at most `store.MESSAGES_LIMIT`
+     * envelopes per account, and `limit` is what is left of that budget. Nothing
+     * is announced — this is browsing, not watching — and the cursor is untouched,
+     * so the next poll still starts from the newest handled message.
+     */
+    async loadOlder(input) {
+      const record = requireAccount(input?.accountId);
+      const state = accountStateOf(record.instanceId);
+      if (!record.watcher) throw coded("ACCOUNT_OFFLINE", "this mailbox is not connected yet");
+      const remaining = store.MESSAGES_LIMIT - state.messages.length;
+      if (remaining <= 0) return { added: 0, reachedLimit: true, atEnd: false };
+      const limit = Math.min(OLDER_PAGE_SIZE, remaining);
+      let added = 0;
+      if (record.protocol === "pop3") {
+        // The list is newest first, so its last entry is the oldest the panel
+        // holds; POP3 counts "older" in maildrop order, which matches arrival.
+        const oldest = state.messages[state.messages.length - 1];
+        if (!oldest) return { added: 0, reachedLimit: false, atEnd: true };
+        const older = await record.watcher.loadOlder({ beforeKey: oldest.key, limit });
+        added = older.length;
+      } else {
+        const beforeUid = store.oldestUid(state);
+        if (!beforeUid) return { added: 0, reachedLimit: false, atEnd: true };
+        const older = await record.watcher.loadOlder({ beforeUid, limit });
+        added = older.length;
+      }
+      await deps.persist();
+      return {
+        added,
+        atEnd: added === 0,
+        reachedLimit: state.messages.length >= store.MESSAGES_LIMIT,
+      };
+    },
+
+    /**
+     * Delete one message, because the user asked for that one.
+     *
+     * IMAP moves it to the trash: `UID MOVE` where the server has it, otherwise
+     * `UID COPY` + `\Deleted` + `UID EXPUNGE` of that one UID. A mailbox with
+     * neither, or with no trash to move into, is refused with a code — there is no
+     * mailbox-wide `EXPUNGE` anywhere in this plugin. POP3 has no trash at all, so
+     * `DELE` is final and the session is ended with `QUIT` to commit it.
+     *
+     * The envelope leaves the list only after the server agreed.
+     */
+    async deleteMessage(input) {
+      const record = requireAccount(input?.accountId);
+      const state = accountStateOf(record.instanceId);
+      const envelope = requireEnvelope(state, input?.key);
+      if (!record.watcher) throw coded("ACCOUNT_OFFLINE", "this mailbox is not connected yet");
+      if (record.protocol === "pop3") {
+        await record.watcher.deleteMessage(envelope.key);
+        store.removeEnvelope(state, envelope.key);
+        store.pop3Forget(state, envelope.key.replace(/^pop3:/, ""));
+        await deps.persist();
+        return { accountId: record.instanceId, key: envelope.key, removed: true, final: true, folder: null };
+      }
+      const result = await record.watcher.withSession(async (session, box, capabilities) => {
+        const known = await ensureFolders(record, session, capabilities);
+        if (!known?.trash) {
+          throw coded("NO_TRASH_FOLDER", "this mailbox has no trash folder to move the message to");
+        }
+        const how = await moveOutOfInbox(session, capabilities, envelope.uid, known.trash);
+        return { folder: known.trash, how };
+      });
+      store.removeEnvelope(state, envelope.key);
+      await deps.persist();
+      return { accountId: record.instanceId, key: envelope.key, removed: true, final: false, ...result };
+    },
+
+    /**
+     * Archive one message, because the user asked for that one.
+     *
+     * IMAP only, and only when a `LIST` found an archive mailbox: the special-use
+     * `\Archive` first, then the names a provider's web interface shows (Gmail's
+     * `[Gmail]/All Mail` behaves as one over IMAP). POP3 has no folders, so the
+     * panel never offers this there.
+     */
+    async archive(input) {
+      const record = requireAccount(input?.accountId);
+      const state = accountStateOf(record.instanceId);
+      const envelope = requireEnvelope(state, input?.key);
+      if (record.protocol === "pop3") throw coded("NO_ARCHIVE_FOLDER", "POP3 has no folders to archive into");
+      if (!record.watcher) throw coded("ACCOUNT_OFFLINE", "this mailbox is not connected yet");
+      const result = await record.watcher.withSession(async (session, box, capabilities) => {
+        const known = await ensureFolders(record, session, capabilities);
+        if (!known?.archive) {
+          throw coded("NO_ARCHIVE_FOLDER", "this mailbox has no archive folder");
+        }
+        const how = await moveOutOfInbox(session, capabilities, envelope.uid, known.archive);
+        return { folder: known.archive, how };
+      });
+      store.removeEnvelope(state, envelope.key);
+      await deps.persist();
+      return { accountId: record.instanceId, key: envelope.key, removed: true, ...result };
+    },
+
     /** Open a provider's web mailbox in the user's own browser. */
     async openWebmail(instanceId) {
       const record = accounts.get(String(instanceId ?? ""));
@@ -710,4 +912,4 @@ function createRuntime(deps) {
   };
 }
 
-module.exports = { BODY_LIMIT, BODY_TIMEOUT_MS, SLOT_ID, createRuntime };
+module.exports = { BODY_LIMIT, BODY_TIMEOUT_MS, OLDER_PAGE_SIZE, SLOT_ID, createRuntime };

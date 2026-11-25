@@ -74,6 +74,8 @@ export function createFakePop3Server(options = {}) {
     offline: false,
     sent: [],
     connects: 0,
+    /** Every `DELE n` the client sent, as the message numbers it named. */
+    deleteRequests: [],
   };
   let dataListener = null;
   let closeListener = null;
@@ -115,14 +117,19 @@ export function createFakePop3Server(options = {}) {
       push("-ERR TOP not supported\r\n");
       return;
     }
-    const number = Number(/^TOP\s+(\d+)/i.exec(command)?.[1] ?? 0);
+    const match = /^TOP\s+(\d+)\s+(\d+)/i.exec(command);
+    const number = Number(match?.[1] ?? 0);
+    const count = Number(match?.[2] ?? 0);
     const entry = server.entries[number - 1];
     if (!entry) {
       push("-ERR no such message\r\n");
       return;
     }
-    // `TOP n 0` is the headers plus the empty line that ends them.
-    push(`+OK top of message ${number}\r\n${multiLine(headersOf(entry).split("\r\n"))}`);
+    // `TOP n m` is the header block, the blank line that ends it, and the first
+    // m lines of the body — which is exactly what the client's preview reads.
+    const headerLines = headersOf(entry).replace(/\r\n\r\n$/, "\r\n").split("\r\n");
+    const bodyLines = String(entry.body ?? "").split("\r\n").slice(0, Math.max(0, count));
+    push(`+OK top of message ${number}\r\n${multiLine([...headerLines, "", ...bodyLines])}`);
   }
 
   function retrReply(command) {
@@ -157,8 +164,10 @@ export function createFakePop3Server(options = {}) {
         } else if (upper === "QUIT") {
           push("+OK bye\r\n");
         } else if (upper.startsWith("DELE ")) {
-          // A real server would mark the message; this one only records it, so a
-          // test can prove the plugin never asks.
+          // A real server marks the message and only removes it at QUIT; this one
+          // records both, so a test can prove the plugin asks for the right one.
+          const number = Number(/^DELE\s+(\d+)/i.exec(line)?.[1] ?? 0);
+          server.deleteRequests.push(number);
           push("+OK marked\r\n");
         } else {
           push("-ERR unknown command\r\n");

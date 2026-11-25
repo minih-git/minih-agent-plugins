@@ -60,6 +60,17 @@ const MAX_SUBJECT = 300;
 const MAX_NAME = 120;
 const MAX_ADDRESS = 320;
 const MAX_MESSAGE_ID = 400;
+/**
+ * How much of a message's text is kept as the list's one-line preview.
+ *
+ * Since 0.4.0 the panel's list shows a summary, so a bounded plain-text prefix
+ * is fetched with the envelope and stored next to it. 140 characters is one
+ * wrapped line in the list: enough to tell two newsletters apart, small enough
+ * that 200 of them are still a few dozen kilobytes.
+ */
+const MAX_SUMMARY = 140;
+/** How many recipients are kept per message, per field. */
+const MAX_RECIPIENTS = 20;
 
 function emptyState() {
   return {
@@ -88,7 +99,33 @@ function isUidl(value) {
   return typeof value === "string" && value.length > 0 && value.length <= 70 && !/[\s\u0000-\u001f\u007f]/.test(value);
 }
 
-/** One stored envelope, normalized; `null` when it cannot name a message. */
+/** One address, from an envelope or from a header, bounded. */
+function normalizeAddress(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const address = text(raw.address, MAX_ADDRESS);
+  if (!address) return null;
+  return { name: text(raw.name, MAX_NAME), address };
+}
+
+/** At most `MAX_RECIPIENTS` addresses, in the order the server sent them. */
+function normalizeAddresses(raw) {
+  if (!Array.isArray(raw)) return [];
+  const list = [];
+  for (const entry of raw) {
+    const address = normalizeAddress(entry);
+    if (!address) continue;
+    if (list.length >= MAX_RECIPIENTS) break;
+    list.push(address);
+  }
+  return list;
+}
+
+/**
+ * One stored envelope, normalized; `null` when it cannot name a message.
+ *
+ * Everything here is bounded: a mailbox cannot make this file grow past
+ * `MESSAGES_LIMIT × (subject + summary + 40 addresses)`.
+ */
 function normalizeEnvelope(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const key = typeof raw.key === "string" ? text(raw.key, MAX_MESSAGE_ID) : "";
@@ -111,6 +148,13 @@ function normalizeEnvelope(raw) {
       ? raw.flags.filter((flag) => typeof flag === "string" && flag.startsWith("\\")).slice(0, 12)
       : [],
     important: raw.important === true,
+    // The list's one-line preview, and the three facts the list and the reading
+    // pane show instead of opening the message: who else got it, and whether it
+    // carried an attachment.
+    summary: text(raw.summary, MAX_SUMMARY),
+    to: normalizeAddresses(raw.to),
+    cc: normalizeAddresses(raw.cc),
+    hasAttachments: raw.hasAttachments === true,
   };
 }
 
@@ -307,21 +351,68 @@ function takeDigest(state) {
  * `MESSAGES_LIMIT`: a mailbox cannot make this file large, which matters
  * because it lives in the plugin's own data folder and nothing prunes it but
  * this module.
+ *
+ * A partial sighting does not erase what an earlier one knew: the same message
+ * can be seen twice (once when it arrives, once when "load older" walks back
+ * over it), and the second look must not blank the summary or the recipients
+ * the first one paid for.
  */
 function recordEnvelope(state, envelope) {
   const entry = normalizeEnvelope(envelope);
   if (!entry) return null;
   const index = state.messages.findIndex((item) => item.key === entry.key);
   if (index >= 0) {
+    const previous = state.messages[index];
     // A re-fetch of the same message refreshes the envelope facts and keeps the
     // flags the server just reported, so a re-read cannot resurrect an old star.
-    state.messages[index] = { ...state.messages[index], ...entry };
+    state.messages[index] = {
+      ...previous,
+      ...entry,
+      summary: entry.summary || previous.summary,
+      to: entry.to.length ? entry.to : previous.to,
+      cc: entry.cc.length ? entry.cc : previous.cc,
+      hasAttachments: entry.hasAttachments || previous.hasAttachments,
+    };
   } else {
     state.messages.push(entry);
   }
   state.messages.sort((a, b) => (b.receivedAt ?? 0) - (a.receivedAt ?? 0) || b.uid - a.uid);
   if (state.messages.length > MESSAGES_LIMIT) state.messages.length = MESSAGES_LIMIT;
   return entry;
+}
+
+/**
+ * Forget one message the mailbox no longer holds.
+ *
+ * Called only after the server confirmed a delete or an archive, so the list
+ * never shows a message the user just moved. The dedupe record stays: a message
+ * that comes back (a move to the inbox, a restore from the trash) is the same
+ * message and must not be announced again.
+ */
+function removeEnvelope(state, key) {
+  const index = state.messages.findIndex((item) => item.key === key);
+  if (index < 0) return null;
+  const [entry] = state.messages.splice(index, 1);
+  return entry;
+}
+
+/** The lowest UID this account's list holds, or `null` when it holds none. */
+function oldestUid(state) {
+  let lowest = null;
+  for (const entry of state.messages) {
+    if (!Number.isInteger(entry.uid)) continue;
+    if (lowest === null || entry.uid < lowest) lowest = entry.uid;
+  }
+  return lowest;
+}
+
+/** Forget one POP3 message the server just deleted, and its local read mark. */
+function pop3Forget(state, uidl) {
+  if (!isUidl(uidl)) return false;
+  const before = state.pop3.uidls.length;
+  state.pop3.uidls = state.pop3.uidls.filter((entry) => entry !== uidl);
+  clearReadLocally(state, pop3Key(uidl));
+  return state.pop3.uidls.length !== before;
 }
 
 function findEnvelope(state, key) {
@@ -380,6 +471,8 @@ function flagChange(flag) {
 }
 
 module.exports = {
+  MAX_RECIPIENTS,
+  MAX_SUMMARY,
   MESSAGES_LIMIT,
   PENDING_LIMIT,
   POP3_UIDL_LIMIT,
@@ -395,16 +488,19 @@ module.exports = {
   messageKey,
   normalizeEnvelope,
   normalizeState,
+  oldestUid,
   clearReadLocally,
   hasReadLocally,
   markReadLocally,
   pop3Baselined,
   pop3Baseline,
+  pop3Forget,
   pop3Key,
   pop3Remember,
   pop3Seen,
   queueDigest,
   recordEnvelope,
+  removeEnvelope,
   rememberSeen,
   setCursor,
   setFlags,

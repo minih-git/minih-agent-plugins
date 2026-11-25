@@ -16,15 +16,27 @@ function quote(value) {
   return `"${String(value ?? "").replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
-function addressList(entry) {
+function addressEntry(entry) {
   const [mailbox, host] = String(entry?.address ?? "").split("@");
-  return `((${quote(entry?.name ?? "")} NIL ${quote(mailbox ?? "")} ${quote(host ?? "")}))`;
+  return `(${quote(entry?.name ?? "")} NIL ${quote(mailbox ?? "")} ${quote(host ?? "")})`;
+}
+
+function addressList(entry) {
+  return `(${addressEntry(entry)})`;
+}
+
+/** `((a)(b))` for a recipient list, `NIL` when it is empty. */
+function addressSeq(list) {
+  if (!Array.isArray(list) || !list.length) return "NIL";
+  return `(${list.map(addressEntry).join("")})`;
 }
 
 /** One message as the fake server knows it. */
 export function message({
   uid,
   from = { name: "", address: "sender@example.com" },
+  to = [],
+  cc = [],
   subject = "Subject",
   rawSubject,
   rawName,
@@ -34,8 +46,10 @@ export function message({
   flags = [],
   raw,
   bodyText = "Hello from the test mailbox.",
+  /** Whether the BODYSTRUCTURE should describe an attachment part. */
+  attachment = false,
 } = {}) {
-  return { uid, from, subject, rawSubject, rawName, messageId, date, extraHeaders, flags, raw, bodyText };
+  return { uid, from, to, cc, subject, rawSubject, rawName, messageId, date, extraHeaders, flags, raw, bodyText, attachment };
 }
 
 function envelopeOf(entry) {
@@ -47,22 +61,48 @@ function envelopeOf(entry) {
     addressList({ ...entry.from, name }),
     addressList({ ...entry.from, name }),
     addressList({ ...entry.from, name }),
-    "NIL",
-    "NIL",
+    addressSeq(entry.to),
+    addressSeq(entry.cc),
     "NIL",
     "NIL",
     quote(entry.messageId),
   ].join(" ");
 }
 
+/**
+ * A `BODYSTRUCTURE` for one scripted message.
+ *
+ * `entry.attachment` adds a second part with an attachment disposition and a
+ * file name, which is what the plugin's attachment icon is derived from without
+ * downloading anything.
+ */
+function structureOf(entry) {
+  const size = Buffer.byteLength(String(entry.bodyText ?? ""), "utf8");
+  const text = `("TEXT" "PLAIN" ("CHARSET" "UTF-8") NIL NIL "8BIT" ${size} 3)`;
+  if (!entry.attachment) return text;
+  const file =
+    '("APPLICATION" "PDF" ("NAME" "report.pdf") NIL NIL "BASE64" 512 NIL ("ATTACHMENT" ("FILENAME" "report.pdf")))';
+  return `(${text}${file} "MIXED" ("BOUNDARY" "B0"))`;
+}
+
 function headersOf(entry) {
   const name = entry.rawName ?? entry.from.name;
   const subject = entry.rawSubject ?? entry.subject;
+  const recipients = [];
+  if (Array.isArray(entry.to) && entry.to.length) {
+    recipients.push(`To: ${entry.to.map((one) => (one.name ? `"${one.name}" <${one.address}>` : one.address)).join(", ")}`);
+  }
+  if (Array.isArray(entry.cc) && entry.cc.length) {
+    recipients.push(`Cc: ${entry.cc.map((one) => (one.name ? `"${one.name}" <${one.address}>` : one.address)).join(", ")}`);
+  }
   const lines = [
     `From: ${name ? `"${name}" ` : ""}<${entry.from.address}>`,
+    ...recipients,
     `Subject: ${subject}`,
     `Date: ${entry.date}`,
     `Message-ID: ${entry.messageId}`,
+    "Content-Type: text/plain; charset=utf-8",
+    "Content-Transfer-Encoding: 8bit",
     ...entry.extraHeaders,
   ];
   return `${lines.join("\r\n")}\r\n\r\n`;
@@ -86,8 +126,20 @@ export function createFakeServer(options = {}) {
     mute: options.mute ?? [],
     /** Every body fetch, so a test can assert the cap and that it happened once. */
     bodyFetches: [],
-    /** Every STORE the plugin sent, as `{ set, command }`. */
+    /** Every STORE the plugin sent, as the raw command line. */
     stores: [],
+    /**
+     * The mailboxes `LIST` reports.
+     *
+     * A test that exercises delete or archive sets these; the default is a single
+     * inbox with no special-use mailbox at all, which is also a real server's
+     * shape and is what proves the panel gets a clear error instead of a guess.
+     */
+    mailboxes: options.mailboxes ?? [],
+    /** Every `UID MOVE`, `UID COPY` and `UID EXPUNGE`, as raw command lines. */
+    moves: [],
+    copies: [],
+    expunges: [],
   };
   let dataListener = null;
   let closeListener = null;
@@ -181,15 +233,26 @@ export function createFakeServer(options = {}) {
     }
     for (const entry of wanted) {
       const headers = Buffer.from(headersOf(entry), "utf8");
+      const full = Buffer.from(String(entry.bodyText ?? ""), "utf8");
+      // The capped `BODY[TEXT]` fragment the plugin asks for to build the list's
+      // preview: the first bytes of the body, never the whole message.
+      const textCap = /BODY\.PEEK\[TEXT\]<0\.(\d+)>/i.exec(command);
+      const text = textCap ? full.subarray(0, Number(textCap[1])) : full;
       const lines = [
         `* ${sequenceOf(entry.uid)} FETCH (UID ${entry.uid}`,
         `FLAGS (${entry.flags.join(" ")})`,
         `INTERNALDATE "${entry.date}"`,
         `ENVELOPE (${envelopeOf(entry)})`,
-        `BODY[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID IMPORTANCE X-PRIORITY X-MSMail-Priority)] {${headers.length}}\r\n`,
+        `RFC822.SIZE ${Buffer.byteLength(rawMessage(entry), "utf8")}`,
+        `BODYSTRUCTURE ${structureOf(entry)}`,
+        `BODY[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID CONTENT-TYPE CONTENT-TRANSFER-ENCODING IMPORTANCE X-PRIORITY X-MSMail-Priority)] {${headers.length}}\r\n`,
       ].join(" ");
       push(lines);
       pushBuffer(headers);
+      if (textCap) {
+        push(` BODY[TEXT]<0> {${text.length}}\r\n`);
+        pushBuffer(text);
+      }
       push(")\r\n");
     }
     push(`${tag} OK FETCH completed\r\n`);
@@ -242,6 +305,56 @@ export function createFakeServer(options = {}) {
     push(`${tag} OK STORE completed\r\n`);
   }
 
+  /**
+   * `LIST`, with the special-use flags a test scripted.
+   *
+   * A real server answers the plain form and the `(SPECIAL-USE)` form
+   * differently, and the plugin asks for the second only when the capability is
+   * advertised; both are answered from the same scripted list here, which is what
+   * lets a test assert which form was sent without pretending to be two servers.
+   */
+  function listReply(tag, command) {
+    const specialUseOnly = /\(SPECIAL-USE\)/i.test(command);
+    const entries = specialUseOnly
+      ? server.mailboxes.filter((entry) => entry.flags.some((flag) => /^\\?(Trash|Archive|Sent|Drafts|Junk)$/i.test(flag)))
+      : server.mailboxes;
+    for (const entry of entries) {
+      const flags = entry.flags.length ? `(${entry.flags.join(" ")})` : "()";
+      push(`* LIST ${flags} ${quote(entry.delimiter ?? "/")} ${quote(entry.name)}\r\n`);
+    }
+    push(`${tag} OK LIST completed\r\n`);
+  }
+
+  /** Remove one entry from the maildrop, as a move or an expunge would. */
+  function dropEntry(uid) {
+    const index = server.entries.findIndex((entry) => entry.uid === uid);
+    if (index < 0) return null;
+    const [entry] = server.entries.splice(index, 1);
+    return entry;
+  }
+
+  function moveReply(tag, command, verb) {
+    const [, , set, target] = /^UID (MOVE|COPY)\s+(\S+)\s+(.+)$/i.exec(command) ?? [];
+    const uid = Number(set ?? 0);
+    // The mailbox is a quoted string on the wire; the record keeps the name.
+    const mailbox = String(target ?? "").replace(/^"|"$/g, "");
+    if (verb === "MOVE") {
+      server.moves.push({ uid, mailbox });
+      dropEntry(uid);
+      push(`* ${server.entries.length + 1} EXPUNGE\r\n`);
+    } else {
+      server.copies.push({ uid, mailbox });
+    }
+    push(`${tag} OK ${verb} completed\r\n`);
+  }
+
+  function expungeReply(tag, command) {
+    const uid = Number(/^UID EXPUNGE\s+(\d+)/i.exec(command)?.[1] ?? 0);
+    server.expunges.push({ uid, command });
+    if (dropEntry(uid)) push(`${tag} OK EXPUNGE completed\r\n`);
+    else push(`${tag} OK EXPUNGE completed\r\n`);
+  }
+
   const transport = {
     async send(data) {
       const text = typeof data === "string" ? data : Buffer.from(data).toString("latin1");
@@ -273,6 +386,14 @@ export function createFakeServer(options = {}) {
           fetchReply(tag, /\s(\S+)\s+\(/.exec(command)?.[1] ?? "", command);
         } else if (upper.startsWith("UID STORE")) {
           storeReply(tag, command);
+        } else if (upper.startsWith("UID MOVE")) {
+          moveReply(tag, command, "MOVE");
+        } else if (upper.startsWith("UID COPY")) {
+          moveReply(tag, command, "COPY");
+        } else if (upper.startsWith("UID EXPUNGE")) {
+          expungeReply(tag, command);
+        } else if (upper.startsWith("LIST")) {
+          listReply(tag, command);
         } else if (upper === "IDLE") {
           idleTag = tag;
           push("+ idling\r\n");

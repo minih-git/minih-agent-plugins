@@ -3,18 +3,20 @@
 /**
  * One authenticated IMAP session, in the plugin's own words.
  *
- * The host performs the login: by the time `net.tcp.connect` resolves, the socket
- * is inside TLS, the server has accepted the credential and the greeting, the
- * capability reply and the login exchange have all been consumed. This file
+ * The host performs the login: by the time `net.tcp.connect` resolves, the
+ * socket is inside TLS, the server has accepted the credential and the greeting,
+ * the capability reply and the login exchange have all been consumed. This file
  * therefore starts at `CAPABILITY` and owns everything after it:
  *
- *   CAPABILITY, ID, SELECT INBOX, UID SEARCH, UID FETCH with BODY.PEEK,
- *   UID STORE of `\Seen` / `\Flagged`, LOGOUT.
+ *   CAPABILITY, ID, SELECT, UID SEARCH, UID FETCH with BODY.PEEK, UID STORE of
+ *   `\Seen` / `\Flagged`, LIST, UID MOVE or UID COPY + UID EXPUNGE, LOGOUT.
  *
- * There is no `APPEND`, no `COPY`, no `EXPUNGE` and no `STORE` other than the two
- * flags above: nothing here deletes, moves, copies or sends mail. There is no
- * IDLE either: this plugin polls, so every session is short and ends with
- * `LOGOUT` (`lib/watcher.js`).
+ * There is no `APPEND`, no `COPY` other than the one a delete needs on a server
+ * without `MOVE`, and no `EXPUNGE` other than `UID EXPUNGE <one uid>`: nothing
+ * here removes mail unless the user clicked delete or archive on that one
+ * message, and nothing here can empty a mailbox. A bare `EXPUNGE` — the command
+ * that removes every `\Deleted` message in the selected mailbox, including ones
+ * another client flagged — is deliberately not implemented.
  *
  * `STORE` exists because the user asked for it: the Inbox panel offers "mark as
  * read" and "add star", and each of those is one click that sends exactly one
@@ -25,7 +27,8 @@
  * `BODY.PEEK[...]` is not a stylistic choice either: the non-peek form sets
  * `\Seen` on the message, which would make the plugin a thing that marks the
  * user's mail as read behind their back. The body fetch for a message the user
- * opened is a `BODY.PEEK[]` for the same reason.
+ * opened is a `BODY.PEEK[]` for the same reason, and the summary fragment a new
+ * message brings along is `BODY.PEEK[TEXT]<0.N>` — capped, and still a peek.
  *
  * Commands are serialised: IMAP allows one command in flight, and a plugin that
  * pipelined them would have to match untagged responses to two commands at once.
@@ -34,8 +37,25 @@
 const { createParser, kindOf, parseTagged, parseUntagged } = require("./protocol");
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-/** Header fields fetched for one message: identity, date and the urgency flags. */
-const HEADER_FIELDS = "FROM SUBJECT DATE MESSAGE-ID IMPORTANCE X-PRIORITY X-MSMail-Priority";
+/**
+ * Header fields fetched for one message.
+ *
+ * `CONTENT-TYPE` and `CONTENT-TRANSFER-ENCODING` are here for the preview: the
+ * first bytes of the text are useless without knowing which charset and which
+ * transfer encoding they were written in.
+ */
+const HEADER_FIELDS =
+  "FROM SUBJECT DATE MESSAGE-ID CONTENT-TYPE CONTENT-TRANSFER-ENCODING IMPORTANCE X-PRIORITY X-MSMail-Priority";
+/**
+ * How much of a new message's text is read for the list's preview.
+ *
+ * Four kilobytes is one screenful of prose — far more than the 140 characters
+ * kept — but it is also enough to get past the header block of a multipart body
+ * and into the text part. A capped section still leaves `\Seen` alone.
+ */
+const PREVIEW_BYTES = 4096;
+/** How many older envelopes one "load older" round asks for. */
+const OLDER_LIMIT = 50;
 
 function taggedError(status, text) {
   const error = new Error(`IMAP ${status || "failed"}: ${text || "no detail"}`);
@@ -301,22 +321,104 @@ function createSession(transport, options = {}) {
     },
 
     /**
-     * Header-only fetch for the given UIDs.
+     * One envelope fetch for the given UIDs.
      *
-     * `BODY.PEEK[HEADER.FIELDS (…)]` returns just those headers and leaves the
-     * `\Seen` flag alone; the alternative, `BODY[…]`, would mark every message
-     * this plugin looks at as read.
+     * Every section is a `BODY.PEEK`: `BODY.PEEK[HEADER.FIELDS (…)]` returns just
+     * those headers, `BODY.PEEK[TEXT]<0.N>` the first N bytes of the body, and
+     * the non-peek form of either would mark every message this plugin looks at
+     * as read. `BODYSTRUCTURE` rides along because it is the only way to know a
+     * message carries an attachment without downloading it.
+     *
+     * `preview: false` drops the text section, for a caller that only wants the
+     * envelope (nothing does today, but the option is what keeps this one
+     * command rather than two).
      */
     async fetch(uids, options2 = {}) {
       const list = uids.filter((uid) => Number.isInteger(uid));
       if (!list.length) return [];
+      const preview = options2.preview === false ? "" : ` BODY.PEEK[TEXT]<0.${PREVIEW_BYTES}>`;
       const reply = await command(
-        `UID FETCH ${list.join(",")} (UID FLAGS INTERNALDATE ENVELOPE BODY.PEEK[HEADER.FIELDS (${HEADER_FIELDS})])`,
+        `UID FETCH ${list.join(",")} (UID FLAGS INTERNALDATE ENVELOPE RFC822.SIZE BODYSTRUCTURE ` +
+          `BODY.PEEK[HEADER.FIELDS (${HEADER_FIELDS})]${preview})`,
         { timeoutMs: options2.timeoutMs ?? defaultTimeoutMs },
       );
       return reply.untagged
         .filter((record) => record.kind === "fetch" && Number.isInteger(record.item.uid))
         .map((record) => record.item);
+    },
+
+    /**
+     * The envelopes just below `beforeUid`, newest of those first in the reply.
+     *
+     * "Load older" walks backwards from the oldest message the panel already
+     * holds, so the search is `UID 1:<beforeUid - 1>` and only the highest
+     * `limit` of that set is fetched: the messages furthest back in the mailbox
+     * are the ones nobody is looking for, and a mailbox with 40 000 messages
+     * must not become a 40 000-message fetch.
+     */
+    async fetchOlder({ beforeUid, limit = OLDER_LIMIT, timeoutMs } = {}) {
+      if (!Number.isInteger(beforeUid) || beforeUid <= 1) return [];
+      const ceiling = beforeUid - 1;
+      const reply = await command(`UID SEARCH 1:${ceiling}`);
+      const uids = reply.untagged
+        .filter((record) => record.kind === "search")
+        .flatMap((record) => record.uids)
+        .filter((uid) => Number.isInteger(uid) && uid >= 1 && uid <= ceiling);
+      const wanted = [...new Set(uids)].sort((a, b) => b - a).slice(0, Math.max(1, limit));
+      if (!wanted.length) return [];
+      return this.fetch(wanted, { timeoutMs });
+    },
+
+    /**
+     * Every mailbox this account can see.
+     *
+     * `LIST (SPECIAL-USE) "" "*"` asks a server that supports RFC 6154 to say
+     * which mailbox is the trash and which is the archive; a server that does not
+     * gets the plain `LIST`, and the caller falls back to matching names. The
+     * reply is small and cached by the caller, not here.
+     */
+    async listMailboxes({ specialUse = false } = {}) {
+      const reply = await command(specialUse ? 'LIST (SPECIAL-USE) "" "*"' : 'LIST "" "*"');
+      return reply.untagged
+        .filter((record) => record.kind === "list" && record.name)
+        .map((record) => ({ name: record.name, flags: record.flags, delimiter: record.delimiter }));
+    },
+
+    /** `UID MOVE <uid> <mailbox>`: a move the server does atomically. */
+    async moveMessage(uid, mailbox) {
+      if (!Number.isInteger(uid)) {
+        throw Object.assign(new Error("moveMessage needs an integer UID"), { code: "INVALID_ARGUMENT" });
+      }
+      return command(`UID MOVE ${uid} ${quote(mailbox)}`);
+    },
+
+    /**
+     * `UID COPY <uid> <mailbox>`: one half of a move on a server without `MOVE`.
+     *
+     * The copy is deliberately not followed by a delete here: the caller does
+     * that in two more commands so a failure in the middle leaves a copy rather
+     * than a hole. Nothing else in this plugin sends `COPY`.
+     */
+    async copyMessage(uid, mailbox) {
+      if (!Number.isInteger(uid)) {
+        throw Object.assign(new Error("copyMessage needs an integer UID"), { code: "INVALID_ARGUMENT" });
+      }
+      return command(`UID COPY ${uid} ${quote(mailbox)}`);
+    },
+
+    /**
+     * `UID EXPUNGE <uid>`: remove exactly the one message the user deleted.
+     *
+     * UIDPLUS is what makes this safe. Without it there is no way to expunge one
+     * message, and the bare `EXPUNGE` that would do it removes every `\Deleted`
+     * message in the mailbox — including ones another client flagged — so this
+     * file does not implement that form at all.
+     */
+    async expungeUid(uid) {
+      if (!Number.isInteger(uid)) {
+        throw Object.assign(new Error("expungeUid needs an integer UID"), { code: "INVALID_ARGUMENT" });
+      }
+      return command(`UID EXPUNGE ${uid}`);
     },
 
     /**
@@ -411,4 +513,4 @@ function createSession(transport, options = {}) {
   };
 }
 
-module.exports = { createSession };
+module.exports = { HEADER_FIELDS, OLDER_LIMIT, PREVIEW_BYTES, createSession };

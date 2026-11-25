@@ -31,8 +31,10 @@
  */
 
 const mime = require("./mime");
+const protocol = require("./protocol");
 const rules = require("./rules");
 const store = require("./store");
+const summary = require("./summary");
 
 /** Every account is checked this often. Fixed on purpose: no new setting. */
 const DEFAULT_POLL_MS = 3 * 60 * 1000;
@@ -42,6 +44,8 @@ const DEFAULT_STAGGER_MS = 1_500;
 const MAX_FETCH_PER_CYCLE = 25;
 /** Rounds per poll, so one poll on a mailbox full of new mail still terminates. */
 const MAX_ROUNDS_PER_CYCLE = 4;
+/** How many older envelopes one "load older" round brings back. */
+const OLDER_LIMIT = 50;
 
 function parseInternalDate(value) {
   if (typeof value !== "string") return null;
@@ -52,8 +56,10 @@ function parseInternalDate(value) {
 /**
  * One FETCH reply as the plugin's own message record.
  *
- * Only headers and envelope fields are read: the body was never fetched, and
- * `BODY.PEEK` means the server did not mark the message as read on the way.
+ * The headers and the envelope give identity, sender, date and the urgency
+ * flags; the capped `BODY[TEXT]` fragment gives the list's preview; the
+ * `BODYSTRUCTURE` says whether there is an attachment. Every one of those came
+ * from a `BODY.PEEK`, so the server did not mark the message as read on the way.
  */
 function toMessage(item, uidValidity) {
   const headers = mime.parseHeaders(item.headers);
@@ -72,6 +78,21 @@ function toMessage(item, uidValidity) {
       subject,
       receivedAt: parseInternalDate(item.internalDate),
     },
+    // `ENVELOPE` carries the recipients, so no extra command is needed for the
+    // reading pane's "to me and N others" line.
+    to: (envelope.to ?? []).map((entry) => ({
+      name: mime.decodeEncodedWords(entry.name),
+      address: entry.address,
+    })),
+    cc: (envelope.cc ?? []).map((entry) => ({
+      name: mime.decodeEncodedWords(entry.name),
+      address: entry.address,
+    })),
+    summary: summary.summarizeFragment(item.text, {
+      contentType: mime.headerValue(headers, "content-type"),
+      transferEncoding: mime.headerValue(headers, "content-transfer-encoding"),
+    }),
+    hasAttachments: protocol.hasAttachments(item.structure),
   };
 }
 
@@ -139,10 +160,15 @@ function createWatcher(deps) {
     deps.log("info", `watching from UID ${state.cursor.maxUid} (uidValidity ${box.uidValidity})`);
   }
 
-  /** Classify one batch, remember it for the panel, and post what it earned. */
-  async function handleItems(items, settings, uidValidity) {
+  /**
+   * Classify one batch, remember it for the panel, and post what it earned.
+   *
+   * `notifyNow` is false for "load older": walking back through a mailbox the
+   * user already has must not turn yesterday's mail into today's notifications.
+   */
+  async function handleItems(items, settings, uidValidity, { notifyNow = true } = {}) {
     for (const item of items) {
-      const { message, flags, headers } = toMessage(item, uidValidity);
+      const { message, flags, headers, summary: preview, to, cc, hasAttachments } = toMessage(item, uidValidity);
       const key = store.messageKey(message);
       const verdict = rules.classify(message, settings, headers);
       // The panel's list is filled here too: one pass over the same envelope the
@@ -157,7 +183,12 @@ function createWatcher(deps) {
         receivedAt: message.receivedAt,
         flags,
         important: verdict.level === "alert",
+        summary: preview,
+        to,
+        cc,
+        hasAttachments,
       });
+      if (!notifyNow) continue;
       if (store.hasSeen(state, key)) continue;
       if (verdict.level === "alert") {
         store.rememberSeen(state, key);
@@ -177,6 +208,30 @@ function createWatcher(deps) {
         );
       }
     }
+  }
+
+  /**
+   * Walk back through the mailbox for the panel.
+   *
+   * Separate from `collect` on purpose: it starts from the oldest UID the panel
+   * already holds rather than from the cursor, it never moves the cursor (so a
+   * later poll still starts from the newest handled message), and it never
+   * notifies.
+   *
+   * @returns the envelopes it recorded, oldest first.
+   */
+  async function loadOlder({ beforeUid, limit = OLDER_LIMIT } = {}) {
+    const settings = deps.settings();
+    return withSession(async (session, box, capabilities) => {
+      await probeFolders(session, capabilities);
+      const items = await session.fetchOlder({ beforeUid, limit });
+      if (!items.length) return [];
+      await handleItems(items, settings, box.uidValidity, { notifyNow: false });
+      await save();
+      return items
+        .map((item) => ({ uid: item.uid }))
+        .sort((a, b) => a.uid - b.uid);
+    });
   }
 
   /** Post the queued batch once its interval has passed. */
@@ -212,11 +267,28 @@ function createWatcher(deps) {
   }
 
   /**
+   * Ask the server which mailbox is the trash and which the archive.
+   *
+   * The runtime owns the cache and the decision; the watcher only lends a session
+   * that already fetched its capabilities. A failed `LIST` must not fail the
+   * poll — the mail still arrives, and the panel keeps the buttons it had.
+   */
+  async function probeFolders(session, capabilities) {
+    if (typeof deps.probeFolders !== "function") return;
+    try {
+      await deps.probeFolders(session, capabilities);
+    } catch (error) {
+      deps.log("warn", `could not list the mailboxes: ${error?.message ?? error}`);
+    }
+  }
+
+  /**
    * One prepared session, closed again whatever happens.
    *
    * The gate is held for the whole session, not just the handshake: the host's
    * ceiling is about open sockets, and a session that was opened but not yet
-   * closed still counts.
+   * closed still counts. The caller gets the capabilities as well, because a
+   * delete or an archive has to know whether the server can move a message.
    */
   function withSession(run) {
     // Sessions for one account run one at a time: a body fetch waits for the poll
@@ -235,7 +307,7 @@ function createWatcher(deps) {
         }
         const box = await session.select("INBOX");
         await reconcile(session, box);
-        return await run(session, box);
+        return await run(session, box, capabilities);
       } finally {
         await session.close().catch(() => undefined);
       }
@@ -248,7 +320,10 @@ function createWatcher(deps) {
   /** One poll: everything one short session can settle. */
   async function poll() {
     const settings = deps.settings();
-    const handled = await withSession((session, box) => collect(session, settings, box.uidValidity));
+    const handled = await withSession(async (session, box, capabilities) => {
+      await probeFolders(session, capabilities);
+      return collect(session, settings, box.uidValidity);
+    });
     lastCheckAt = now();
     state.lastCheckAt = lastCheckAt;
     state.lastError = null;
@@ -373,11 +448,22 @@ function createWatcher(deps) {
     },
 
     /**
+     * Walk back through the mailbox for the panel's "load older".
+     *
+     * The cursor is untouched and nothing is announced: this is browsing, not
+     * watching.
+     */
+    async loadOlder(input) {
+      return loadOlder(input);
+    },
+
+    /**
      * Run one command on a session of its own.
      *
      * Opening a message and changing a flag used to ride the IDLE connection.
      * Now they get a short session through the same gate, which is what keeps the
      * plugin inside the host's ceiling when there are more accounts than sockets.
+     * The callback receives `(session, box, capabilities)`.
      */
     withSession(run) {
       return withSession(run);
@@ -403,6 +489,7 @@ module.exports = {
   DEFAULT_STAGGER_MS,
   MAX_FETCH_PER_CYCLE,
   MAX_ROUNDS_PER_CYCLE,
+  OLDER_LIMIT,
   createWatcher,
   toMessage,
 };

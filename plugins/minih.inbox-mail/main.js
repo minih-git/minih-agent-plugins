@@ -149,7 +149,12 @@ function persist() {
     .then(async () => {
       const file = await dataPath(STATE_FILE);
       await fs.mkdir(path.dirname(file), { recursive: true });
-      await fs.writeFile(file, JSON.stringify(root, null, 2), "utf8");
+      // Written beside the target and renamed over it: a reader never sees half
+      // a JSON document, and a crash in the middle leaves the previous state —
+      // with its UID cursor — intact instead of an empty file.
+      const temporary = `${file}.tmp`;
+      await fs.writeFile(temporary, JSON.stringify(root, null, 2), "utf8");
+      await fs.rename(temporary, file);
     })
     .catch((error) => {
       log("warn", `could not write the mailbox state: ${error?.message ?? error}`);
@@ -310,6 +315,15 @@ async function onPanelInvoke(channel, payload) {
         return { ok: true, message: await runtime.openMessage(payload ?? {}) };
       case "inbox.setFlag":
         return { ok: true, ...(await runtime.setFlag(payload ?? {})) };
+      // Since 0.4.0 the panel can also walk back through a mailbox, and it can
+      // delete or archive the one message the user picked. All three are one
+      // short session, and none of them is reachable from the poll path.
+      case "inbox.loadOlder":
+        return { ok: true, ...(await runtime.loadOlder(payload ?? {})) };
+      case "inbox.delete":
+        return { ok: true, ...(await runtime.deleteMessage(payload ?? {})) };
+      case "inbox.archive":
+        return { ok: true, ...(await runtime.archive(payload ?? {})) };
       case "inbox.openWebmail":
         return { ok: true, ...(await runtime.openWebmail(payload?.instanceId)) };
       case "inbox.openExternal":
