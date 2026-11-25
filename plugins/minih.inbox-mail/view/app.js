@@ -34,7 +34,9 @@ import {
   stepIndex,
   visibleMessages,
 } from "./model.js";
-import { bodyMode, buildFrameDocument, FRAME_SANDBOX, linkifyText } from "./policy.js";
+import { bodyMode, buildFrameDocument, classifyLink, FRAME_SANDBOX, linkifyText } from "./policy.js";
+import { bindFrame } from "./frame.js";
+import { linkDisguise, parseMailto } from "./links.js";
 import { prepareBody } from "./sanitize.js";
 import { createComposer } from "./compose.js";
 import { codeText, strings } from "./strings.js";
@@ -113,6 +115,7 @@ const nodes = {
   readerNotice: document.getElementById("reader-notice"),
   readerBody: document.getElementById("reader-body"),
   readerExtras: document.getElementById("reader-extras"),
+  readerLinkStatus: document.getElementById("reader-link-status"),
   confirm: document.getElementById("confirm"),
   confirmTitle: document.getElementById("confirm-title"),
   confirmBody: document.getElementById("confirm-body"),
@@ -861,6 +864,9 @@ function renderMessage(reader) {
   nodes.readerNotice.textContent = notices.join(" ");
   nodes.readerNotice.classList.toggle("is-hidden", notices.length === 0);
 
+  // The status line belongs to whatever link was under the cursor a moment ago, so
+  // it goes with the body it described.
+  hideLinkStatus();
   nodes.readerBody.replaceChildren();
   if (bodyMode(message, reader.showText) === "html") {
     nodes.readerBody.append(renderFrame(message, reader));
@@ -914,29 +920,8 @@ function extras(message) {
       ),
     );
   }
-  if (message.body?.links?.length) {
-    list.push(
-      el("p", { class: "extra-title", text: table.links }),
-      el(
-        "ul",
-        { class: "extra-list" },
-        ...message.body.links.map((link) =>
-          el(
-            "li",
-            {},
-            el("button", {
-              type: "button",
-              class: "link-btn",
-              title: link.url,
-              text: link.text,
-              onClick: () => void openExternal(link.url),
-            }),
-            el("span", { text: link.kind === "mailto" ? "mailto" : "web" }),
-          ),
-        ),
-      ),
-    );
-  }
+  // No link list here: a link now works where the message wrote it, and the panel
+  // answers the click (`frame.js`). Attachments are the only thing under the body.
   return list;
 }
 
@@ -1009,6 +994,22 @@ async function saveAttachment(message, file) {
 }
 
 /**
+ * The accounts the composer offers, in the shape the composer reads.
+ *
+ * One shape for every way in — a new message, a reply, and a `mailto:` link from a
+ * message — so what the picker shows never depends on which button opened it.
+ */
+function composerAccounts() {
+  return (state.snapshot?.accounts ?? []).map((account) => ({
+    instanceId: account.instanceId,
+    label: account.label,
+    email: account.email,
+    canSend: account.canSend !== false,
+    sendBlockedReason: account.sendBlockedReason ?? null,
+  }));
+}
+
+/**
  * Open the composer: a new message, or the draft the plugin builds for this one.
  *
  * A reply is not composed here. The plugin knows the original's headers, its
@@ -1019,13 +1020,7 @@ async function saveAttachment(message, file) {
 async function openDraft(mode) {
   if (composer?.isOpen) return;
   const table = t();
-  const accounts = (state.snapshot?.accounts ?? []).map((account) => ({
-    instanceId: account.instanceId,
-    label: account.label,
-    email: account.email,
-    canSend: account.canSend !== false,
-    sendBlockedReason: account.sendBlockedReason ?? null,
-  }));
+  const accounts = composerAccounts();
   if (!accounts.length) {
     setBanner(table.emptyAccounts, true);
     return;
@@ -1076,9 +1071,11 @@ function onComposerClosed(result) {
 /**
  * The message body as a frame.
  *
- * `sandbox=""` — no scripts, no same-origin — and the document carries its own
- * CSP, so the frame cannot script, cannot reach the panel, and cannot load a
- * remote image unless the user asked for this message's images.
+ * `sandbox="allow-same-origin"` and never `allow-scripts`: the origin is what lets
+ * the panel read this document and answer a click inside it, and no script in the
+ * message can run. The document also carries its own CSP, so nothing remote loads
+ * unless the user asked for this message's images, and the frame is measured to the
+ * height of the mail so the reading pane scrolls as one page (`frame.js`).
  */
 function renderFrame(message, reader) {
   const html = reader.allowImages ? message.body.html : message.body.blockedHtml;
@@ -1087,7 +1084,86 @@ function renderFrame(message, reader) {
   // No theme: a mail is drawn on white paper with its own styles, whatever the
   // app looks like (`policy.js`). The message's `<style>` blocks come along.
   frame.srcdoc = buildFrameDocument({ html, styles: message.body.styles ?? [], allowImages: reader.allowImages });
+  // A `srcdoc` document is written after this call, so it is read on `load`.
+  frame.addEventListener("load", () =>
+    bindFrame(frame, {
+      onOpen: (url) => void followLink(url),
+      onStatus: showLinkStatus,
+      onLeave: hideLinkStatus,
+    }),
+  );
   return frame;
+}
+
+/**
+ * A link the user pressed inside a message.
+ *
+ * The two schemes a body may keep (`policy.js`) have two answers: an address the
+ * browser opens, and a `mailto:` that becomes a draft in this panel's composer.
+ * There is no third: anything else was removed by the sanitizer before it arrived.
+ */
+async function followLink(url) {
+  const kind = classifyLink(url);
+  if (kind === "mailto") {
+    await openMailto(url);
+    return;
+  }
+  if (kind === "http") await openExternal(url);
+}
+
+/**
+ * A `mailto:` link is someone asking you to write to them: the composer opens with
+ * the address, subject and body the link named.
+ *
+ * Nothing is sent without a press of Send — this is the same composer the New button
+ * opens, filled in. With no account that can send, the OS mail client is the honest
+ * fallback: it is the only other thing a `mailto:` can mean, and the host already
+ * opens such addresses.
+ */
+async function openMailto(url) {
+  const fields = parseMailto(url);
+  if (!fields || composer?.isOpen) return;
+  const accounts = composerAccounts();
+  const sendable = accounts.filter((account) => account.canSend);
+  if (!sendable.length) {
+    await openExternal(url);
+    return;
+  }
+  const preferred = state.accountId === "all" ? "" : state.accountId;
+  composer.open({
+    mode: "new",
+    accounts,
+    accountId: sendable.some((account) => account.instanceId === preferred)
+      ? preferred
+      : sendable[0].instanceId,
+    to: fields.to.map((address) => ({ name: "", address })),
+    cc: fields.cc.map((address) => ({ name: "", address })),
+    subject: fields.subject,
+    text: fields.body,
+  });
+}
+
+/** The reading pane's status line: where a link really goes, and whether it lies. */
+function showLinkStatus(url, anchor) {
+  const node = nodes.readerLinkStatus;
+  if (!node) return;
+  if (!url) {
+    hideLinkStatus();
+    return;
+  }
+  const disguised = classifyLink(url) === "http" && linkDisguise(anchor?.textContent ?? "", url);
+  node.textContent = disguised ? t().linkDisguise(url) : url;
+  node.classList.toggle("is-warning", disguised);
+  node.classList.remove("is-hidden");
+}
+
+/** Nothing under the cursor: the status line goes away. */
+function hideLinkStatus() {
+  const node = nodes.readerLinkStatus;
+  if (!node) return;
+  node.classList.add("is-hidden");
+  node.classList.remove("is-warning");
+  node.textContent = "";
 }
 
 /**

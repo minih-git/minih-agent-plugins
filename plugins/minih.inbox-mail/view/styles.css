@@ -935,38 +935,37 @@ input {
 }
 
 .reader-message {
-  /* The reading pane's own column: header, body, extras. The body takes whatever
-   * height is left, which is what lets a long mail fill the pane instead of being
-   * cut at a fixed 320 px while empty space sits below it. */
+  /* The reading pane's own column, and the one thing that scrolls: header, body,
+   * attachments. The body is as tall as the mail (the frame is measured in
+   * `frame.js`), so a long mail is one long page here instead of a scrolling box
+   * with the header pinned above it and empty space below. */
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: auto;
 }
 
 .reader-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  overflow: hidden;
+  /* Height comes from the body itself: the frame sets its own pixel height and a
+   * text body is as tall as its paragraphs. Nothing scrolls in here. */
+  flex: 0 0 auto;
+  display: block;
   background: var(--bg-panel);
 }
 
 .reader-body iframe {
   display: block;
-  flex: 1 1 auto;
   width: 100%;
-  height: 100%;
-  min-height: 0;
+  /* No height: `frame.js` measures the document and sets this in pixels. A mail
+   * wider than the pane scrolls sideways inside the frame, never in the panel. */
+  height: 0;
   border: 0;
   background: transparent;
 }
 
-/* A plain-text body scrolls inside the pane rather than growing the page. */
 .reader-body .mail-text {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
+  display: block;
 }
 
 .mail-text {
@@ -1003,13 +1002,39 @@ input {
 }
 
 .reader-extras {
-  /* Attachments and links keep their own space under the body, and scroll on
-   * their own when a mail carries many of them. */
-  flex: 0 1 auto;
-  max-height: 38vh;
-  overflow: auto;
+  /* The attachments under the body: part of the same page, so they neither scroll
+   * on their own nor get cut at a fraction of the window. */
+  flex: 0 0 auto;
   padding: 0 22px 22px;
   background: var(--bg-panel);
+}
+
+/*
+ * Where a link really goes, while the cursor is on it — the status line a browser
+ * shows, for the same reason: a message can put one address in the words and
+ * another in the `href`. `is-warning` is when the words name a different site than
+ * the address (`links.js`), and it is phrased as a sentence rather than a colour.
+ */
+.reader-link-status {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin: 0;
+  padding: 5px 22px;
+  border-top: 1px solid var(--rule);
+  background: var(--bg-panel);
+  color: var(--ink-dim);
+  font-size: 11.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: nowrap;
+  overflow-x: auto;
+  text-overflow: ellipsis;
+}
+
+.reader-link-status.is-warning {
+  color: var(--danger);
+  font-family: inherit;
+  font-size: 12px;
 }
 
 .extra-title {

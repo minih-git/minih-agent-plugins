@@ -118,7 +118,7 @@ const TEXT = {
     textBody: "Text body",
     htmlBody: "HTML body",
     attachments: "Attachments",
-    links: "Links (opened in your browser)",
+    linkDisguise: (url) => `The words name another site — this opens ${url}`,
     truncated: (limit) => `This message is larger than ${limit}; only the beginning is shown.`,
     // The one confirmation a POP3 delete gets: future tense, and no undo implied.
     deleteConfirmTitle: "Delete this message?",
@@ -371,7 +371,7 @@ const TEXT = {
     textBody: "纯文本正文",
     htmlBody: "HTML 正文",
     attachments: "附件",
-    links: "链接（在浏览器中打开）",
+    linkDisguise: (url) => `文字与实际地址不一致，这里会打开 ${url}`,
     truncated: (limit) => `这封邮件超过 ${limit}，只显示了开头部分。`,
     deleteConfirmTitle: "删除这封邮件？",
     deleteConfirmBody: (subject) => `「${subject}」将从服务器上永久删除，无法撤销。`,

@@ -4,8 +4,9 @@
   <meta charset="UTF-8" />
   <!--
     The panel's own policy. `frame-src 'self'` is what the reading pane needs for
-    its `srcdoc` frame: the frame itself is sandboxed empty and carries its own
-    CSP, so it can neither script nor load anything remote by default.
+    its `srcdoc` frame: the frame is same-origin (so the panel can answer a click
+    inside it) but never allowed to script, and it carries its own CSP besides — so
+    even a navigation attempt from a message has nowhere to go but this panel.
   -->
   <meta
     http-equiv="Content-Security-Policy"
@@ -81,6 +82,10 @@
           </header>
           <div class="reader-body" id="reader-body"></div>
           <div class="reader-extras" id="reader-extras"></div>
+          <!-- Where a link really goes, while the cursor is on it. `aria-hidden`:
+               a screen reader already reads the address out of the link itself,
+               and this line would only repeat it on every hover. -->
+          <p class="reader-link-status is-hidden" id="reader-link-status" aria-hidden="true"></p>
         </div>
       </section>
     </div>

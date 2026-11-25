@@ -4,22 +4,23 @@
  * DOMPurify does the sanitizing — it is the only code here trusted to decide what
  * is dangerous — and this file only does the two jobs the sanitizer is not for:
  *
- * - **Links leave the frame.** Every `href` is removed after being collected, so
- *   a click inside the scriptless frame cannot navigate anywhere. The collected
- *   URLs are offered to the user as buttons that the host opens in the real
- *   browser.
+ * - **A link carries an address the panel will act on, and nothing else.** An
+ *   `http`, `https` or `mailto` address is kept (see `frameHref`), every other one
+ *   is removed, and `target` goes with them so nothing can open a window of its
+ *   own. The click is answered by the panel, which hands the address to the host's
+ *   browser or opens the composer for a `mailto:` — never by the frame navigating.
  * - **Images do not leave the machine.** A remote `src` is replaced by a 1x1
  *   transparent pixel and remembered, so the default view makes no request; the
  *   "show remote images" variant puts the original source back.
  *
- * The frame's CSP is the enforcement for both (see `policy.js`); this file makes
- * the default view look deliberate instead of broken.
+ * The frame's CSP and the panel's own are the enforcement for both (see
+ * `policy.js`); this file makes the default view look deliberate instead of broken.
  *
  * It also keeps the message's own stylesheet: see `extractStyles`.
  */
 
 import DOMPurify from "./vendor/purify.es.mjs";
-import { TRANSPARENT_PIXEL, classifyLink, isRemoteUrl } from "./policy.js";
+import { TRANSPARENT_PIXEL, classifyLink, frameHref, isRemoteUrl } from "./policy.js";
 
 /** Elements a mail body has no business carrying into a panel. */
 const FORBID_TAGS = [
@@ -55,11 +56,13 @@ const FORBID_ATTR = ["srcset", "imagesrcset", "ping", "formaction", "xlink:href"
  * The sanitizer's configuration, exported so a test can state the one fact that
  * matters here: `style` is not in the allowlist, so DOMPurify removes a mail's
  * `<style>` blocks. That is why `extractStyles` exists.
+ *
+ * `target` is deliberately absent: a link in a message never chooses where it
+ * opens, and `prepareBody` removes the attribute in case a message carries one.
  */
 export const SANITIZE_CONFIG = {
   WHOLE_DOCUMENT: false,
   ALLOW_DATA_ATTR: false,
-  ADD_ATTR: ["target"],
   FORBID_TAGS,
   FORBID_ATTR,
 };
@@ -106,22 +109,29 @@ export function prepareBody(rawHtml) {
   const styles = extractStyles(rawHtml);
   const clean = DOMPurify.sanitize(String(rawHtml ?? ""), CONFIG);
   const doc = new DOMParser().parseFromString(`<!doctype html><html><body>${clean}</body></html>`, "text/html");
+  // `links` is kept for the tests and for a caller that wants an address list; the
+  // panel no longer renders it, because a link now works where it is written.
   const links = [];
   const seen = new Set();
   for (const anchor of doc.querySelectorAll("a")) {
-    const href = anchor.getAttribute("href") ?? "";
-    if (href) {
-      const kind = classifyLink(href);
-      if (kind && !seen.has(href)) {
-        seen.add(href);
+    const kept = frameHref(anchor.getAttribute("href") ?? "");
+    if (kept) {
+      const kind = classifyLink(kept);
+      if (!seen.has(kept)) {
+        seen.add(kept);
         links.push({
-          url: href,
+          url: kept,
           kind,
-          text: (anchor.textContent || href).trim().slice(0, 160) || href,
+          text: (anchor.textContent || kept).trim().slice(0, 160) || kept,
         });
       }
+      anchor.setAttribute("href", kept);
+      // Nothing in a message opens a window of its own: the panel answers the click
+      // and decides what happens, and `rel` says so even if something else follows it.
+      anchor.setAttribute("rel", "noreferrer noopener");
+    } else {
+      anchor.removeAttribute("href");
     }
-    anchor.removeAttribute("href");
     anchor.removeAttribute("target");
   }
   let remoteImages = 0;

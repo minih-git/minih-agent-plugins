@@ -10,9 +10,11 @@ import {
   buildFrameDocument,
   classifyLink,
   frameCsp,
+  frameHref,
   isRemoteUrl,
   linkifyText,
 } from "../view/policy.js";
+import { hostOf, linkDisguise, parseMailto } from "../view/links.js";
 import { SANITIZE_CONFIG, extractStyles } from "../view/sanitize.js";
 import { NEWSLETTER_HTML } from "./helpers/newsletter.mjs";
 import { codeText, strings } from "../view/strings.js";
@@ -32,6 +34,8 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const appSource = readFileSync(join(root, "view/app.js"), "utf8");
 const indexSource = readFileSync(join(root, "view/index.html"), "utf8");
 const styleSource = readFileSync(join(root, "view/styles.css"), "utf8");
+const frameSource = readFileSync(join(root, "view/frame.js"), "utf8");
+const sanitizeSource = readFileSync(join(root, "view/sanitize.js"), "utf8");
 
 /**
  * One declaration block by selector, for asserting a rule without a browser.
@@ -48,11 +52,35 @@ function ruleBlock(selector) {
   return (styleSource.match(pattern) ?? []).join("\n");
 }
 
-test("the frame is an empty sandbox: no scripts, no same origin", () => {
-  assert.equal(FRAME_SANDBOX, "");
-  assert.equal(appSource.includes("allow-scripts"), false);
-  assert.equal(appSource.includes("allow-same-origin"), false);
+test("the frame is same-origin and scriptless: allow-same-origin, never allow-scripts", () => {
+  // Same-origin is what lets the panel read the document and answer a click inside
+  // it. The pair `allow-scripts allow-same-origin` is the combination that would let
+  // a message script the panel, so it may never appear — in the string, or anywhere
+  // the panel builds one.
+  assert.equal(FRAME_SANDBOX, "allow-same-origin");
+  for (const forbidden of ["allow-scripts", "allow-popups", "allow-top-navigation", "allow-forms"]) {
+    assert.equal(FRAME_SANDBOX.includes(forbidden), false, forbidden);
+    // A sandbox attribute the panel ever writes may not carry any of them. A comment
+    // that names the forbidden token is fine; the attribute is what matters.
+    assert.doesNotMatch(appSource, new RegExp(`sandbox="[^"]*${forbidden}`), `app.js sets ${forbidden}`);
+    assert.doesNotMatch(
+      appSource,
+      new RegExp(`setAttribute\\("sandbox",\\s*"[^"]*${forbidden}`),
+      `app.js sets ${forbidden}`,
+    );
+  }
   assert.match(appSource, /setAttribute\("sandbox", FRAME_SANDBOX\)/);
+  // The origin is only useful because the panel watches the document it loaded.
+  assert.match(appSource, /import \{ bindFrame \} from "\.\/frame\.js"/);
+  assert.match(appSource, /frame\.addEventListener\("load"/);
+  assert.match(frameSource, /doc\.addEventListener\("click", follow, true\)/);
+  assert.match(frameSource, /doc\.addEventListener\("auxclick", follow, true\)/);
+  assert.match(frameSource, /doc\.addEventListener\("keydown", follow, true\)/);
+  // Every one of them cancels the navigation before it decides anything.
+  assert.match(frameSource, /event\.preventDefault\(\);\n    event\.stopPropagation\(\);/);
+  // And the frame is measured to its content, not fixed to the pane.
+  assert.match(frameSource, /doc\.documentElement\?\.scrollHeight/);
+  assert.match(frameSource, /new ResizeObserver/);
 });
 
 test("the default CSP loads nothing remote, and the image variant is explicit", () => {
@@ -149,6 +177,106 @@ test("only http, https and mailto links are treated as openable", () => {
   assert.equal(classifyLink("file:///etc/passwd"), null);
   assert.equal(classifyLink(""), null);
 });
+test("a link keeps only an address the panel will act on", () => {
+  // What survives sanitizing is what a click can carry. Anything else is removed
+  // outright, because an attribute the panel refuses to act on is still one the
+  // browser would act on if some path ever missed the interception.
+  assert.equal(frameHref("https://example.com/invoice/9"), "https://example.com/invoice/9");
+  assert.equal(frameHref("http://example.com"), "http://example.com");
+  assert.equal(frameHref("mailto:help@example.com?subject=Invoice"), "mailto:help@example.com?subject=Invoice");
+  for (const refused of [
+    "javascript:alert(1)",
+    "JavaScript:alert(1)",
+    "data:text/html,<b>hi",
+    "file:///etc/passwd",
+    "/relative/path",
+    "relative.html",
+    "#anchor",
+    "//tracker.example/x",
+    "",
+  ]) {
+    assert.equal(frameHref(refused), "", JSON.stringify(refused));
+  }
+  // It is the sanitizer that applies it, before the frame is built.
+  assert.match(sanitizeSource, /const kept = frameHref\(anchor\.getAttribute\("href"\) \?\? ""\);/);
+  assert.match(sanitizeSource, /anchor\.setAttribute\("href", kept\);/);
+  assert.match(sanitizeSource, /anchor\.removeAttribute\("href"\);/);
+  // A message never chooses where a link opens: no `target`, and a plain `rel`.
+  assert.match(sanitizeSource, /anchor\.removeAttribute\("target"\);/);
+  assert.match(sanitizeSource, /anchor\.setAttribute\("rel", "noreferrer noopener"\);/);
+  assert.equal(Array.isArray(SANITIZE_CONFIG.ADD_ATTR), false, "target is not re-added by the sanitizer");
+});
+
+test("a mailto link becomes the composer's fields, and nothing else", () => {
+  assert.deepEqual(
+    parseMailto("mailto:ann@example.com?cc=cara@example.com&subject=Re%3A%20INV-9931&body=Hello%0AWorld"),
+    {
+      to: ["ann@example.com"],
+      cc: ["cara@example.com"],
+      bcc: [],
+      subject: "Re: INV-9931",
+      body: "Hello\nWorld",
+    },
+  );
+  // Two recipients in the path, and a `+` is a plus (RFC 6068 escapes a space).
+  assert.deepEqual(parseMailto("mailto:a@b.example,b@c.example?subject=1+1").to, ["a@b.example", "b@c.example"]);
+  assert.equal(parseMailto("mailto:a@b.example?subject=1+1").subject, "1+1");
+  // A link does not get to attach a file or pre-set the thread it answers.
+  const extra = parseMailto("mailto:a@b.example?attach=%2Fetc%2Fpasswd&in-reply-to=%3Cx%40y%3E");
+  assert.deepEqual(Object.keys(extra), ["to", "cc", "bcc", "subject", "body"]);
+  // Not a mailto at all.
+  assert.equal(parseMailto("https://example.com"), null);
+  assert.equal(parseMailto(""), null);
+});
+
+test("a link whose words name another site than the one it opens is flagged", () => {
+  assert.equal(hostOf("https://Login.Your-Bank.com/x"), "login.your-bank.com");
+  assert.equal(hostOf("mailto:a@b.example"), "");
+  assert.equal(hostOf("not a url"), "");
+  // The words say one bank, the address opens another: that is the phish.
+  assert.equal(linkDisguise("https://your-bank.com/login", "https://evil.example/x"), true);
+  assert.equal(linkDisguise("your-bank.com/login", "https://evil.example/x"), true);
+  // A subdomain of the same site is not a lie, and neither is prose with no
+  // address in it — most links are written as "Click here".
+  assert.equal(linkDisguise("https://your-bank.com/login", "https://login.your-bank.com/x"), false);
+  assert.equal(linkDisguise("Click here to pay", "https://evil.example/x"), false);
+  assert.equal(linkDisguise("Invoice INV-9931", "https://evil.example/x"), false);
+  // Two-label public suffixes: sharing `co.uk` is not sharing a site.
+  assert.equal(linkDisguise("https://bank.co.uk", "https://evil.co.uk/x"), true);
+  assert.equal(linkDisguise("https://bank.co.uk", "https://pay.bank.co.uk/x"), false);
+  // A mailto has no host to disagree about.
+  assert.equal(linkDisguise("https://evil.example", "mailto:a@b.example"), false);
+});
+
+test("the reading pane no longer lists links, because a link works where it is written", () => {
+  // No second list under the body: the address stays in the message, and the panel
+  // answers the click (`frame.js`).
+  assert.equal(/message\.body\?\.links/.test(appSource), false);
+  assert.equal(/extra-list/.test(appSource), false);
+  assert.match(appSource, /onOpen: \(url\) => void followLink\(url\)/);
+  assert.match(appSource, /async function followLink\(url\)/);
+  assert.match(appSource, /if \(kind === "mailto"\) \{\n    await openMailto\(url\);/);
+  // The two destinations, and nothing else.
+  assert.match(appSource, /if \(kind === "http"\) await openExternal\(url\);/);
+  // A mailto becomes a draft in this panel, with its fields filled in.
+  assert.match(appSource, /const fields = parseMailto\(url\);/);
+  assert.match(appSource, /to: fields\.to\.map\(\(address\) => \(\{ name: "", address \}\)\)/);
+  assert.match(appSource, /subject: fields\.subject/);
+  // Where the link really goes is shown while the cursor is on it.
+  assert.match(indexSource, /id="reader-link-status"/);
+  assert.match(appSource, /const disguised = classifyLink\(url\) === "http" && linkDisguise\(anchor\?\.textContent \?\? "", url\);/);
+  assert.match(appSource, /t\(\)\.linkDisguise\(url\)/);
+  assert.match(ruleBlock(".reader-link-status"), /position: sticky/);
+  // One scrolling column: the body grows, the attachments follow it, nothing has
+  // its own scrollbar or a fixed slice of the window.
+  assert.match(ruleBlock(".reader-message"), /overflow: auto/);
+  assert.doesNotMatch(ruleBlock(".reader-extras"), /max-height/);
+  assert.doesNotMatch(ruleBlock(".reader-extras"), /overflow: auto/);
+  assert.match(ruleBlock(".reader-body"), /flex: 0 0 auto/);
+  // A plain-text body keeps its link buttons, in place.
+  assert.match(appSource, /onClick: \(\) => void openExternal\(segment\.url\)/);
+});
+
 
 test("remote means off the machine, including a protocol-relative URL", () => {
   assert.equal(isRemoteUrl("https://tracker.example/p.gif"), true);

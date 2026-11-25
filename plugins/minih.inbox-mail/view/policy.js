@@ -1,17 +1,30 @@
 /**
  * The rules the reading pane is built on, as plain data and pure functions.
  *
- * Two of them are security decisions and are therefore kept out of the DOM code,
+ * Three of them are security decisions and are therefore kept out of the DOM code,
  * where they have no reason to vary:
  *
- * - **No script, no origin.** A message body is shown in an `<iframe sandbox="">`
- *   — an empty sandbox, so not `allow-scripts` and not `allow-same-origin`. The
- *   frame gets an opaque origin, cannot reach the panel, and cannot run anything
- *   even if the sanitizer let a `<script>` through.
+ * - **Same origin, no script.** A message body is shown in an
+ *   `<iframe sandbox="allow-same-origin">`. The origin is what lets the panel read
+ *   that document and answer a click inside it — the one thing a mail client has to
+ *   do, and the one thing an opaque frame cannot allow. It grants **no** scripting:
+ *   `allow-scripts` is never set, so no `<script>`, no `on…=` handler and no
+ *   `javascript:` URL in a message can run, and the pair
+ *   `allow-scripts allow-same-origin` — the combination that would let a message
+ *   script the panel it comes from — is never produced. Sanitizing and the CSP below
+ *   stay in place as the second and third line of defence, so a message that somehow
+ *   kept a script still executes nothing.
  * - **No remote load by default.** The frame carries its own CSP: `default-src
  *   'none'` plus inline styles, and `img-src data:` only. A tracking pixel is a
  *   network request to the sender, so nothing remote loads until the user presses
- *   "show remote images" for that one message.
+ *   "show remote images" for that one message. The panel's own CSP keeps
+ *   `frame-src 'self'`, so even a navigation attempt from inside the frame has
+ *   nowhere to go.
+ * - **A link never navigates inside the panel.** `frameHref` is the allowlist: a
+ *   body keeps an `http`, `https` or `mailto` address and loses every other one
+ *   (`javascript:`, `data:`, `file:`, relative). The click itself is answered by the
+ *   panel, which hands an address to the host's browser and opens the composer for a
+ *   `mailto:`.
  *
  * Two more are about reading a mail rather than about security: an HTML message is
  * shown on white paper whatever the app theme is (a mail was designed for one), and
@@ -23,8 +36,15 @@
  * behaves this way.
  */
 
-/** The iframe's sandbox: empty on purpose (no scripts, no same-origin). */
-export const FRAME_SANDBOX = "";
+/**
+ * The iframe's sandbox: same origin, never scripts.
+ *
+ * Same-origin is what makes the document readable from the panel, so a click can be
+ * intercepted instead of navigating the frame. It is only safe because no script may
+ * run here: `allow-scripts` must never be added to this string, and neither may
+ * `allow-popups`, `allow-top-navigation` or `allow-forms`.
+ */
+export const FRAME_SANDBOX = "allow-same-origin";
 
 /** CSP for a body whose images are blocked (the default). */
 export const FRAME_CSP_BLOCKED =
@@ -64,6 +84,20 @@ export function classifyLink(value) {
   if (/^https?:\/\//i.test(text)) return "http";
   if (/^mailto:/i.test(text)) return "mailto";
   return null;
+}
+
+/**
+ * The `href` a message body keeps, or `""` when it keeps none.
+ *
+ * A click inside the frame is answered by the panel, so the address has to survive
+ * sanitizing — but only an address the panel knows what to do with. `javascript:`,
+ * `data:`, `file:`, a protocol-relative or relative URL, and anything else is
+ * removed outright: an attribute the panel refuses to act on is still an attribute
+ * the browser would act on if some path ever missed the interception.
+ */
+export function frameHref(value) {
+  const text = String(value ?? "").trim();
+  return classifyLink(text) ? text : "";
 }
 
 export function frameCsp(allowImages) {
