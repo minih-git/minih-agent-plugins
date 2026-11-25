@@ -245,6 +245,15 @@ line at the bottom of the pane, and says so when the link's own words name a dif
 site than the one it opens. There is no separate list of links under the body; a
 plain-text message keeps its links as buttons in the text.
 
+**Only a link takes over the keyboard and the mouse.** A click, a middle click or
+<kbd>Enter</kbd> on a focused link is answered by the panel; everything else in a
+message belongs to the browser, so text selected in the body can be copied with
+⌘C/Ctrl+C, <kbd>Space</kbd> still scrolls, the arrow keys still move the caret, and a
+`<details>` opens with Enter. A plain character typed while the body has focus is
+handed to the panel's own shortcuts (j/k, r/a/f, c, /), so the keyboard keeps working
+inside the message. An image map (`<area href>`) is treated as a link; its address is
+held to the same rule.
+
 The body's frame is as tall as the message (`scrollHeight`, re-measured by a
 `ResizeObserver` and when an image loads), so the reading pane scrolls as one page —
 subject, actions, body, attachments — and a mail wider than the pane scrolls sideways

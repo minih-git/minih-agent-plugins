@@ -14,7 +14,7 @@ import {
   isRemoteUrl,
   linkifyText,
 } from "../view/policy.js";
-import { hostOf, linkDisguise, parseMailto } from "../view/links.js";
+import { hostOf, linkDisguise, linkEventIntercept, parseMailto } from "../view/links.js";
 import { SANITIZE_CONFIG, extractStyles } from "../view/sanitize.js";
 import { NEWSLETTER_HTML } from "./helpers/newsletter.mjs";
 import { codeText, strings } from "../view/strings.js";
@@ -246,6 +246,41 @@ test("a link whose words name another site than the one it opens is flagged", ()
   assert.equal(linkDisguise("https://bank.co.uk", "https://pay.bank.co.uk/x"), false);
   // A mailto has no host to disagree about.
   assert.equal(linkDisguise("https://evil.example", "mailto:a@b.example"), false);
+});
+
+test("only a link's own activation is intercepted: copy, select and scroll are not", () => {
+  // Opening a link: a click, a middle click, Enter on a focused link.
+  assert.equal(linkEventIntercept({ type: "click" }, true), true);
+  assert.equal(linkEventIntercept({ type: "auxclick", button: 1 }, true), true);
+  assert.equal(linkEventIntercept({ type: "keydown", key: "Enter" }, true), true);
+  // Everything else a mail body is used for stays with the browser: ⌘C/Ctrl+C over a
+  // selected invoice number, select-all, Space to scroll, the arrow keys, a right
+  // click, a click on plain text, Enter outside a link.
+  assert.equal(linkEventIntercept({ type: "keydown", key: "c", metaKey: true }, true), false);
+  assert.equal(linkEventIntercept({ type: "keydown", key: "c", ctrlKey: true }, true), false);
+  assert.equal(linkEventIntercept({ type: "keydown", key: "a", metaKey: true }, true), false);
+  assert.equal(linkEventIntercept({ type: "keydown", key: " " }, true), false);
+  assert.equal(linkEventIntercept({ type: "keydown", key: "ArrowDown" }, true), false);
+  assert.equal(linkEventIntercept({ type: "keydown", key: "Enter", shiftKey: true }, true), false);
+  assert.equal(linkEventIntercept({ type: "keydown", key: "Enter" }, false), false);
+  assert.equal(linkEventIntercept({ type: "click" }, false), false);
+  assert.equal(linkEventIntercept({ type: "auxclick", button: 2 }, true), false);
+  assert.equal(linkEventIntercept({ type: "mousedown" }, true), false);
+  assert.equal(linkEventIntercept(null, true), false);
+  // The frame asks that question *before* it cancels anything: cancelling first and
+  // checking afterwards is what made the body impossible to copy from.
+  assert.match(frameSource, /if \(!linkEventIntercept\(event, Boolean\(anchor\)\)\) \{/);
+  const follow = frameSource.slice(frameSource.indexOf("const follow = (event) => {"));
+  assert.ok(
+    follow.indexOf("linkEventIntercept") < follow.indexOf("event.preventDefault()"),
+    "the decision comes before the cancellation",
+  );
+  // An image map is a link too, and the sanitizer gives it the same address rule.
+  assert.match(frameSource, /closest\("a\[href\], area\[href\]"\)/);
+  assert.match(sanitizeSource, /querySelectorAll\("a, area"\)/);
+  // A focused body still answers the panel's shortcuts, and nothing else.
+  assert.match(frameSource, /onKey\?\.\(event\)/);
+  assert.match(appSource, /onKey: handleKey/);
 });
 
 test("the reading pane no longer lists links, because a link works where it is written", () => {

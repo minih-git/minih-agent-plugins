@@ -1090,6 +1090,9 @@ function renderFrame(message, reader) {
       onOpen: (url) => void followLink(url),
       onStatus: showLinkStatus,
       onLeave: hideLinkStatus,
+      // A plain key with the cursor in the body is still the panel's shortcut: j, k,
+      // r, a, f, c and / keep working, and copy or selection keys never reach here.
+      onKey: handleKey,
     }),
   );
   return frame;

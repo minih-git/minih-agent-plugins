@@ -6,13 +6,19 @@
  * That is enough to give a mail client its ordinary behaviour without trusting the
  * mail:
  *
- * - **A click is answered here.** The document is sanitized, but a `<a href>` is
- *   still a link, and inside a frame it would navigate the frame away from the
- *   message. So every click is intercepted in the capture phase, the frame is never
- *   allowed to navigate, and the panel decides what the address means: the host's
- *   browser for `http(s)`, the panel's own composer for `mailto:`. `auxclick`
- *   (middle click) and <kbd>Enter</kbd> on a focused link take the same path — three
- *   ways to open one link, one answer.
+ * - **A link is answered here, and only a link.** A body is a thing people read
+ *   with a mouse and a keyboard: they copy an invoice number out of it, select it
+ *   all, scroll it with Space, move the caret with the arrow keys, open a
+ *   `<details>` with Enter. None of that may be cancelled. So only an event whose
+ *   target is a link is intercepted (`linkEventIntercept` in `links.js`), and only
+ *   then does the panel decide what the address means: the host's browser for
+ *   `http(s)`, the panel's own composer for `mailto:`. `auxclick` (middle click) and
+ *   <kbd>Enter</kbd> on a focused link take the same path — three ways to open one
+ *   link, one answer.
+ * - **A focused body still answers the panel's shortcuts.** A plain character with
+ *   no ⌘/Ctrl/Alt is handed to the panel's key handler, so j, k, r, a, f, c and /
+ *   work with the cursor in the message; copy, select-all and navigation keys are
+ *   left to the browser.
  * - **Hovering shows where it really goes.** A status line at the bottom of the
  *   reading pane shows the address, and marks it when the link's own words name a
  *   different site than the one it opens (`links.js`).
@@ -24,24 +30,19 @@
  * is, and `app.js` is what knows about accounts, the browser and the composer.
  */
 
+import { linkEventIntercept } from "./links.js";
+
 /**
- * What a click inside one frame resolves to.
+ * The link one event came from, or `null` when it came from plain text.
  *
- * `anchor` is the nearest link the event came from, or `null` for a click on plain
- * text. The caller has already been given a cancelled event: this value only says
- * what to do next.
+ * `area` is in the selector because an image map is a link too: the sanitizer keeps
+ * its `href` under the same rule (`sanitize.js`), so a click on a mapped region has
+ * to reach the same handling as a click on an anchor.
  */
 function anchorOf(event) {
   const target = event.target;
   if (!target || typeof target.closest !== "function") return null;
-  return target.closest("a[href]");
-}
-
-/** Whether this event is a request to follow the link it came from. */
-function isFollow(event) {
-  if (event.type === "auxclick") return event.button === 1;
-  if (event.type === "keydown") return event.key === "Enter" || event.key === " ";
-  return true;
+  return target.closest("a[href], area[href]");
 }
 
 /**
@@ -73,9 +74,9 @@ export function fitFrame(frame) {
  * message leaves a listener or a timer behind.
  *
  * @param frame the `<iframe>` whose document to watch
- * @param handlers `{ onOpen(url), onStatus(url, anchor), onLeave() }`
+ * @param handlers `{ onOpen(url), onStatus(url, anchor), onLeave(), onKey(event) }`
  */
-export function bindFrame(frame, { onOpen, onStatus, onLeave } = {}) {
+export function bindFrame(frame, { onOpen, onStatus, onLeave, onKey } = {}) {
   const doc = frame.contentDocument;
   if (!doc) return;
 
@@ -83,14 +84,32 @@ export function bindFrame(frame, { onOpen, onStatus, onLeave } = {}) {
 
   const follow = (event) => {
     const anchor = anchorOf(event);
-    // Nothing in a mail navigates: not a link, not a stray click, not a form.
+    // The decision comes first: a click on plain text, a ⌘C, an arrow key and a
+    // Space belong to the reader, not to the panel, and cancelling them is how a
+    // mail becomes impossible to copy from (`links.js`).
+    if (!linkEventIntercept(event, Boolean(anchor))) {
+      // A focused body swallows the panel's own single-key shortcuts; a plain
+      // character (no ⌘/Ctrl/Alt) is handed to the panel so j, k, r, a, f, c and /
+      // still work with the cursor in the message. Nothing else is touched.
+      if (
+        event.type === "keydown" &&
+        typeof event.key === "string" &&
+        event.key.length === 1 &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey
+      ) {
+        onKey?.(event);
+      }
+      return;
+    }
+    // A link was activated: the frame never navigates, the panel decides.
     event.preventDefault();
     event.stopPropagation();
-    if (!anchor || !isFollow(event)) return;
     const url = anchor.getAttribute("href") ?? "";
     if (url) onOpen?.(url);
   };
-  // Capture phase, so nothing inside the message sees the click first.
+  // Capture phase, so a link is answered before the frame can act on it.
   doc.addEventListener("click", follow, true);
   doc.addEventListener("auxclick", follow, true);
   doc.addEventListener("keydown", follow, true);

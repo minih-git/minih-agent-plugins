@@ -109,3 +109,32 @@ export function parseMailto(url) {
     body: field("body"),
   };
 }
+
+/**
+ * Whether one event is a request to follow the link it came from.
+ *
+ * This is the whole security-shaped decision of the reading pane, so it is a pure
+ * function with no DOM in it: the frame passes the event's type, key and modifiers
+ * plus whether the target sits inside a link, and gets back whether to intercept.
+ *
+ * Everything a message body can be used for besides opening a link is *not* this
+ * event, and must be left alone: copying a selected invoice number (⌘C / Ctrl+C),
+ * selecting all, moving the caret or scrolling with the arrow keys and Space,
+ * pressing Enter in the middle of a paragraph, a right-click, a click on plain text.
+ * Interception that fires first and checks afterwards is how a mail body ends up
+ * unable to be copied from — so the default answer is "no", and a link has to be
+ * the target of the event for the answer to become "yes".
+ */
+export function linkEventIntercept(event, inLink = false) {
+  if (!event || !inLink) return false;
+  if (event.type === "click") return true;
+  // Middle click opens a link on Windows and Linux; a right click belongs to the
+  // context menu, and the other buttons do nothing here either.
+  if (event.type === "auxclick") return event.button === 1;
+  if (event.type === "keydown") {
+    // Enter activates a focused link. Space scrolls the page, and a modified Enter
+    // is a shortcut (⌘Enter, Shift+Enter), not an activation of anything.
+    return event.key === "Enter" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+  }
+  return false;
+}

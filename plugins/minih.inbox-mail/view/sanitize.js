@@ -113,7 +113,10 @@ export function prepareBody(rawHtml) {
   // panel no longer renders it, because a link now works where it is written.
   const links = [];
   const seen = new Set();
-  for (const anchor of doc.querySelectorAll("a")) {
+  // `area` is here because an image map is a link too: it gets the same rule, and
+  // the panel's click handling matches either element. Removing its `href` instead
+  // would make a mapped image in a newsletter simply dead.
+  for (const anchor of doc.querySelectorAll("a, area")) {
     const kept = frameHref(anchor.getAttribute("href") ?? "");
     if (kept) {
       const kind = classifyLink(kept);

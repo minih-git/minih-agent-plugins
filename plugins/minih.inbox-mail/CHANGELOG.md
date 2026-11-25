@@ -29,11 +29,20 @@
   attachment area no longer scrolls on its own and is no longer capped at 38vh, and a
   mail wider than the pane scrolls sideways inside the frame instead of widening the
   panel.
-- Tests: 290 → 294. `tests/view.test.mjs` now asserts the sandbox string (and that the
+- **Only a link is intercepted.** A click, a middle click or <kbd>Enter</kbd> on a
+  focused link is answered by the panel; everything else in the body stays with the
+  browser — ⌘C/Ctrl+C on a selected invoice number, select-all, Space to scroll, the
+  arrow keys, Enter in the middle of a paragraph, a `<details>` toggle. A plain
+  character typed in the body still reaches the panel's own shortcuts (j/k, r/a/f, c,
+  /), so the keyboard does not stop working inside the message. An image map
+  (`<area href>`) gets the same address rule and the same handling as a link.
+- Tests: 290 → 295. `tests/view.test.mjs` now asserts the sandbox string (and that the
   forbidden tokens never reach a sandbox attribute), the keep-or-drop rule for `href`
   through `frameHref`, the sanitizer's `target`/`rel` handling, `mailto:` parsing
   (including that `attach` and `in-reply-to` are ignored), the lookalike-address check,
-  and that the panel renders no link list at all.
+  that the panel renders no link list at all, and the interception rule itself: a
+  link's click, middle click and Enter, and never ⌘C, Space, an arrow key or a click
+  on plain text.
 
 ## 0.5.0
 
