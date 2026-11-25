@@ -1803,6 +1803,9 @@ test("a refusal from the host reaches the panel as its code, with nothing append
     await plugin.onUnload();
     rmSync(host.dataPath, { recursive: true, force: true });
 
+  }
+});
+
 test("a reply is drafted from the message the panel opened, with no second fetch", async () => {
   const server = createFakeServer({ uidNext: 1 });
   const host = fakeHost({ instances: [oneAccount("owner@qq.com")], servers: { "mailbox#acc_1": server } });
@@ -1930,11 +1933,14 @@ test("a forward lists the original's attachments and carries its headers in the 
     assert.match(result.draft.text, /Forwarded message/);
     assert.match(result.draft.text, /From: Vendor <billing@vendor\.example>/);
     assert.deepEqual(
-      result.draft.forwardOf.attachments.map((file) => [file.index, file.filename]),
-      [[0, "report.pdf"]],
+      result.draft.forwardOf.attachments.map((file) => [file.part, file.filename]),
+      [["2", "report.pdf"]],
     );
   } finally {
     await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
 
 test("an attachment is saved from the one part the server numbers, decoded", async () => {
   const server = createFakeServer({ uidNext: 1 });
@@ -1950,10 +1956,11 @@ test("an attachment is saved from the one part the server numbers, decoded", asy
     const opened = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
     assert.equal(opened.message.attachments[0].part, "2");
     const storesBefore = server.stores.length;
-    const result = await panel(plugin, "inbox.downloadAttachment", {
+    const result = await panel(plugin, "inbox.saveAttachment", {
       accountId: "acc_1",
       key: target.key,
-      index: 0,
+      part: opened.message.attachments[0].part,
+      filename: "report.pdf",
     });
     assert.equal(result.ok, true);
     assert.equal(result.name, "report.pdf");
@@ -1979,10 +1986,11 @@ test("a cancelled save dialog writes nothing and is not an error", async () => {
     const target = snapshot.messages[0];
     await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
     host.state.saveBehaviour = "cancel";
-    const result = await panel(plugin, "inbox.downloadAttachment", {
+    const result = await panel(plugin, "inbox.saveAttachment", {
       accountId: "acc_1",
       key: target.key,
-      index: 0,
+      part: "2",
+      filename: "report.pdf",
     });
     assert.equal(result.ok, true);
     assert.equal(result.cancelled, true);
@@ -2004,10 +2012,11 @@ test("a save dialog that is already open is reported as a code", async () => {
     const target = snapshot.messages[0];
     await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
     host.state.saveBehaviour = "busy";
-    const result = await panel(plugin, "inbox.downloadAttachment", {
+    const result = await panel(plugin, "inbox.saveAttachment", {
       accountId: "acc_1",
       key: target.key,
-      index: 0,
+      part: "2",
+      filename: "report.pdf",
     });
     assert.equal(result.ok, false);
     assert.equal(result.code, "SAVE_AS_BUSY");
@@ -2035,10 +2044,11 @@ test("an attachment above the save limit is refused before its bytes are fetched
     const snapshot = await checkUntil(plugin, 1);
     const target = snapshot.messages[0];
     await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
-    const result = await panel(plugin, "inbox.downloadAttachment", {
+    const result = await panel(plugin, "inbox.saveAttachment", {
       accountId: "acc_1",
       key: target.key,
-      index: 0,
+      part: "2",
+      filename: "report.pdf",
     });
     assert.equal(result.ok, false);
     assert.equal(result.code, "ATTACHMENT_TOO_LARGE");
@@ -2049,11 +2059,166 @@ test("an attachment above the save limit is refused before its bytes are fetched
     rmSync(host.dataPath, { recursive: true, force: true });
   }
 });
+
+/** The bytes the fake server answers for each section of the repro message. */
+const INLINE_PNG = "%PNG-1.0 inline image";
+const INLINE_PDF = "%PDF-1.4 fake attachment";
+
+/**
+ * `BODYSTRUCTURE` for HTML with an inline `cid:` image, and a PDF beside it.
+ *
+ * The numbers are the whole point: `1.2` is the image inside the related body and
+ * `2` is the PDF, while the panel's list is `0:image/png | 1:report.pdf`.
+ */
+const INLINE_IMAGE_STRUCTURE =
+  '((("TEXT" "HTML" ("CHARSET" "UTF-8") NIL NIL "7BIT" 40 1 NIL NIL NIL)' +
+  '("IMAGE" "PNG" NIL "<logo@example.com>" NIL "BASE64" 22 NIL ("INLINE" NIL))' +
+  ' "RELATED" ("BOUNDARY" "R"))' +
+  '("APPLICATION" "PDF" ("NAME" "report.pdf") NIL NIL "BASE64" 4096 NIL' +
+  ' ("ATTACHMENT" ("FILENAME" "report.pdf")))' +
+  ' "MIXED" ("BOUNDARY" "M"))';
+
+/** The same message as the server holds it: one raw MIME document. */
+function rawWithInlineImage() {
+  return [
+    "From: Vendor <billing@vendor.example>",
+    "Subject: Quarterly",
+    "Message-ID: <quarterly@example.com>",
+    'Content-Type: multipart/mixed; boundary="M"',
+    "",
+    "--M",
+    'Content-Type: multipart/related; boundary="R"',
+    "",
+    "--R",
+    "Content-Type: text/html; charset=utf-8",
+    "",
+    '<p>quarterly <img src="cid:logo@example.com"></p>',
+    "--R",
+    "Content-Type: image/png",
+    "Content-Transfer-Encoding: base64",
+    "Content-ID: <logo@example.com>",
+    "Content-Disposition: inline",
+    "",
+    Buffer.from(INLINE_PNG).toString("base64"),
+    "--R--",
+    "--M",
+    "Content-Type: application/pdf",
+    'Content-Disposition: attachment; filename="report.pdf"',
+    "Content-Transfer-Encoding: base64",
+    "",
+    Buffer.from(INLINE_PDF).toString("base64"),
+    "--M--",
+    "",
+  ].join("\r\n");
+}
+
+test("an inline image and a PDF are saved and forwarded by part, not by list position", async () => {
+  const server = serverWithSent();
+  const host = fakeHost({ instances: [oneAccount("owner@qq.com")], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.add(
+      message({
+        uid: 1,
+        subject: "Quarterly",
+        messageId: "<quarterly@example.com>",
+        raw: rawWithInlineImage(),
+        structure: INLINE_IMAGE_STRUCTURE,
+        // A different payload per section: saving the wrong part would show up in
+        // the bytes the host was asked to write.
+        parts: { "1.2": INLINE_PNG, "2": INLINE_PDF },
+      }),
+    );
+    const snapshot = await checkUntil(plugin, 1);
+    const target = snapshot.messages[0];
+    const opened = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
+    assert.deepEqual(
+      opened.message.attachments.map((file) => [file.part, file.filename]),
+      [
+        ["1.2", "image/png"],
+        ["2", "report.pdf"],
+      ],
+    );
+    // Clicking the image saves the image.
+    const image = await panel(plugin, "inbox.saveAttachment", {
+      accountId: "acc_1",
+      key: target.key,
+      part: "1.2",
+      filename: "image/png",
+    });
+    assert.equal(image.ok, true);
+    assert.equal(image.part, "1.2");
+    assert.equal(host.state.saves[0].bytes.toString("utf8"), INLINE_PNG);
+    assert.equal(host.state.saves[0].mimeType, "image/png");
+    // The pane calls an unnamed part `image/png`; a save dialog is offered a name.
+    assert.equal(host.state.saves[0].name, "attachment.png");
+    assert.deepEqual(server.partFetches, [{ uid: 1, section: "1.2" }]);
+    // Clicking the PDF saves the PDF.
+    const pdf = await panel(plugin, "inbox.saveAttachment", {
+      accountId: "acc_1",
+      key: target.key,
+      part: "2",
+      filename: "report.pdf",
+    });
+    assert.equal(pdf.ok, true);
+    assert.equal(host.state.saves[1].bytes.toString("utf8"), INLINE_PDF);
+    assert.equal(host.state.saves[1].name, "report.pdf");
+    assert.deepEqual(server.partFetches.at(-1), { uid: 1, section: "2" });
+    // A part number that belongs to another file is refused, not written.
+    const mismatch = await panel(plugin, "inbox.saveAttachment", {
+      accountId: "acc_1",
+      key: target.key,
+      part: "2",
+      filename: "image/png",
+    });
+    assert.equal(mismatch.ok, false);
+    assert.equal(mismatch.code, "ATTACHMENT_MISMATCH");
+    assert.equal(host.state.saves.length, 2, "a mismatched part writes nothing");
+    // Anything that is not a section number never reaches a command.
+    const invalid = await panel(plugin, "inbox.saveAttachment", {
+      accountId: "acc_1",
+      key: target.key,
+      part: "2;DELETE INBOX",
+      filename: "report.pdf",
+    });
+    assert.equal(invalid.ok, false);
+    assert.equal(invalid.code, "INVALID_ARGUMENT");
+    // Forwarding the ticked image carries the image, and not the PDF beside it.
+    const draft = await panel(plugin, "inbox.draft", { accountId: "acc_1", key: target.key, mode: "forward" });
+    assert.deepEqual(
+      draft.draft.forwardOf.attachments.map((file) => [file.part, file.filename]),
+      [
+        ["1.2", "image/png"],
+        ["2", "report.pdf"],
+      ],
+    );
+    const sent = await panel(plugin, "inbox.send", {
+      accountId: "acc_1",
+      to: ["ann@example.com"],
+      subject: "Fwd: Quarterly",
+      text: "see below",
+      forwardOf: {
+        accountId: draft.draft.forwardOf.accountId,
+        key: draft.draft.forwardOf.key,
+        attachments: [{ part: "1.2", filename: "image/png" }],
+      },
+    });
+    assert.equal(sent.ok, true);
+    const mime = Buffer.from(host.state.sends[0].mime).toString("latin1");
+    assert.match(mime, /^Content-Type: image\/png/m);
+    assert.ok(
+      mime.replace(/\r\n/g, "").includes(Buffer.from(INLINE_PNG).toString("base64")),
+      "the forwarded message carries the image's own bytes",
+    );
+    assert.equal(mime.includes("report.pdf"), false, "the unticked PDF is nowhere in the message");
+    assert.deepEqual(server.partFetches.at(-1), { uid: 1, section: "1.2" });
+  } finally {
+    await plugin.onUnload();
     rmSync(host.dataPath, { recursive: true, force: true });
   }
 });
-  }
-});
+
 
 /**
  * One raw message whose body really is `multipart/mixed` with one attachment.
@@ -2126,10 +2291,11 @@ test("a POP3 attachment is taken out of the one message the server may RETR", as
     const opened = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
     assert.equal(opened.message.attachments.length, 1);
     assert.equal(opened.message.attachments[0].filename, "report.pdf");
-    const result = await panel(plugin, "inbox.downloadAttachment", {
+    const result = await panel(plugin, "inbox.saveAttachment", {
       accountId: "acc_1",
       key: target.key,
-      index: 0,
+      part: opened.message.attachments[0].part,
+      filename: "report.pdf",
     });
     assert.equal(result.ok, true);
     assert.equal(result.name, "report.pdf");

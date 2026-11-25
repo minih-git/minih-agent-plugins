@@ -54,18 +54,29 @@
   takes the part out of it. Bounded at 50 MiB per file and refused above it rather
   than truncated, one dialog at a time (`SAVE_AS_BUSY`), a cancelled dialog writes
   nothing, and the bytes never enter the plugin's data folder. The reading pane
-  shows progress on the card and cannot be clicked twice.
+  shows progress on the card and cannot be clicked twice. An attachment is named
+  by its MIME section number (`1.2`, `2`) in the pane, in the save call
+  (`inbox.saveAttachment` takes `{ part, filename }`) and in a forwarded message:
+  a row in a list means different things to the pane's parser and to the server's
+  `BODYSTRUCTURE` as soon as a message has an inline `cid:` image, and the wrong
+  number would save and forward a file the user did not click. The number is
+  format-checked before it reaches a command, confirmed against the server's own
+  structure, and a part whose name disagrees with the pane's is refused
+  (`ATTACHMENT_MISMATCH`) instead of being written under another name.
 - **The manifest says what is true now.** Permissions add `mail.send` and
   `fs.write`; the slot declares `userSend: { security: ["tls", "starttls"] }`; the
   scope admits the submission hosts. The English and Chinese `safetyNotes`,
   `description` and README no longer claim that the plugin never sends mail and
   never downloads an attachment — they describe when it does, through which server,
   and what it files afterwards.
-- Tests: 227 → 276. New suites for the message builder (`tests/compose.test.mjs`)
+- Tests: 227 → 290. New suites for the message builder (`tests/compose.test.mjs`)
   and part location (`tests/attachments.test.mjs`), plus fake-host coverage for the
   endpoint rules, a refused send, the Sent copy (and Gmail skipping it), reply /
-  reply-all / forward drafts, a one-part download that sets no `\Seen`, a cancelled
-  and a busy save dialog, the size limit, and the POP3 path.
+  reply-all / forward drafts, a one-part save that sets no `\Seen`, a cancelled and
+  a busy save dialog, the size limit, and the POP3 path. One case is the message
+  that started it: HTML with an inline `cid:` image and a PDF beside it, where the
+  image is part `1.2` and the PDF part `2` — saving and forwarding the image proves
+  the section number travels, not a row.
 
 ## 0.4.0
 

@@ -910,7 +910,7 @@ function extras(message) {
       el(
         "ul",
         { class: "attachment-list" },
-        ...message.attachments.map((file, index) => attachmentCard(message, file, index)),
+        ...message.attachments.map((file) => attachmentCard(message, file)),
       ),
     );
   }
@@ -948,9 +948,9 @@ function extras(message) {
  * the card says so and cannot be pressed again — the host allows one dialog per
  * plugin, and a second click would only be refused.
  */
-function attachmentCard(message, file, index) {
+function attachmentCard(message, file) {
   const table = t();
-  const id = `${message.accountId}:${message.key}:${index}`;
+  const id = `${message.accountId}:${message.key}:${file.part}`;
   const busy = state.downloading.has(id);
   const save = el("button", {
     type: "button",
@@ -958,7 +958,7 @@ function attachmentCard(message, file, index) {
     title: busy ? table.savingAttachment : table.saveAttachment,
     "aria-label": `${table.saveAttachment}: ${file.filename}`,
     disabled: busy || undefined,
-    onClick: () => void saveAttachment(message, file, index),
+    onClick: () => void saveAttachment(message, file),
   });
   save.append(icon("download"), el("span", { text: busy ? table.savingAttachment : table.saveAttachment }));
   return el(
@@ -986,17 +986,18 @@ function attachmentCard(message, file, index) {
  * other outcome — a refused size, a busy dialog, a path that could not be
  * written — arrives as a code and is shown as a sentence.
  */
-async function saveAttachment(message, file, index) {
-  const id = `${message.accountId}:${message.key}:${index}`;
+async function saveAttachment(message, file) {
+  const id = `${message.accountId}:${message.key}:${file.part}`;
   if (state.downloading.has(id)) return;
   const table = t();
   state.downloading.add(id);
   render();
   try {
-    const result = await call("inbox.downloadAttachment", {
+    const result = await call("inbox.saveAttachment", {
       accountId: message.accountId,
       key: message.key,
-      index,
+      part: file.part,
+      filename: file.filename,
     });
     if (!result.cancelled) setNotice(table.savedFile(result.name || file.filename));
   } catch (error) {

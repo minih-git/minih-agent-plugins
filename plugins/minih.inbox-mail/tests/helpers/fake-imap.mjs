@@ -50,6 +50,10 @@ export function message({
   attachment = false,
   /** The octet count the structure reports for that part, when a test needs one. */
   attachmentSize,
+  /** A `BODYSTRUCTURE` to answer with instead of the default two-part one. */
+  structure,
+  /** Per-section bytes for a `BODY.PEEK[<part>]` fetch, keyed by section number. */
+  parts,
 } = {}) {
   return {
     uid,
@@ -67,6 +71,8 @@ export function message({
     bodyText,
     attachment,
     attachmentSize,
+    structure,
+    parts,
   };
 }
 
@@ -95,6 +101,9 @@ function envelopeOf(entry) {
  * downloading anything.
  */
 function structureOf(entry) {
+  // A test that needs a different tree (an inline image, a nested multipart) says
+  // so; the default is one text part, plus an attachment when asked for.
+  if (entry.structure) return entry.structure;
   const size = Buffer.byteLength(String(entry.bodyText ?? ""), "utf8");
   const text = `("TEXT" "PLAIN" ("CHARSET" "UTF-8") NIL NIL "8BIT" ${size} 3)`;
   if (!entry.attachment) return text;
@@ -259,15 +268,20 @@ export function createFakeServer(options = {}) {
       push(`${tag} OK FETCH completed\r\n`);
       return;
     }
-    // A one-part fetch: `BODY.PEEK[2]` is exactly one attachment's bytes. The fake
+    // A one-part fetch: `BODY.PEEK[1.2]` is exactly one part's bytes. The fake
     // answers with the scripted payload in the encoding the structure declares, so
-    // a test can check the plugin decodes rather than trusting the reply.
+    // a test can check the plugin decodes rather than trusting the reply — and it
+    // can script a different payload per section, which is how a test proves the
+    // plugin fetched the part the user clicked rather than a neighbouring one.
     const partSection = /BODY\.PEEK\[(\d+(?:\.\d+)*)\]/i.exec(command);
     if (partSection) {
       const section = partSection[1];
       for (const entry of wanted) {
-        if (!entry.attachment) continue;
-        const payload = Buffer.from(String(entry.attachmentData ?? server.attachmentData), "utf8").toString("base64");
+        const scripted = entry.parts?.[section];
+        if (scripted === undefined && !entry.attachment) continue;
+        const payload = Buffer.from(String(scripted ?? entry.attachmentData ?? server.attachmentData), "utf8").toString(
+          "base64",
+        );
         server.partFetches.push({ uid: entry.uid, section });
         push(`* ${sequenceOf(entry.uid)} FETCH (UID ${entry.uid} BODY[${section}] {${payload.length}}\r\n`);
         push(payload);

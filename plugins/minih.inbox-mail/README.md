@@ -377,6 +377,15 @@ flagged for deletion.
 | Delete | `LIST` finds the trash (special-use `\Trash`, else a name such as `Trash`, `Deleted Messages`, `已删除`), then one `UID MOVE <uid> Trash`. Without `MOVE`: `UID COPY <uid> Trash`, `UID STORE <uid> +FLAGS (\Deleted)`, `UID EXPUNGE <uid>`. | `DELE <n>` for that message, then `QUIT` to commit it. |
 | Archive | The same three commands into a special-use `\Archive` mailbox (or Gmail's All Mail), and only when `LIST` found one. | Not offered: POP3 has no folders. |
 
+An attachment is named by its **section number** everywhere — in the reading pane's
+list, in a save request (`inbox.saveAttachment` takes `{ part, filename }`) and in
+a forwarded message. A row number is not a name: an inline `cid:` image or an
+unnamed part makes the pane's list and the server's `BODYSTRUCTURE` count
+differently, and a row that means two things saves or forwards a file the user did
+not click. The number is checked against the server's structure, and a part whose
+name disagrees with the one the pane showed is refused (`ATTACHMENT_MISMATCH`)
+rather than written under the wrong name.
+
 A server with neither `MOVE` nor `UIDPLUS`, or a mailbox with no trash, is refused
 with a message saying so and the mail stays where it is. On IMAP the message ends
 up in the trash and the panel says "moved to the trash"; on POP3 the delete is

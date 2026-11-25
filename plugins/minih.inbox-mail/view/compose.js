@@ -309,9 +309,25 @@ export function createComposer(container, { stringsFor, localeFor, onSend, onClo
   function totalSize() {
     const picked = totalBytes(state.attachments);
     const forwarded = (state.forwardOf?.attachments ?? [])
-      .filter((file) => state.forwardSelection.has(file.index))
+      .filter((file) => state.forwardSelection.has(file.part))
       .reduce((sum, file) => sum + (Number(file.size) || 0), 0);
     return picked + forwarded;
+  }
+
+  /**
+   * What a forward says about the original's attachments: each ticked part by its
+   * section number, with the name the list showed, so the plugin can check that
+   * the number still means that file before anything goes on the wire.
+   */
+  function forwardPayload() {
+    const files = (state.forwardOf?.attachments ?? []).filter((file) =>
+      state.forwardSelection.has(file.part),
+    );
+    return {
+      accountId: state.forwardOf.accountId,
+      key: state.forwardOf.key,
+      attachments: files.map((file) => ({ part: file.part, filename: file.filename })),
+    };
   }
 
   function selectedAccount() {
@@ -405,10 +421,10 @@ export function createComposer(container, { stringsFor, localeFor, onSend, onClo
           { class: "compose-forward-item" },
           el("input", {
             type: "checkbox",
-            checked: state.forwardSelection.has(file.index) ? "" : undefined,
+            checked: state.forwardSelection.has(file.part) ? "" : undefined,
             onChange: (event) => {
-              if (event.target.checked) state.forwardSelection.add(file.index);
-              else state.forwardSelection.delete(file.index);
+              if (event.target.checked) state.forwardSelection.add(file.part);
+              else state.forwardSelection.delete(file.part);
               renderFoot();
             },
           }),
@@ -614,9 +630,7 @@ export function createComposer(container, { stringsFor, localeFor, onSend, onClo
         attachments: state.attachments.map((file) => ({ name: file.name, type: file.type, data: file.data })),
         inReplyTo: state.inReplyTo,
         references: state.references,
-        forwardOf: state.forwardOf
-          ? { accountId: state.forwardOf.accountId, key: state.forwardOf.key, attachments: [...state.forwardSelection] }
-          : null,
+        forwardOf: state.forwardOf ? forwardPayload() : null,
       });
       close();
       onClosed(result ?? {});

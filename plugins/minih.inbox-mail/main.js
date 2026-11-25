@@ -326,14 +326,14 @@ async function onPanelInvoke(channel, payload) {
         return { ok: true, ...(await runtime.archive(payload ?? {})) };
       // Since 0.5.0 the panel can also answer a message and save an attachment.
       // Both are one user click each: a reply is built from the body the panel
-      // already opened, a download saves exactly one file to where the host's own
+      // already opened, a save writes exactly one file to where the host's own
       // dialog points, and neither runs anywhere but under those clicks.
       case "inbox.draft":
         return { ok: true, draft: await runtime.draft(payload ?? {}) };
       case "inbox.send":
         return { ok: true, ...(await runtime.send(payload ?? {})) };
-      case "inbox.downloadAttachment":
-        return { ok: true, ...(await runtime.downloadAttachment(payload ?? {})) };
+      case "inbox.saveAttachment":
+        return { ok: true, ...(await runtime.saveAttachment(payload ?? {})) };
       case "inbox.openWebmail":
         return { ok: true, ...(await runtime.openWebmail(payload?.instanceId)) };
       case "inbox.openExternal":

@@ -203,20 +203,29 @@ function encodeHeaderValue(value) {
   return words.map((word) => `=?UTF-8?B?${Buffer.from(word, "utf8").toString("base64")}?=`).join("\r\n ");
 }
 
-/** Fold one ASCII value on spaces so every line stays within `width`. */
+/**
+ * Fold one ASCII value at its own whitespace, so every line stays within `width`.
+ *
+ * Only the whitespace the sender wrote is used as a break point, and it is put
+ * back exactly as it was: a subject with two spaces or a tab between two words is
+ * still that subject. Collapsing it to single spaces would rewrite the user's own
+ * text in a header they can see. Whitespace at the two edges is dropped, because a
+ * header value may not begin or end with it once folded.
+ */
 function foldAscii(prefix, value, width = 78) {
-  const words = String(value).split(/\s+/).filter(Boolean);
-  if (!words.length) return `${prefix}`;
+  const text = String(value ?? "").trim();
+  if (!text) return `${prefix}`;
   const lines = [];
   let line = prefix;
-  for (const word of words) {
-    const candidate = line.endsWith(" ") || line === prefix ? `${line}${word}` : `${line} ${word}`;
-    if (candidate.length > width && line.trim() && line !== prefix) {
-      lines.push(line);
-      line = ` ${word}`;
+  for (const token of text.match(/\s+|\S+/g) ?? []) {
+    if (`${line}${token}`.length > width && line !== prefix && line.trim()) {
+      // The whitespace a fold lands on becomes the CRLF and the single space that
+      // continues the header; it cannot also stay in the value.
+      lines.push(line.replace(/\s+$/, ""));
+      line = ` ${token.replace(/^\s+/, "")}`;
       continue;
     }
-    line = candidate;
+    line += token;
   }
   lines.push(line);
   return lines.join("\r\n");

@@ -109,6 +109,24 @@ test("a Chinese subject is encoded words that decode back, and no line is long",
   // without 8BITMIME, and this message must never trip that.
   assert.ok([...out.mime].every((byte) => byte < 128), "the message is 7-bit");
 });
+test("folding a long ASCII subject keeps every space the sender typed", () => {
+  // Two spaces and a tab are the sender's text, not decoration: a fold that
+  // collapsed them would rewrite the subject the recipient reads.
+  const short = "Invoice  for Q3\tattached";
+  assert.equal(headersOf(build({ subject: short }).mime).get("subject"), short);
+  const long = `A  subject${"\t"}with   run${" ".repeat(3)}of spaces, and enough words to need more than one line of seventy-eight characters`;
+  const out = build({ subject: long });
+  for (const line of out.mime.toString("latin1").split("\r\n")) {
+    assert.ok(line.length <= 78, `a header line is ${line.length} characters: ${line}`);
+  }
+  // Unfolding restores the whitespace everywhere except at the break points,
+  // where the fold itself owns one space.
+  const unfolded = headersOf(out.mime).get("subject");
+  assert.equal(unfolded.replace(/\s+/g, " "), long.replace(/\s+/g, " "));
+  assert.match(unfolded, /A\s{2}subject/);
+  assert.match(unfolded, /with\s{3}run/);
+});
+
 
 test("a display name with a comma is quoted, and a CJK name is encoded", () => {
   const out = build({

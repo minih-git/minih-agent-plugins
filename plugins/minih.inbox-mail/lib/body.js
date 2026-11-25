@@ -196,21 +196,53 @@ function cleanFilename(value, fallback) {
   return decoded.length > MAX_FILENAME ? decoded.slice(0, MAX_FILENAME) : decoded;
 }
 
-/** RFC 2231 continuation (`filename*0*`) is rare; the plain `filename*` is not. */
-function filenameFrom(disposition, contentType) {
-  const extended = disposition.params.get("filename*") ?? contentType.params.get("name*");
-  if (extended) {
-    const match = /^[^']*'[^']*'(.*)$/.exec(extended);
-    try {
-      return cleanFilename(decodeURIComponent(match ? match[1] : extended), "");
-    } catch {
-      return cleanFilename(extended, "");
-    }
+/**
+ * One parameter, with RFC 2231 continuations folded.
+ *
+ * `filename*0*=utf-8''%E6%8A%A5` / `filename*1*=%E5%91%8A.pdf` is how a client
+ * escapes a long or non-ASCII file name, and often the only place the name
+ * appears. The sections are joined in index order, the same way
+ * `lib/attachments.js` reads them from `BODYSTRUCTURE`: both sides have to call
+ * one part the same thing, because a name either of them read differently is a
+ * name the save and the forward refuse to trust.
+ *
+ * @returns `{ value, encoded }`, or `null` when the parameter is absent.
+ */
+function extendedParam(params, name) {
+  const direct = params.get(`${name}*`);
+  if (direct) return { value: direct, encoded: true };
+  const continuations = [];
+  for (const [key, value] of params) {
+    const match = new RegExp(`^${name}\\*(\\d+)\\*?$`).exec(key);
+    if (match) continuations.push({ index: Number(match[1]), encoded: key.endsWith("*"), value });
   }
-  return cleanFilename(
-    disposition.params.get("filename") ?? contentType.params.get("name"),
-    "",
-  );
+  if (!continuations.length) return null;
+  continuations.sort((a, b) => a.index - b.index);
+  return {
+    value: continuations.map((entry) => entry.value).join(""),
+    // The first section decides: RFC 2231 marks every encoded section, and a name
+    // split into plain sections is literal text with nothing to decode.
+    encoded: continuations[0].encoded,
+  };
+}
+
+/** The name of one entity, from its disposition first and its type second. */
+function filenameFrom(disposition, contentType) {
+  const extended =
+    extendedParam(disposition.params, "filename") ?? extendedParam(contentType.params, "name");
+  if (!extended) {
+    return cleanFilename(
+      disposition.params.get("filename") ?? contentType.params.get("name"),
+      "",
+    );
+  }
+  if (!extended.encoded) return cleanFilename(extended.value, "");
+  const match = /^[^']*'[^']*'(.*)$/.exec(extended.value);
+  try {
+    return cleanFilename(decodeURIComponent(match ? match[1] : extended.value), "");
+  } catch {
+    return cleanFilename(extended.value, "");
+  }
 }
 
 function textOf(headers, body) {
@@ -325,18 +357,36 @@ function parseMessage(raw, { withData = false } = {}) {
 }
 
 /**
- * The attachment at `index` of one raw message, with its bytes.
+ * The attachment with section number `part` of one raw message, with its bytes.
  *
  * This is the POP3 path: the protocol has no way to ask for one MIME part, so the
  * caller fetches the message (capped) and this function takes out the part the
- * user clicked. The index is the position in the list the panel showed, which
- * came from the same walk.
+ * user clicked — chosen by the same section number the panel showed, never by a
+ * position in a list. Two parsers walk this message (this one for the panel, and
+ * `lib/attachments.js` for the server's `BODYSTRUCTURE`), and an index means
+ * different things to each the moment an inline image or an unnamed part is in the
+ * message, so the number is the only safe name for a part.
+ *
+ * `filename` is what the panel called that part. When both sides have a name and
+ * they disagree, the answer is `ATTACHMENT_MISMATCH` rather than a file the user
+ * did not ask for; an empty name on either side is not a disagreement.
  */
-function selectAttachment(raw, index, { maxBytes = 0 } = {}) {
+function selectAttachment(raw, part, { maxBytes = 0, filename = "" } = {}) {
+  const wanted = String(part ?? "").trim();
+  if (!/^\d+(\.\d+)*$/.test(wanted)) {
+    throw Object.assign(new Error("a MIME part number is required"), { code: "INVALID_ARGUMENT" });
+  }
   const parsed = parseMessage(raw, { withData: true });
-  const file = parsed.attachments[Number(index)];
+  const file = parsed.attachments.find((entry) => entry.part === wanted);
   if (!file) {
     throw Object.assign(new Error("this message has no such attachment"), { code: "ATTACHMENT_NOT_FOUND" });
+  }
+  const expected = String(filename ?? "").trim().toLowerCase();
+  const actual = String(file.filename ?? "").trim().toLowerCase();
+  if (expected && actual && expected !== actual) {
+    throw Object.assign(new Error("the part at that number is a different attachment"), {
+      code: "ATTACHMENT_MISMATCH",
+    });
   }
   if (maxBytes > 0 && file.data.length > maxBytes) {
     throw Object.assign(new Error("this attachment is larger than one save may write"), {

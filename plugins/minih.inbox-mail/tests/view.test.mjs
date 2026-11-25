@@ -290,6 +290,23 @@ test("a reply is sent from the mailbox that received the message, never from ano
   assert.match(composeSource, /sendButton\.disabled = state\.sending \|\| over \|\| !account\?\.canSend;/);
 });
 
+test("an attachment is named by its part in the panel, not by its row", () => {
+  const appSource = readFileSync(join(root, "view/app.js"), "utf8");
+  // The panel's list and the server's structure number parts differently the
+  // moment a message carries an inline image, so the section number the body
+  // already has is what a save sends — and what the card is keyed by.
+  assert.match(appSource, /const id = `\$\{message\.accountId\}:\$\{message\.key\}:\$\{file\.part\}`;/);
+  assert.match(appSource, /part: file\.part,\n      filename: file\.filename,/);
+  assert.match(appSource, /call\("inbox\.saveAttachment"/);
+  const composeSource = readFileSync(join(root, "view/compose.js"), "utf8");
+  // A forward ticks parts too: a ticked neighbour must never travel instead.
+  assert.match(composeSource, /state\.forwardSelection\.has\(file\.part\)/);
+  assert.match(
+    composeSource,
+    /attachments: files\.map\(\(file\) => \(\{ part: file\.part, filename: file\.filename \}\)\)/,
+  );
+});
+
 test("the panel's words cover sending and saving in both languages", () => {
   for (const locale of ["en", "zh-CN"]) {
     const table = strings(locale);
@@ -320,6 +337,8 @@ test("the panel's words cover sending and saving in both languages", () => {
       "TLS_CERTIFICATE",
       "ATTACHMENT_NOT_FOUND",
       "ATTACHMENT_TOO_LARGE",
+      "ATTACHMENT_MISMATCH",
+      "INVALID_ARGUMENT",
       "SAVE_AS_BUSY",
       "SAVE_AS_FAILED",
       "MESSAGE_NOT_OPEN",

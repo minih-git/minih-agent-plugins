@@ -745,12 +745,24 @@ function createRuntime(deps) {
   /**
    * One attachment's bytes, fetched the way its protocol allows.
    *
-   * IMAP asks for the one MIME part `BODYSTRUCTURE` says holds it; POP3 has no
-   * such command, so the whole message is fetched (capped) and the part taken out
-   * of it. Both are bounded by the size one save may write, so an attachment that
-   * could never be saved is refused before the transfer rather than after it.
+   * The attachment is named by its **section number**, the identity both parsers
+   * agree on (`lib/body.js` walks the bytes the panel shows, the server answers
+   * `BODYSTRUCTURE`; an inline image or an unnamed part makes a list position mean
+   * two different things). IMAP confirms that number against the server's own
+   * structure, checks the name the panel reported and the size before it asks for
+   * `BODY.PEEK[<part>]`; POP3 has no such command, so the whole message is fetched
+   * (capped) and the part taken out of it.
+   *
+   * `filename` is what the panel called that part: a name that disagrees with the
+   * server's is `ATTACHMENT_MISMATCH` rather than a file the user did not ask for,
+   * and an empty name on either side is not a disagreement.
    */
-  async function attachmentBytes(record, envelope, index) {
+  async function attachmentBytes(record, envelope, input) {
+    const part = String(input?.part ?? "").trim();
+    if (!attachments.isPart(part)) {
+      throw coded("INVALID_ARGUMENT", "a MIME part number is required");
+    }
+    const reported = String(input?.filename ?? "").trim();
     if (!record.watcher) throw coded("ACCOUNT_OFFLINE", "this mailbox is not connected yet");
     if (record.protocol === "pop3") {
       const fetched = await record.watcher.fetchBody(envelope.key, {
@@ -761,25 +773,32 @@ function createRuntime(deps) {
       if (fetched.truncated) {
         throw coded("ATTACHMENT_TOO_LARGE", "this message is larger than one save may write");
       }
-      const file = body.selectAttachment(fetched.body, index, { maxBytes: SAVE_LIMIT });
-      return { filename: file.filename, type: file.type, data: file.data };
+      const file = body.selectAttachment(fetched.body, part, {
+        maxBytes: SAVE_LIMIT,
+        filename: reported,
+      });
+      return { part, filename: file.filename, type: file.type, data: file.data };
     }
     return record.watcher.withSession(async (session, box) => {
       requireCurrentEra(envelope, box);
       const structure = await session.fetchStructure(envelope.uid, { timeoutMs: BODY_TIMEOUT_MS });
-      const part = attachments.attachmentAt(structure, index);
-      if (!part) throw coded("ATTACHMENT_NOT_FOUND", "this message has no such attachment");
-      if (part.size > SAVE_LIMIT) {
+      const leaf = attachments.partAt(structure, part);
+      if (!leaf) throw coded("ATTACHMENT_NOT_FOUND", "this message has no such attachment");
+      if (!attachments.sameName(reported, leaf.name)) {
+        throw coded("ATTACHMENT_MISMATCH", "the part at that number is a different attachment");
+      }
+      if (leaf.size > SAVE_LIMIT) {
         throw coded("ATTACHMENT_TOO_LARGE", "this attachment is larger than one save may write");
       }
-      const fetched = await session.fetchPart(envelope.uid, part.part, {
+      const fetched = await session.fetchPart(envelope.uid, part, {
         maxBytes: SAVE_LIMIT,
         timeoutMs: DOWNLOAD_TIMEOUT_MS,
       });
       return {
-        filename: part.name || attachments.suggestedName(`attachment-${Number(index) + 1}`),
-        type: part.type === "message/rfc822" ? "message/rfc822" : part.type,
-        data: attachments.decodePart(fetched.data, part.encoding),
+        part,
+        filename: reported || leaf.name || `attachment-${part}`,
+        type: leaf.type || "application/octet-stream",
+        data: attachments.decodePart(fetched.data, leaf.encoding),
       };
     });
   }
@@ -1181,8 +1200,11 @@ function createRuntime(deps) {
           forwardOf: {
             accountId: record.instanceId,
             key: envelope.key,
-            attachments: (opened.attachments ?? []).map((file, index) => ({
-              index,
+            // A forwarded attachment is named by its section number, exactly like a
+            // saved one: an index into the panel's list means something else to the
+            // server's structure as soon as the message has an inline image.
+            attachments: (opened.attachments ?? []).map((file) => ({
+              part: file.part,
               filename: file.filename,
               size: file.size,
             })),
@@ -1237,8 +1259,13 @@ function createRuntime(deps) {
         const sourceState = accountStateOf(source.instanceId);
         const envelope = requireEnvelope(sourceState, input.forwardOf.key);
         const wanted = Array.isArray(input.forwardOf.attachments) ? input.forwardOf.attachments : [];
-        for (const index of wanted) {
-          const file = await attachmentBytes(source, envelope, index);
+        for (const wantedFile of wanted) {
+          // Each ticked attachment is fetched by its own section number, so what
+          // goes out is the file the user chose and nothing beside it.
+          const file = await attachmentBytes(source, envelope, {
+            part: wantedFile?.part,
+            filename: wantedFile?.filename,
+          });
           files.push({ name: file.filename, type: file.type, data: file.data });
         }
         forwarded = { accountId: source.instanceId, key: envelope.key, attachments: wanted.length };
@@ -1285,14 +1312,17 @@ function createRuntime(deps) {
      * host's own dialog, and dropped: nothing is kept in the plugin's data folder,
      * and a cancelled dialog is an answer, not an error.
      */
-    async downloadAttachment(input) {
+    async saveAttachment(input) {
       const record = requireAccount(input?.accountId);
       const state = accountStateOf(record.instanceId);
       const envelope = requireEnvelope(state, input?.key);
       if (typeof host.fs?.saveAs !== "function") {
         throw coded("UNSUPPORTED", "this app version cannot save a file");
       }
-      const file = await attachmentBytes(record, envelope, input?.index);
+      const file = await attachmentBytes(record, envelope, {
+        part: input?.part,
+        filename: input?.filename,
+      });
       if (file.data.length > SAVE_LIMIT) {
         throw coded("ATTACHMENT_TOO_LARGE", "this attachment is larger than one save may write");
       }
@@ -1302,7 +1332,12 @@ function createRuntime(deps) {
         mimeType: file.type || "application/octet-stream",
       });
       if (!saved || !saved.path) return { cancelled: true };
-      return { cancelled: false, name: String(saved.name ?? ""), size: file.data.length };
+      return {
+        cancelled: false,
+        part: file.part,
+        name: String(saved.name ?? ""),
+        size: file.data.length,
+      };
     },
 
     /** Open a provider's web mailbox in the user's own browser. */

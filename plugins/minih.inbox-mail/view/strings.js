@@ -254,6 +254,7 @@ const TEXT = {
       // Saving one attachment.
       ATTACHMENT_NOT_FOUND: "This message no longer has that attachment.",
       ATTACHMENT_TOO_LARGE: "This attachment is larger than the 50 MiB one save may write.",
+      ATTACHMENT_MISMATCH: "That part number is not this attachment, so nothing was saved.",
       SAVE_AS_BUSY: "A save dialog is already open. Finish it first.",
       SAVE_AS_FAILED: "That file could not be written there. Pick another place.",
       POP3_NO_FLAGS: "POP3 does not report read or starred state, so this cannot be changed.",
@@ -496,6 +497,7 @@ const TEXT = {
       ATTACHMENT_NOT_FOUND: "这封邮件里已经没有那个附件了。",
       ATTACHMENT_TOO_LARGE: "这个附件超过了单次保存 50 MiB 的上限。",
       SAVE_AS_BUSY: "已经有一个保存对话框打开了，请先处理它。",
+      ATTACHMENT_MISMATCH: "那个部分号对应的不是这个附件，所以什么都没有保存。",
       SAVE_AS_FAILED: "那个位置写不进去，请换一个位置。",
       POP3_NO_FLAGS: "POP3 不提供已读和星标状态，无法做这个修改。",
       CUSTOM_SERVER_ACCOUNT: "这个邮箱用的是自己填写的服务器。想改用服务商，请在 设置 → 插件 → 邮箱收件 里编辑这个账号。",
