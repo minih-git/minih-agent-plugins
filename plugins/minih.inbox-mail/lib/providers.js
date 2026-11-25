@@ -17,6 +17,14 @@
  * socket, so an endpoint on port 143 with `tls: false` could never be used by
  * this plugin anyway.
  *
+ * Since 0.5.0 each entry also carries `smtp`, the submission endpoint the host
+ * dials for `mail.send`. There `tls` keeps the manifest's meaning rather than
+ * this file's: `true` is implicit TLS (port 465 at every Chinese provider and at
+ * Gmail), `false` is STARTTLS, which the host requires to succeed before it
+ * sends the credential (Outlook, port 587). Ports and transports come from each
+ * provider's own documentation, cited next to the entries, and are mirrored in
+ * `manifest.net.tcp` — the host refuses an endpoint this file does not declare.
+ *
  * `auth` records what the provider accepts for a *password* login, which is the
  * only login the host can perform (`AUTHENTICATE PLAIN` or `LOGIN`; there is no
  * XOAUTH2). `oauth2` means the provider has retired basic authentication for
@@ -28,7 +36,6 @@
  * address's domain when that is unambiguous and picked by the user in the Inbox
  * panel otherwise (`inferProviderId`, `findProvider`).
  */
-
 /**
  * A server the user typed is the other half of this file.
  *
@@ -52,6 +59,8 @@ const PROVIDERS = [
     implicitTls: true,
     auth: "password",
     webmail: "https://mail.qq.com/",
+    // Same QQ page: SMTP smtp.qq.com, SSL port 465.
+    smtp: { host: "smtp.qq.com", port: 465, tls: true },
     // "POP/IMAP和Exchange服务的设置方法": IMAP imap.qq.com, port 993, SSL,
     // login with the 16-digit authorization code.
     source: "https://help.mail.qq.com/detail/108/1090/",
@@ -65,6 +74,8 @@ const PROVIDERS = [
     implicitTls: true,
     auth: "password",
     webmail: "https://mail.163.com/",
+    // Same NetEase page: SMTP smtp.163.com, SSL port 465.
+    smtp: { host: "smtp.163.com", port: 465, tls: true },
     // "网易邮箱服务器参数如何设置？": IMAP imap.163.com, SSL port 993.
     source:
       "https://help.mail.163.com/faqDetail.do?code=d7a5dc8471cd0c0e8b4b8f4f8e49998b374173cfe9171305fa1ce630d7f67ac22b85ac2e7c90cd63",
@@ -78,6 +89,8 @@ const PROVIDERS = [
     implicitTls: true,
     auth: "password",
     webmail: "https://mail.126.com/",
+    // Same table as 163: SMTP smtp.126.com on SSL port 465.
+    smtp: { host: "smtp.126.com", port: 465, tls: true },
     // Same table as 163: the 126 column names imap.126.com on SSL port 993.
     source:
       "https://help.mail.163.com/faqDetail.do?code=d7a5dc8471cd0c0e8b4b8f4f8e49998b374173cfe9171305fa1ce630d7f67ac22b85ac2e7c90cd63",
@@ -91,6 +104,8 @@ const PROVIDERS = [
     implicitTls: true,
     auth: "password",
     webmail: "https://mail.google.com/",
+    // Same Gmail reference: SMTP smtp.gmail.com, port 465, implicit SSL.
+    smtp: { host: "smtp.gmail.com", port: 465, tls: true },
     // Gmail's IMAP/SMTP reference: IMAP imap.gmail.com, port 993, implicit SSL.
     source: "https://developers.google.com/gmail/imap/imap-smtp",
   },
@@ -103,6 +118,8 @@ const PROVIDERS = [
     implicitTls: true,
     auth: "password",
     webmail: "https://exmail.qq.com/",
+    // Same Exmail page: SMTP smtp.exmail.qq.com, SSL, port 465.
+    smtp: { host: "smtp.exmail.qq.com", port: 465, tls: true },
     // "常用邮件客户端软件POP/IMAP/EXCHANGE协议设置": imap.exmail.qq.com, SSL,
     // port 993.
     source: "https://open.work.weixin.qq.com/help2/pc/19886",
@@ -116,6 +133,8 @@ const PROVIDERS = [
     implicitTls: true,
     auth: "oauth2",
     webmail: "https://outlook.live.com/",
+    // Same Microsoft page: SMTP server smtp.office365.com, port 587, STARTTLS.
+    smtp: { host: "smtp.office365.com", port: 587, tls: false },
     // Microsoft's POP/IMAP settings page: IMAP server outlook.office365.com,
     // port 993, SSL/TLS, authentication method "OAuth2/Modern Auth".
     source:
@@ -150,6 +169,14 @@ const PROVIDER_OPTIONS = [
 const USER_PROTOCOLS = ["imap", "pop3"];
 /** The transports the host can perform a login over; plaintext is not one. */
 const USER_SECURITY = ["tls", "starttls"];
+/**
+ * The transports an account's own outgoing server may use.
+ *
+ * The two the slot's `userSend` declares: implicit TLS and a STARTTLS upgrade the
+ * host requires to succeed. There is no plaintext submission and no way for this
+ * file to name one.
+ */
+const USER_SEND_SECURITY = ["tls", "starttls"];
 /**
  * The ports the host's dialog defaults to, per protocol and transport.
  *
@@ -231,22 +258,38 @@ function inferProviderId(address) {
   return id && findProvider(id) ? id : null;
 }
 
-/** One `manifest.net.tcp` entry per provider, deduplicated by `host:port`. */
+/**
+ * One `manifest.net.tcp` entry per provider, inbound and outbound.
+ *
+ * `manifest.net.tcp` is one list for both directions: the host refuses an
+ * endpoint the manifest does not declare, whichever capability names it. So the
+ * IMAP preset and the SMTP preset of a provider are both here, deduplicated by
+ * `host:port` — no provider shares either.
+ */
 function endpoints() {
   const seen = new Set();
   const list = [];
   for (const provider of PROVIDERS) {
-    const key = `${provider.host}:${provider.port}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    list.push({ host: provider.host, port: provider.port, tls: provider.implicitTls });
+    for (const entry of [provider, provider.smtp]) {
+      if (!entry) continue;
+      const key = `${entry.host}:${entry.port}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const tls = entry === provider ? provider.implicitTls : entry.tls === true;
+      list.push({ host: entry.host, port: entry.port, tls });
+    }
   }
   return list;
 }
 
 /** Every host a credential slot must be allowed to be injected into. */
 function hosts() {
-  return [...new Set(PROVIDERS.map((provider) => provider.host))];
+  const list = [];
+  for (const provider of PROVIDERS) {
+    list.push(provider.host);
+    if (provider.smtp) list.push(provider.smtp.host);
+  }
+  return [...new Set(list)];
 }
 
 /**
@@ -306,6 +349,57 @@ function customEndpointOf(publicFields) {
 }
 
 /**
+ * The outgoing server the user filled in for this account, or `null`.
+ *
+ * `sendServer` / `sendPort` / `sendSecurity` are the three field keys the host
+ * reserves for the slot's `userSend`, stored in the same instance as the
+ * password. A blank host means "no outgoing server of my own" — the form drops
+ * the other two — so an unusable pair is treated as absent: this file never
+ * invents an endpoint, and the plugin's own answer is "ask the account owner",
+ * not "dial whatever is written here".
+ */
+function sendEndpointOf(publicFields) {
+  const fields = publicFields && typeof publicFields === "object" && !Array.isArray(publicFields)
+    ? publicFields
+    : {};
+  const host = String(fields.sendServer ?? "").trim().toLowerCase();
+  if (!host || !plausibleHost(host)) return null;
+  const security = String(fields.sendSecurity ?? "").trim().toLowerCase();
+  if (!USER_SEND_SECURITY.includes(security)) return null;
+  const port = Number(String(fields.sendPort ?? "").trim());
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) return null;
+  return { host, port, security };
+}
+
+/**
+ * How this account sends, and what to tell the user when it cannot.
+ *
+ * `mail.send` takes an `endpoint` only for a **preset** account, and only one the
+ * manifest declares; an account with its own outgoing server must pass none, and
+ * an account with its own **incoming** server is refused outright until it stores
+ * an outgoing one (`MAIL_SEND_NOT_CONFIGURED`) — its password is bound to the
+ * server the user typed and belongs to no declared endpoint.
+ *
+ * The three refusals are distinct on purpose, because each is fixed somewhere
+ * else: `send-no-server` in the account form (the outgoing server is missing),
+ * `send-no-preset` when the provider this account was set up with has no SMTP
+ * entry here, and `send-disabled` when the app itself has no `mail.send` (an
+ * older host, which the manifest's engine floor should have refused).
+ *
+ * @returns `{ endpoint, blocked }` — `endpoint` is `null` for an account that
+ *   sends through its own server, and `blocked` names a refusal reason or `null`.
+ */
+function sendTargetOf({ custom = null, provider = null, publicFields = null } = {}) {
+  const own = sendEndpointOf(publicFields);
+  if (custom) {
+    return own ? { endpoint: null, blocked: null, own } : { endpoint: null, blocked: "send-no-server", own: null };
+  }
+  if (own) return { endpoint: null, blocked: null, own };
+  if (!provider || !provider.smtp) return { endpoint: null, blocked: "send-no-preset", own: null };
+  return { endpoint: { host: provider.smtp.host, port: provider.smtp.port }, blocked: null, own: null };
+}
+
+/**
  * The proxy an account reaches its server through, or `null`.
  *
  * The host performs the proxy handshake, so this file only reads the three
@@ -361,6 +455,7 @@ module.exports = {
   PROVIDERS,
   USER_PROTOCOLS,
   USER_SECURITY,
+  USER_SEND_SECURITY,
   catalogue,
   customEndpointOf,
   customTitle,
@@ -374,4 +469,6 @@ module.exports = {
   proxyLabel,
   proxyOf,
   resolveAccount,
+  sendEndpointOf,
+  sendTargetOf,
 };
