@@ -120,6 +120,12 @@ const TEXT = {
     attachments: "Attachments (listed only, not downloaded)",
     links: "Links (opened in your browser)",
     truncated: (limit) => `This message is larger than ${limit}; only the beginning is shown.`,
+    // The one confirmation a POP3 delete gets: future tense, and no undo implied.
+    deleteConfirmTitle: "Delete this message?",
+    deleteConfirmBody: (subject) =>
+      `“${subject}” will be deleted from the server permanently. This cannot be undone.`,
+    deleteConfirmYes: "Delete",
+    deleteConfirmNo: "Cancel",
     deleteDone: "Moved to the trash.",
     deleteDonePop3: "Deleted from the server. This cannot be undone.",
     archiveDone: "Archived.",
@@ -152,6 +158,8 @@ const TEXT = {
       ACCOUNT_NOT_FOUND: "This mailbox is no longer in the list.",
       ACCOUNT_STOPPED: "This mailbox was stopped.",
       MESSAGE_NOT_FOUND: "This message is no longer in the list. Check the mailbox again.",
+      MESSAGE_STALE:
+        "The mailbox was renumbered since this message was listed, so it cannot be changed. Check the mailbox again to see the current mail.",
       IMAP_NOT_FOUND: "The mailbox no longer holds this message.",
       IMAP_TIMEOUT: "The mailbox did not answer in time.",
       IMAP_CLOSED: "The connection to the mailbox closed. It reconnects on its own.",
@@ -283,6 +291,10 @@ const TEXT = {
     attachments: "附件（仅列出，不下载）",
     links: "链接（在浏览器中打开）",
     truncated: (limit) => `这封邮件超过 ${limit}，只显示了开头部分。`,
+    deleteConfirmTitle: "删除这封邮件？",
+    deleteConfirmBody: (subject) => `「${subject}」将从服务器上永久删除，无法撤销。`,
+    deleteConfirmYes: "删除",
+    deleteConfirmNo: "取消",
     deleteDone: "已移到废纸篓。",
     deleteDonePop3: "已从服务器删除，无法撤销。",
     archiveDone: "已归档。",
@@ -314,6 +326,8 @@ const TEXT = {
       ACCOUNT_NOT_FOUND: "这个邮箱已经不在列表里了。",
       ACCOUNT_STOPPED: "这个邮箱已停止。",
       MESSAGE_NOT_FOUND: "这封邮件不在列表里了，请重新检查邮箱。",
+      MESSAGE_STALE:
+        "这个邮箱重新编号过了，之前列出的这封邮件已经无法改动。请重新检查邮箱，看到的是当前这批邮件。",
       IMAP_NOT_FOUND: "邮箱里已经没有这封邮件了。",
       IMAP_TIMEOUT: "邮箱没有及时响应。",
       IMAP_CLOSED: "与邮箱的连接断开了，插件会自动重连。",

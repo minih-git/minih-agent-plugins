@@ -92,3 +92,30 @@ test("search above the cursor never returns the mailbox's last message again", a
   assert.deepEqual(await session.searchNew({ afterUid: 0 }), [1, 2]);
   await session.close();
 });
+
+test("a mailbox name in modified UTF-7 is decoded, and the raw name is kept for commands", async () => {
+  // 163 and 126 answer `LIST` with `&XfJSIJZk-` for 已删除.
+  const server = createFakeServer({
+    uidNext: 1,
+    capabilities: ["IMAP4rev1", "ID"],
+    mailboxes: [
+      { name: "INBOX", flags: [] },
+      { name: "&XfJSIJZk-", flags: [] },
+      { name: "&V4NXPpCuTvY-", flags: [] },
+    ],
+  });
+  const session = connect(server, { timeoutMs: 500 });
+  await session.select("INBOX");
+  const list = await session.listMailboxes();
+  assert.deepEqual(
+    list.map((entry) => ({ name: entry.name, label: entry.label })),
+    [
+      { name: "INBOX", label: "INBOX" },
+      { name: "&XfJSIJZk-", label: "已删除" },
+      { name: "&V4NXPpCuTvY-", label: "垃圾邮件" },
+    ],
+    "the label is readable, the name is what a command sends",
+  );
+  await session.close();
+});
+

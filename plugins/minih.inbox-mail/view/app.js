@@ -63,6 +63,8 @@ const state = {
   menu: null,
   /** The account whose removal is being confirmed, if any. */
   confirming: null,
+  /** The message a POP3 delete is waiting on, if any. */
+  confirmDelete: null,
 };
 
 let noticeTimer = null;
@@ -99,6 +101,11 @@ const nodes = {
   readerNotice: document.getElementById("reader-notice"),
   readerBody: document.getElementById("reader-body"),
   readerExtras: document.getElementById("reader-extras"),
+  confirm: document.getElementById("confirm"),
+  confirmTitle: document.getElementById("confirm-title"),
+  confirmBody: document.getElementById("confirm-body"),
+  confirmYes: document.getElementById("confirm-yes"),
+  confirmNo: document.getElementById("confirm-no"),
 };
 
 function t() {
@@ -142,6 +149,7 @@ const ICONS = {
   star: '<path d="M8 2.6l1.7 3.5 3.8.5-2.8 2.7.7 3.8L8 11.3l-3.4 1.8.7-3.8-2.8-2.7 3.8-.5z"/>',
   starFilled: '<path d="M8 2.6l1.7 3.5 3.8.5-2.8 2.7.7 3.8L8 11.3l-3.4 1.8.7-3.8-2.8-2.7 3.8-.5z" fill="currentColor"/>',
   mailOpen: '<path d="M2.5 5.5 8 9l5.5-3.5"/><rect x="2" y="3.5" width="12" height="9" rx="1.5"/>',
+  inbox: '<path d="M2.5 9.2 4.2 3.9h7.6l1.7 5.3"/><path d="M2.5 9.2h3.1l.9 1.5h3l.9-1.5h3.1v2.9a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z"/>',
   mail: '<rect x="2" y="3.5" width="12" height="9" rx="1.5"/><path d="M4 5.5l4 3 4-3"/>',
   trash: '<path d="M3 5h10M6.5 5V3.5h3V5M5 5l.6 8h4.8L11 5"/>',
   archive: '<rect x="2" y="3.5" width="12" height="3" rx="1"/><path d="M3.5 6.5v5a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1v-5M6.5 9h3"/>',
@@ -322,6 +330,7 @@ function render() {
   renderAccounts();
   renderList();
   renderReader();
+  renderConfirm();
   const narrow = Boolean(globalThis.matchMedia?.(NARROW).matches);
   nodes.app.dataset.pane = narrow && state.reader ? "reader" : "list";
   nodes.sidebar.setAttribute("aria-expanded", String(state.sidebar));
@@ -349,12 +358,38 @@ function renderFilters() {
 }
 
 /**
+ * The unread count, as a badge.
+ *
+ * Returns `null` for zero, and every caller passes the result through `el()` —
+ * which filters it out. The native `Element.append` would have rendered a literal
+ * "null", which is how 0.4.0 shipped an account row reading
+ * `archive@163.comnull`.
+ */
+function unreadBadge(count, table) {
+  if (!count) return null;
+  return el("span", { class: "badge", text: String(count), title: table.unreadBadge(count) });
+}
+
+/** One account's first-letter avatar: a colour per address, like the list's. */
+function accountAvatar(account) {
+  const address = account.email || account.label || account.instanceId;
+  return el("span", {
+    class: "avatar account-avatar",
+    dataset: { tone: avatarColor(address) },
+    "aria-hidden": "true",
+    text: initials(account.label, address),
+  });
+}
+
+/**
  * The sidebar: one fixed "all inboxes" row, then one row per account.
  *
  * A row is a button (filter the list) plus a "⋯" button (that account's
  * actions), which is why the row is a `div` with two controls rather than one
  * button: a button inside a button is not a thing HTML allows, and a screen
- * reader needs both names.
+ * reader needs both names. Each row carries an avatar, a state dot and an unread
+ * badge, which is also everything the icon rail shows between 700 and 1100 px:
+ * a column of bare dots told a reader nothing about which mailbox was which.
  */
 function renderAccounts() {
   const table = t();
@@ -362,22 +397,30 @@ function renderAccounts() {
   const rows = [];
 
   const allSelected = state.accountId === "all";
-  const allRow = el("li", { class: `account account-all${allSelected ? " is-selected" : ""}` });
-  allRow.append(
+  const allUnread = unreadIn("all");
+  const allRow = el(
+    "li",
+    { class: `account account-all${allSelected ? " is-selected" : ""}` },
     el(
-      "button",
-      {
-        type: "button",
-        class: "account-main",
-        "aria-pressed": allSelected ? "true" : "false",
-        onClick: () => {
-          state.accountId = "all";
-          state.menu = null;
-          render();
+      "div",
+      { class: "account-row" },
+      el(
+        "button",
+        {
+          type: "button",
+          class: "account-main",
+          "aria-pressed": allSelected ? "true" : "false",
+          title: table.allInboxes,
+          onClick: () => {
+            state.accountId = "all";
+            state.menu = null;
+            render();
+          },
         },
-      },
-      el("span", { class: "account-label", text: table.allInboxes }),
-      unreadIn("all") ? el("span", { class: "badge", text: String(unreadIn("all")) }) : null,
+        el("span", { class: "account-avatar account-avatar-all", "aria-hidden": "true" }, icon("inbox")),
+        el("span", { class: "account-label", text: table.allInboxes }),
+        unreadBadge(allUnread, table),
+      ),
     ),
   );
   rows.push(allRow);
@@ -385,32 +428,35 @@ function renderAccounts() {
   for (const account of accounts) {
     const selected = state.accountId === account.instanceId;
     const unread = unreadIn(account.instanceId);
+    const status = statusLabel(account);
     const pending = account.status?.phase === "needs-provider" || account.status?.phase === "needs-server";
     const row = el("li", {
       class: `account${selected ? " is-selected" : ""}${pending ? " is-pending" : ""}`,
       dataset: { phase: account.status?.phase ?? "stopped" },
     });
-    const main = el("button", {
-      type: "button",
-      class: "account-main",
-      "aria-pressed": selected ? "true" : "false",
-      title: account.label,
-      onClick: () => {
-        state.accountId = selected ? "all" : account.instanceId;
-        state.menu = null;
-        render();
+    const main = el(
+      "button",
+      {
+        type: "button",
+        class: "account-main",
+        "aria-pressed": selected ? "true" : "false",
+        title: `${account.label}${status ? ` · ${status}` : ""}`,
+        onClick: () => {
+          state.accountId = selected ? "all" : account.instanceId;
+          state.menu = null;
+          render();
+        },
       },
-    });
-    main.append(
+      accountAvatar(account),
       el("span", {
         class: "status-dot",
         dataset: { phase: account.status?.phase ?? "stopped" },
-        title: statusLabel(account),
-        "aria-label": statusLabel(account),
+        title: status,
+        "aria-label": status,
         role: "img",
       }),
       el("span", { class: "account-label", text: account.label }),
-      unread ? el("span", { class: "badge", text: String(unread) }) : null,
+      unreadBadge(unread, table),
     );
     const menuButton = iconButton("menu", table.accountMenu, (event) => {
       event.stopPropagation();
@@ -423,9 +469,7 @@ function renderAccounts() {
     // A failed mailbox explains itself in one folded line here, with the full
     // sentence in the tooltip: a sidebar is not the place for a paragraph.
     if (account.status?.phase === "error" && account.status?.lastError) {
-      row.append(
-        el("p", { class: "account-error", title: String(account.status.lastError), text: statusLabel(account) }),
-      );
+      row.append(el("p", { class: "account-error", title: String(account.status.lastError), text: status }));
     }
     if (account.missingServer) {
       row.append(el("p", { class: "account-hint", text: table.status["needs-server"] }));
@@ -458,23 +502,23 @@ function renderAccounts() {
       );
     } else if (state.menu === account.instanceId) {
       const items = [
-        ['mailOpen', table.menuOnlyThis, () => {
+        ["mailOpen", table.menuOnlyThis, () => {
           state.accountId = account.instanceId;
           state.menu = null;
           render();
         }],
-        ['refresh', table.menuCheckThis, () => {
+        ["refresh", table.menuCheckThis, () => {
           state.menu = null;
           void checkAccount(account);
         }],
       ];
       if (account.webmail) {
-        items.push(['external', table.menuWebmail, () => {
+        items.push(["external", table.menuWebmail, () => {
           state.menu = null;
           void openWebmail(account);
         }]);
       }
-      items.push(['trash', table.menuRemove, () => {
+      items.push(["trash", table.menuRemove, () => {
         state.menu = null;
         state.confirming = account.instanceId;
         render();
@@ -619,6 +663,32 @@ function mailRow(message) {
   }
   row.append(quick);
   return row;
+}
+
+/**
+ * The delete confirmation.
+ *
+ * Focus lands on "cancel": a dialog that opens on the destructive button deletes
+ * a message the moment someone presses Enter out of habit.
+ */
+function renderConfirm() {
+  const table = t();
+  const target = state.confirmDelete;
+  nodes.confirm.classList.toggle("is-hidden", !target);
+  if (!target) return;
+  nodes.confirmTitle.textContent = table.deleteConfirmTitle;
+  nodes.confirmBody.textContent = table.deleteConfirmBody(target.subject || table.noSubject);
+  nodes.confirmYes.textContent = table.deleteConfirmYes;
+  nodes.confirmNo.textContent = table.deleteConfirmNo;
+  if (document.activeElement !== nodes.confirmNo && !nodes.confirm.contains(document.activeElement)) {
+    nodes.confirmNo.focus();
+  }
+}
+
+function closeConfirm() {
+  if (!state.confirmDelete) return;
+  state.confirmDelete = null;
+  render();
 }
 
 function renderReader() {
@@ -964,14 +1034,24 @@ async function setFlag(message, flag) {
  * the server for good, which is why that case asks first and says "cannot be
  * undone" when it is done.
  */
-async function deleteMessage(message) {
+/**
+ * Delete one message, after confirming on the one protocol that cannot undo it.
+ *
+ * An IMAP delete is a move to the trash and the panel says so afterwards. POP3 has
+ * no trash: `DELE` plus `QUIT` is final, so the panel asks first — in its own card,
+ * not with `window.confirm`, which cannot be styled, translated or focused, and
+ * whose copy here would be the wrong tense.
+ */
+async function deleteMessage(message, { confirmed = false } = {}) {
   if (state.busy) return;
   const table = t();
   const account = accountById(message.accountId);
-  if (account?.protocol === "pop3") {
-    const confirmed = globalThis.confirm?.(`${table.deleteMail}: ${message.subject || table.noSubject}\n\n${table.deleteDonePop3}`);
-    if (!confirmed) return;
+  if (account?.protocol === "pop3" && !confirmed) {
+    state.confirmDelete = message;
+    render();
+    return;
   }
+  state.confirmDelete = null;
   state.busy = true;
   try {
     const result = await call("inbox.delete", { accountId: message.accountId, key: message.key });
@@ -1181,7 +1261,9 @@ function handleKey(event) {
       return;
     case "close":
       event.preventDefault();
-      if (state.reader) closeReader();
+      if (state.confirmDelete) {
+        closeConfirm();
+      } else if (state.reader) closeReader();
       else if (state.query) {
         state.query = "";
         render();
@@ -1207,6 +1289,13 @@ function wire() {
   nodes.add.addEventListener("click", () => void addAccount());
   nodes.older.addEventListener("click", () => void loadOlder());
   nodes.back.addEventListener("click", () => closeReader());
+  nodes.confirmNo.addEventListener("click", () => closeConfirm());
+  nodes.confirmYes.addEventListener("click", () => {
+    const target = state.confirmDelete;
+    if (!target) return;
+    state.confirmDelete = null;
+    void deleteMessage(target, { confirmed: true });
+  });
   nodes.sidebar.addEventListener("click", () => {
     state.sidebar = !state.sidebar;
     render();

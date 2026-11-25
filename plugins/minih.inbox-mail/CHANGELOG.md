@@ -48,6 +48,25 @@
   is `DELE <n>` followed by `QUIT`, so it is final: the panel asks first and then
   says it cannot be undone. The folder probe is cached per account and re-run when
   the account's connection changes.
+- **A mailbox that renumbers itself cannot be acted on by mistake.** Every
+  `UID MOVE`, `UID COPY`, `STORE` and body fetch now compares the mailbox's
+  `UIDVALIDITY` with the one the listed envelope was seen under and refuses with
+  `MESSAGE_STALE` when they differ; a poll that sees the change drops the old
+  envelopes first, so the list never points at whatever holds those UIDs now.
+- **The trash is found more carefully.** The name table is a priority list, not a
+  set: `Trash` wins over `Deleted Messages` however `LIST` orders them; a mailbox
+  flagged `\Junk` (or `\Spam`) is never a destination, so the Chinese 垃圾箱 no
+  longer receives deleted mail and cannot train a spam filter; and a name spelt in
+  modified UTF-7 (`&XfJSIJZk-` for 已删除) is decoded for matching while the raw
+  spelling is still what a move sends.
+- **The sidebar no longer prints a literal `null`** for a mailbox with no unread
+  mail. Conditional children go through the element helper that drops them, not
+  through a native `append`.
+- **A POP3 delete asks in the panel**, with future-tense copy and a 删除/取消 pair,
+  the same way removing a mailbox does — `#`/`Delete` included. The reading pane's
+  body now fills the height it has instead of stopping at 320 px, and between 700
+  and 1100 px the icon rail shows each mailbox's avatar with the state dot and the
+  unread count on its corners.
 - **The stored file is written atomically** (temporary file + rename), so a crash
   cannot leave half a JSON document — and a UID cursor — behind.
 - **Honest docs.** The manifest's safety notes, its description, the README and the

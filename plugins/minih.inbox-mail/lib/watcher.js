@@ -154,8 +154,18 @@ function createWatcher(deps) {
   /** Baseline or continue the cursor for the mailbox just selected. */
   async function reconcile(session, box) {
     if (store.cursorFor(state, box.uidValidity)) return;
+    const previous = state.cursor;
     const fallback = Number.isInteger(box.uidNext) ? box.uidNext - 1 : await session.maxUid();
     store.setCursor(state, box.uidValidity, Math.max(0, fallback));
+    // A UID only names a message inside one `UIDVALIDITY`. When the server changes
+    // it, every envelope kept from before may now point at a different message, so
+    // they leave the list before anything can act on them.
+    if (previous && previous.uidValidity !== box.uidValidity) {
+      const dropped = store.purgeStaleEnvelopes(state, box.uidValidity);
+      if (dropped) {
+        deps.log("info", `UIDVALIDITY changed: dropped ${dropped} envelope(s) from the old one`);
+      }
+    }
     await save();
     deps.log("info", `watching from UID ${state.cursor.maxUid} (uidValidity ${box.uidValidity})`);
   }

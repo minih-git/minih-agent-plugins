@@ -1487,3 +1487,111 @@ test("load older walks back through the mailbox and announces nothing", async ()
     rmSync(host.dataPath, { recursive: true, force: true });
   }
 });
+
+/**
+ * A UID names a message only inside one `UIDVALIDITY`.
+ *
+ * When a server renumbers a mailbox, every UID it handed out before means a
+ * different message. Anything the user clicks in that window must be refused, and
+ * the envelopes from the old era must leave the list.
+ */
+test("a UIDVALIDITY change drops the old envelopes and refuses to delete one", async () => {
+  const server = deletableServer();
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.add(message({ uid: 1, subject: "First" }));
+    server.add(message({ uid: 2, subject: "Second" }));
+    const before = await checkUntil(plugin, 2);
+    assert.equal(before.messages.length, 2);
+
+    // The server renumbers the mailbox. Nothing has polled yet, so the panel still
+    // shows the old envelopes — and a click lands exactly here.
+    server.uidValidity = 99;
+    const stale = await panel(plugin, "inbox.delete", { accountId: "acc_1", key: before.messages[0].key });
+    assert.equal(stale.ok, false);
+    assert.equal(stale.code, "MESSAGE_STALE");
+    assert.deepEqual(server.moves, [], "nothing was moved");
+    assert.deepEqual(server.copies, []);
+    assert.deepEqual(server.expunges, []);
+
+    // The session that refused also saw the new validity, so the old envelopes
+    // are gone instead of pointing at whatever holds those numbers now.
+    const after = (await panel(plugin, "inbox.snapshot")).snapshot;
+    assert.equal(after.messages.length, 0);
+    assert.equal(readState(host).accounts.acc_1.messages.length, 0);
+    assert.equal(readState(host).accounts.acc_1.cursor.uidValidity, 99);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("a stale envelope cannot be marked, starred or opened either", async () => {
+  const server = deletableServer();
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.add(message({ uid: 1, subject: "Marked later" }));
+    const first = await checkUntil(plugin, 1);
+    const target = first.messages[0];
+
+    server.uidValidity = 42;
+    const flagged = await panel(plugin, "inbox.setFlag", { accountId: "acc_1", key: target.key, flag: "flagged" });
+    assert.equal(flagged.ok, false);
+    assert.equal(flagged.code, "MESSAGE_STALE");
+    assert.equal(server.stores.length, 0, "no STORE was sent for a UID from another era");
+
+    // A fresh message in the new era is listed and opens normally...
+    server.add(message({ uid: 2, subject: "In the new era" }));
+    const second = await checkUntil(plugin, 1, "the new-era message");
+    const fresh = second.messages[0];
+    assert.equal(fresh.subject, "In the new era");
+    const opened = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: fresh.key });
+    assert.equal(opened.ok, true);
+
+    // ...and when the mailbox is renumbered again, opening the old one is refused
+    // before any body is fetched.
+    server.uidValidity = 77;
+    const fetchedBefore = server.bodyFetches.length;
+    const stale = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: fresh.key });
+    assert.equal(stale.ok, false);
+    assert.equal(stale.code, "MESSAGE_STALE");
+    assert.equal(server.bodyFetches.length, fetchedBefore, "no body was downloaded for a stale UID");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("a trash folder spelled in modified UTF-7 is where delete moves the message", async () => {
+  const server = createFakeServer({
+    uidNext: 1,
+    capabilities: ["IMAP4rev1", "ID", "MOVE"],
+    mailboxes: [
+      { name: "INBOX", flags: [] },
+      { name: "&XfJSIJZk-", flags: [] },
+      { name: "&V4NXPpCuTvY-", flags: [] },
+    ],
+  });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    await seedOneMessage(plugin, server);
+    const { snapshot } = await panel(plugin, "inbox.snapshot");
+    const result = await panel(plugin, "inbox.delete", { accountId: "acc_1", key: snapshot.messages[0].key });
+    assert.equal(result.ok, true);
+    assert.deepEqual(
+      server.moves,
+      [{ uid: 1, mailbox: "&XfJSIJZk-" }],
+      "the command sends the server's own spelling, not the decoded label",
+    );
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+

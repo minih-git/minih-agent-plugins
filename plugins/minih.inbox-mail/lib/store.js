@@ -396,14 +396,42 @@ function removeEnvelope(state, key) {
   return entry;
 }
 
-/** The lowest UID this account's list holds, or `null` when it holds none. */
-function oldestUid(state) {
+/**
+ * The lowest UID this account's list holds, or `null` when it holds none.
+ *
+ * `uidValidity` names the era the answer belongs to. A UID is only meaningful
+ * inside one `UIDVALIDITY`, so when the mailbox's validity changed, the previous
+ * era's envelopes are not "older mail" — they are messages that may now be
+ * something else entirely, and paging back from them would walk the wrong part of
+ * the mailbox.
+ */
+function oldestUid(state, uidValidity = null) {
   let lowest = null;
   for (const entry of state.messages) {
     if (!Number.isInteger(entry.uid)) continue;
+    if (uidValidity !== null && entry.uidValidity !== null && entry.uidValidity !== uidValidity) continue;
     if (lowest === null || entry.uid < lowest) lowest = entry.uid;
   }
   return lowest;
+}
+
+/**
+ * Drop every envelope that belongs to another `UIDVALIDITY`.
+ *
+ * Called when a poll sees the mailbox's validity change: the server is saying
+ * that every UID it handed out before now means a different message. Keeping
+ * those envelopes would let a delete, an archive or a flag change act on whatever
+ * happens to hold that number today, which is the one bug a mail client must not
+ * have.
+ *
+ * @returns how many envelopes were dropped.
+ */
+function purgeStaleEnvelopes(state, uidValidity) {
+  const before = state.messages.length;
+  state.messages = state.messages.filter(
+    (entry) => entry.uidValidity === null || entry.uidValidity === uidValidity,
+  );
+  return before - state.messages.length;
 }
 
 /** Forget one POP3 message the server just deleted, and its local read mark. */
@@ -495,6 +523,7 @@ module.exports = {
   pop3Baselined,
   pop3Baseline,
   pop3Forget,
+  purgeStaleEnvelopes,
   pop3Key,
   pop3Remember,
   pop3Seen,

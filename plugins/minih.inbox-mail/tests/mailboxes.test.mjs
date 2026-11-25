@@ -15,8 +15,14 @@ const mailboxes = require("../lib/mailboxes.js");
  * button that is not there rather than an operation that fails halfway.
  */
 
+/**
+ * One scripted `LIST` entry.
+ *
+ * `label` is what the protocol layer decoded from the raw name (modified UTF-7),
+ * which is what matching uses; `name` is what a command has to send.
+ */
 const list = (...entries) =>
-  entries.map(([name, flags = [], delimiter = "/"]) => ({ name, flags, delimiter }));
+  entries.map(([name, flags = [], delimiter = "/", label = name]) => ({ name, label, flags, delimiter }));
 
 test("the special-use flags win over every name", () => {
   const folders = mailboxes.resolveFolders(
@@ -82,4 +88,48 @@ test("the cache is keyed by the connection it was learned from", () => {
 
   cache.forget("acc_1");
   assert.equal(cache.needs("acc_1", "preset:qq"), true);
+});
+
+test("a Chinese name spelled in modified UTF-7 is matched, and the raw name is what a move sends", () => {
+  // 163 and 126 answer `LIST` with `&XfJSIJZk-` for 已删除; the decoded label is
+  // what a name table can compare against, the raw name is what `UID MOVE` needs.
+  const folders = mailboxes.resolveFolders(
+    list(["INBOX"], ["&XfJSIJZk-", [], "/", "已删除"], ["&V4NXPpCuTvY-", [], "/", "垃圾邮件"]),
+  );
+  assert.equal(folders.trash, "&XfJSIJZk-");
+});
+
+test("the junk folder is never a delete or archive destination", () => {
+  // Named like the trash, flagged as spam, and the only candidate: still no.
+  const onlyJunk = mailboxes.resolveFolders(list(["INBOX"], ["垃圾箱", ["\\Junk"], "/", "垃圾箱"]));
+  assert.equal(onlyJunk.trash, null);
+  assert.equal(onlyJunk.archive, null);
+
+  // `\Spam` is the same folder under another name.
+  const spam = mailboxes.resolveFolders(list(["INBOX"], ["Trash", ["\\Spam"]]));
+  assert.equal(spam.trash, null);
+
+  // A real trash beside a junk folder is chosen over it, whatever LIST says.
+  const both = mailboxes.resolveFolders(
+    list(["INBOX"], ["Junk", ["\\Junk"]], ["Deleted Messages"], ["Trash"]),
+  );
+  assert.equal(both.trash, "Trash", "the name table decides the order, not LIST");
+});
+
+test("the name table is the priority order, and LIST order does not matter", () => {
+  const straight = mailboxes.resolveFolders(list(["INBOX"], ["Trash"], ["Deleted Messages"]));
+  const reversed = mailboxes.resolveFolders(list(["INBOX"], ["Deleted Messages"], ["Trash"]));
+  assert.equal(straight.trash, "Trash");
+  assert.equal(reversed.trash, "Trash", "Trash is listed first in the table");
+
+  // A name the table does not know is never picked, even if it looks right.
+  assert.equal(mailboxes.resolveFolders(list(["INBOX"], ["Bin"], ["Waste basket"])).trash, null);
+});
+
+test("a declared special-use flag still wins over every name", () => {
+  const folders = mailboxes.resolveFolders(
+    list(["INBOX"], ["Trash"], ["Wastebasket", ["\\Trash"]], ["All Mail", ["\\Archive"]]),
+  );
+  assert.equal(folders.trash, "Wastebasket");
+  assert.equal(folders.archive, "All Mail");
 });

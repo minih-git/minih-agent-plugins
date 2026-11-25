@@ -147,6 +147,26 @@ function createRuntime(deps) {
   }
 
   /**
+   * Refuse to act on an envelope that belongs to another `UIDVALIDITY`.
+   *
+   * A UID names a message only inside one validity. The list is purged as soon as
+   * a poll sees the server change it (`watcher.reconcile`), but a click can land in
+   * the window between that change and the next poll — and a delete, an archive or
+   * a `STORE` must never be able to hit whichever message holds that number now.
+   * POP3 has no UIDVALIDITY, so both sides are `null` there and nothing is refused.
+   */
+  function requireCurrentEra(envelope, box) {
+    const era = box?.uidValidity;
+    if (!Number.isInteger(era) || envelope.uidValidity === null) return;
+    if (envelope.uidValidity !== era) {
+      throw coded(
+        "MESSAGE_STALE",
+        "the mailbox was renumbered since this message was listed, so it cannot be acted on",
+      );
+    }
+  }
+
+  /**
    * Wrap the host's TCP handle as the stream `lib/session.js` speaks.
    *
    * The host owns the socket and delivers `net:tcp:*` events for it; this adapter
@@ -693,7 +713,8 @@ function createRuntime(deps) {
         // does not report flags on every server, and a message the user already
         // read must not be stored again.
         const alreadySeen = Array.isArray(envelope.flags) && envelope.flags.includes("\\Seen");
-        fetched = await record.watcher.withSession(async (session) => {
+        fetched = await record.watcher.withSession(async (session, box) => {
+          requireCurrentEra(envelope, box);
           const message = await session.fetchMessage(envelope.uid, {
             maxBytes: BODY_LIMIT,
             timeoutMs: BODY_TIMEOUT_MS,
@@ -773,7 +794,10 @@ function createRuntime(deps) {
       const envelope = store.findEnvelope(state, String(input?.key ?? ""));
       if (!envelope) throw coded("MESSAGE_NOT_FOUND", "this message is not in the list");
       if (!record.watcher) throw coded("ACCOUNT_OFFLINE", "this mailbox is not connected yet");
-      const result = await record.watcher.withSession((session) => session.storeFlags(envelope.uid, change));
+      const result = await record.watcher.withSession((session, box) => {
+        requireCurrentEra(envelope, box);
+        return session.storeFlags(envelope.uid, change);
+      });
       const flags = Array.isArray(result?.flags) && result.flags.length
         ? store.setFlags(state, envelope.key, result.flags)
         : store.setFlags(state, envelope.key, store.applyFlag(envelope.flags, flag));
@@ -805,7 +829,9 @@ function createRuntime(deps) {
         const older = await record.watcher.loadOlder({ beforeKey: oldest.key, limit });
         added = older.length;
       } else {
-        const beforeUid = store.oldestUid(state);
+        // Only the current era's envelopes can say where "older" starts: a UID
+        // from a previous UIDVALIDITY names some other message now.
+        const beforeUid = store.oldestUid(state, state.cursor?.uidValidity ?? null);
         if (!beforeUid) return { added: 0, reachedLimit: false, atEnd: true };
         const older = await record.watcher.loadOlder({ beforeUid, limit });
         added = older.length;
@@ -842,6 +868,7 @@ function createRuntime(deps) {
         return { accountId: record.instanceId, key: envelope.key, removed: true, final: true, folder: null };
       }
       const result = await record.watcher.withSession(async (session, box, capabilities) => {
+        requireCurrentEra(envelope, box);
         const known = await ensureFolders(record, session, capabilities);
         if (!known?.trash) {
           throw coded("NO_TRASH_FOLDER", "this mailbox has no trash folder to move the message to");
@@ -869,6 +896,7 @@ function createRuntime(deps) {
       if (record.protocol === "pop3") throw coded("NO_ARCHIVE_FOLDER", "POP3 has no folders to archive into");
       if (!record.watcher) throw coded("ACCOUNT_OFFLINE", "this mailbox is not connected yet");
       const result = await record.watcher.withSession(async (session, box, capabilities) => {
+        requireCurrentEra(envelope, box);
         const known = await ensureFolders(record, session, capabilities);
         if (!known?.archive) {
           throw coded("NO_ARCHIVE_FOLDER", "this mailbox has no archive folder");

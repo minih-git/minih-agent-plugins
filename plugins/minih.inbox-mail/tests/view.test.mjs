@@ -227,3 +227,20 @@ test("the panel explains a proxy failure in both languages", () => {
   assert.equal(en.viaProxy({ host: "127.0.0.1", port: 7897 }), "via proxy 127.0.0.1:7897");
   assert.equal(zh.viaProxy({ host: "127.0.0.1", port: 7897 }), "经代理 127.0.0.1:7897");
 });
+
+/**
+ * A conditional child must go through `el()`, which drops `null`, and never into
+ * a native `append`/`replaceChildren`, which would stringify it: 0.4.0 shipped an
+ * account row reading `archive@163.comnull` because of exactly that.
+ */
+test("the sidebar never hands a null child to the DOM", () => {
+  assert.match(appSource, /function unreadBadge\(/, "the badge is built by a helper that returns null");
+  assert.doesNotMatch(
+    appSource,
+    /main\.append\([\s\S]{0,600}?: null\s*,?\s*\)/,
+    "a native append must not receive a conditional null",
+  );
+  // `el()` is the one place that filters: the account rows use it for every child.
+  assert.match(appSource, /function unreadBadge\(count, table\) \{\n  if \(!count\) return null;/);
+});
+

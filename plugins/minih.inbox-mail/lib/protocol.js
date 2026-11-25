@@ -395,6 +395,39 @@ function hasAttachments(structure) {
 }
 
 /**
+ * Decode an RFC 3501 modified UTF-7 mailbox name.
+ *
+ * A mailbox name is not UTF-8 on the wire: `已删除` arrives as `&XfJSIJZk-`. The
+ * encoding is UTF-16BE base64 between `&` and `-`, with `,` standing in for `/`
+ * and `&-` meaning a literal `&`. Without this, matching a Chinese folder name
+ * could never work — which is exactly how a 163 mailbox would have lost its
+ * delete button.
+ *
+ * The original spelling is always kept beside the decoded one, because a command
+ * has to name the mailbox the way the server did.
+ */
+function decodeMailboxName(value) {
+  const text = String(value ?? "");
+  if (!text.includes("&")) return text;
+  return text.replace(/&([^-]*)-/g, (match, body) => {
+    if (body === "") return "&";
+    const base64 = body.replace(/,/g, "/");
+    let bytes;
+    try {
+      bytes = Buffer.from(base64, "base64");
+    } catch {
+      return match;
+    }
+    if (!bytes.length) return match;
+    let decoded = "";
+    for (let index = 0; index + 1 < bytes.length; index += 2) {
+      decoded += String.fromCharCode((bytes[index] << 8) | bytes[index + 1]);
+    }
+    return decoded || match;
+  });
+}
+
+/**
  * One untagged response as a small record.
  *
  * Only the shapes this plugin acts on get a `kind` of their own; everything else
@@ -421,7 +454,15 @@ function parseUntagged(tokens) {
     if (upper === "LIST" || upper === "LSUB") {
       const flags = Array.isArray(tokens[2]) ? tokens[2].filter((token) => typeof token === "string") : [];
       const rest = tokens.slice(3).filter((token) => typeof token === "string");
-      return { kind: "list", flags, delimiter: rest.length > 1 ? rest[0] : "", name: rest[rest.length - 1] ?? "" };
+      const name = rest[rest.length - 1] ?? "";
+      return {
+        kind: "list",
+        flags,
+        delimiter: rest.length > 1 ? rest[0] : "",
+        // `name` is what a command has to send; `label` is what a human reads.
+        name,
+        label: decodeMailboxName(name),
+      };
     }
     if (upper === "OK" || upper === "NO" || upper === "BAD" || upper === "BYE" || upper === "PREAUTH") {
       const code = parseResponseCode(tokens, 2);
@@ -474,6 +515,7 @@ function parseTagged(tokens) {
 
 module.exports = {
   createParser,
+  decodeMailboxName,
   hasAttachments,
   kindOf,
   parseEnvelope,

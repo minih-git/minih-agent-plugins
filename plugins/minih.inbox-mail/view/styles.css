@@ -337,6 +337,9 @@ input {
   font: inherit;
   text-align: left;
   cursor: pointer;
+  /* The state dot sits over the avatar's corner in the icon rail, so the row is
+   * the positioning context for it. */
+  position: relative;
 }
 
 .account-main:hover {
@@ -359,6 +362,18 @@ input {
 
 .account-all .account-label {
   font-weight: 600;
+}
+
+/* The mailbox's own avatar: the list's colour palette, at sidebar size. */
+.account-avatar {
+  width: 22px;
+  height: 22px;
+  font-size: 10px;
+}
+
+.account-avatar-all {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .status-dot {
@@ -919,20 +934,39 @@ input {
   font-size: 12px;
 }
 
-.reader-body {
+.reader-message {
+  /* The reading pane's own column: header, body, extras. The body takes whatever
+   * height is left, which is what lets a long mail fill the pane instead of being
+   * cut at a fixed 320 px while empty space sits below it. */
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.reader-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
   background: var(--bg-panel);
 }
 
 .reader-body iframe {
   display: block;
+  flex: 1 1 auto;
   width: 100%;
   height: 100%;
-  min-height: 320px;
+  min-height: 0;
   border: 0;
   background: transparent;
+}
+
+/* A plain-text body scrolls inside the pane rather than growing the page. */
+.reader-body .mail-text {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 
 .mail-text {
@@ -969,7 +1003,11 @@ input {
 }
 
 .reader-extras {
-  flex: none;
+  /* Attachments and links keep their own space under the body, and scroll on
+   * their own when a mail carries many of them. */
+  flex: 0 1 auto;
+  max-height: 38vh;
+  overflow: auto;
   padding: 0 22px 22px;
   background: var(--bg-panel);
 }
@@ -1064,6 +1102,49 @@ input {
   color: var(--ink-dim);
 }
 
+/*
+ * The delete confirmation: one card over the panel, because a POP3 delete cannot
+ * be undone. Focus starts on "cancel" (see `renderConfirm`).
+ */
+.confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(8, 10, 14, 0.55);
+}
+
+.confirm-card {
+  width: min(420px, 92vw);
+  padding: 18px 20px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+}
+
+.confirm-card h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.confirm-card p {
+  margin: 0 0 16px;
+  color: var(--ink-dim);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 /* The skeleton that holds the pane's shape while a body is on its way. */
 .skeleton-group {
   display: flex;
@@ -1107,26 +1188,53 @@ input {
 /* Responsive: three columns, then an icon rail, then one pane at a time. */
 @media (max-width: 1099px) {
   .columns {
-    grid-template-columns: 60px 320px minmax(0, 1fr);
+    grid-template-columns: 64px 320px minmax(0, 1fr);
   }
 
   .accounts {
-    padding: 10px 4px 18px;
+    padding: 10px 6px 18px;
   }
 
   .accounts .column-head,
   .accounts .hint,
   .account-label,
-  .account .badge,
   .account .account-error,
-  .account .account-hint,
-  .account-all .account-label {
+  .account .account-hint {
     display: none;
   }
 
+  /* One avatar per mailbox, with the state dot and the unread count on its
+   * corners: a column of bare dots could not say which mailbox was which. */
   .account-main {
     justify-content: center;
-    padding: 9px 0;
+    padding: 8px 0;
+    gap: 0;
+  }
+
+  .account-avatar {
+    width: 28px;
+    height: 28px;
+    font-size: 11px;
+  }
+
+  .status-dot {
+    position: absolute;
+    left: 50%;
+    bottom: 6px;
+    margin-left: 7px;
+    box-shadow: 0 0 0 2px var(--bg-panel);
+  }
+
+  .account .badge {
+    position: absolute;
+    top: 2px;
+    left: 50%;
+    margin-left: 6px;
+    min-width: 15px;
+    padding: 0 3px;
+    font-size: 9px;
+    line-height: 15px;
+    box-shadow: 0 0 0 2px var(--bg-panel);
   }
 
   .account-menu-btn {
@@ -1142,7 +1250,6 @@ input {
   .columns {
     grid-template-columns: minmax(0, 1fr);
   }
-
   /* One pane at a time: the list by default, the reading pane once a message is
    * open, with "back" as the way out. */
   .app[data-pane="list"] .reader,

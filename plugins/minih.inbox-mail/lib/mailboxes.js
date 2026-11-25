@@ -25,33 +25,57 @@
 const TRASH_NAMES = [
   "trash",
   "deleted",
-  "deleted messages",
   "deleted items",
+  "deleted messages",
+  "deleted emails",
   "deleted-mail",
   "deletedmail",
-  "bin",
   "recycle bin",
   "wastebasket",
   "已删除",
   "已删除邮件",
   "刪除郵件",
   "废纸篓",
-  "垃圾箱",
-  "垃圾桶",
   "ゴミ箱",
 ];
 
 /** The same for the archive: Gmail's "All Mail" behaves as one over IMAP. */
-const ARCHIVE_NAMES = ["archive", "archives", "all mail", "allmail", "归档", "存档", "歸檔", "所有邮件", "所有郵件"];
+const ARCHIVE_NAMES = [
+  "archive",
+  "archives",
+  "archived",
+  "all mail",
+  "allmail",
+  "归档",
+  "存档",
+  "歸檔",
+  "所有邮件",
+  "所有郵件",
+];
+
+/**
+ * The flags that make a mailbox the wrong destination whatever its name.
+ *
+ * `\Junk` is the important one: 垃圾箱 and 垃圾桶 in the Chinese providers are the
+ * spam folder, not the trash, and a message moved there can even teach the
+ * provider's filter. Such a mailbox is never a delete or archive target, even
+ * when the server also flags it `\Trash` by mistake.
+ */
+const NEVER_DESTINATIONS = ["\\Noselect", "\\NonExistent", "\\Junk", "\\Spam"];
 
 function hasFlag(entry, flag) {
   const wanted = String(flag).toUpperCase();
   return entry.flags.some((value) => String(value).toUpperCase() === wanted);
 }
 
-/** The leaf of a mailbox path: `[Gmail]/All Mail` -> `All Mail`. */
+/**
+ * The leaf of a mailbox path: `[Gmail]/All Mail` -> `All Mail`.
+ *
+ * The *label* is used, not the raw name: a server spells `已删除` as modified
+ * UTF-7 (`&XfJSIJZk-`), and comparing that against a name table would never match.
+ */
 function leafName(entry) {
-  const name = String(entry.name ?? "");
+  const name = String(entry.label ?? entry.name ?? "");
   const delimiter = entry.delimiter || "/";
   const index = name.lastIndexOf(delimiter);
   return (index >= 0 ? name.slice(index + delimiter.length) : name).trim();
@@ -59,20 +83,33 @@ function leafName(entry) {
 
 /** A mailbox a message can be moved into and read back from. */
 function selectable(entry) {
-  return Boolean(entry.name) && !hasFlag(entry, "\\Noselect") && !hasFlag(entry, "\\NonExistent");
+  return Boolean(entry.name) && !NEVER_DESTINATIONS.some((flag) => hasFlag(entry, flag));
 }
 
+/** How deeply a mailbox is nested, so the shallowest match can win. */
+function depthOf(entry) {
+  const delimiter = entry.delimiter || "/";
+  return String(entry.name ?? "").split(delimiter).length;
+}
+
+/**
+ * The mailbox a flag or a name points at.
+ *
+ * Three rules, in this order: a declared special-use flag wins; otherwise the
+ * name table decides, **in its own order** — `Trash` before `Deleted Messages`,
+ * because the list is a priority list and the server's `LIST` order means
+ * nothing; and among equal names the shallowest mailbox wins, so `Trash` beats
+ * `Archive/Trash`.
+ */
 function pick(entries, flag, names) {
   const usable = entries.filter(selectable);
-  for (const entry of usable) {
-    if (hasFlag(entry, flag)) return entry;
-  }
-  const wanted = new Set(names);
-  // A top-level name matches before a nested one: `Trash` is the trash, while
-  // `Archive/Trash` is somebody's folder that happens to be called that.
-  const sorted = [...usable].sort((a, b) => a.name.split(a.delimiter || "/").length - b.name.split(b.delimiter || "/").length);
-  for (const entry of sorted) {
-    if (wanted.has(leafName(entry).toLowerCase())) return entry;
+  const declared = usable.find((entry) => hasFlag(entry, flag));
+  if (declared) return declared;
+  for (const wanted of names) {
+    const matches = usable.filter((entry) => leafName(entry).toLowerCase() === wanted);
+    if (!matches.length) continue;
+    matches.sort((a, b) => depthOf(a) - depthOf(b));
+    return matches[0];
   }
   return null;
 }

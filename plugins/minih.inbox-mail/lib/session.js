@@ -381,7 +381,15 @@ function createSession(transport, options = {}) {
       const reply = await command(specialUse ? 'LIST (SPECIAL-USE) "" "*"' : 'LIST "" "*"');
       return reply.untagged
         .filter((record) => record.kind === "list" && record.name)
-        .map((record) => ({ name: record.name, flags: record.flags, delimiter: record.delimiter }));
+        // `name` is the server's own spelling, which is what a move has to send;
+        // `label` is that name in modified UTF-7 decoded, which is what a human
+        // (and a name match) can read.
+        .map((record) => ({
+          name: record.name,
+          label: record.label ?? record.name,
+          flags: record.flags,
+          delimiter: record.delimiter,
+        }));
     },
 
     /** `UID MOVE <uid> <mailbox>`: a move the server does atomically. */
