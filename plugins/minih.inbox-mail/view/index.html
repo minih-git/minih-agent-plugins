@@ -24,6 +24,7 @@
         <span class="counts" id="counts"></span>
       </div>
       <div class="topbar-actions">
+        <button type="button" class="btn" id="btn-compose"></button>
         <button type="button" class="btn" id="btn-check"></button>
         <button type="button" class="btn btn-primary" id="btn-add"></button>
       </div>
@@ -84,6 +85,10 @@
       </section>
     </div>
   </div>
+  <!-- The composer. `view/compose.js` builds everything inside it; this element
+       is only where it is drawn, so the panel keeps one place for what it
+       overlays and one role="dialog" the reader can find. -->
+  <div class="compose-backdrop is-hidden" id="compose" role="dialog" aria-modal="true" aria-labelledby="compose-title"></div>
   <!-- The one confirmation a POP3 delete gets, inside the panel: the host's own
        dialog would be a second look, and `window.confirm` is not a dialog this
        panel can style, translate or focus. -->

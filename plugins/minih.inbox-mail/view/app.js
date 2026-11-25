@@ -36,6 +36,7 @@ import {
 } from "./model.js";
 import { bodyMode, buildFrameDocument, FRAME_SANDBOX, linkifyText } from "./policy.js";
 import { prepareBody } from "./sanitize.js";
+import { createComposer } from "./compose.js";
 import { codeText, strings } from "./strings.js";
 
 const POLL_MS = 5000;
@@ -65,9 +66,18 @@ const state = {
   confirming: null,
   /** The message a POP3 delete is waiting on, if any. */
   confirmDelete: null,
+  /**
+   * The attachments being saved right now, as `accountId:key:index`.
+   *
+   * One save dialog exists per plugin, so a second click while one is open would
+   * be refused by the host; disabling the card is what says so before the click.
+   */
+  downloading: new Set(),
 };
 
 let noticeTimer = null;
+/** The composer, created once in `wire()`. */
+let composer = null;
 
 const nodes = {
   app: document.getElementById("app"),
@@ -75,6 +85,8 @@ const nodes = {
   counts: document.getElementById("counts"),
   sidebar: document.getElementById("btn-sidebar"),
   banner: document.getElementById("banner"),
+  compose: document.getElementById("btn-compose"),
+  composeLayer: document.getElementById("compose"),
   check: document.getElementById("btn-check"),
   add: document.getElementById("btn-add"),
   accounts: document.getElementById("accounts"),
@@ -158,6 +170,10 @@ const ICONS = {
   text: '<path d="M3 4.5h10M3 7.5h10M3 10.5h6"/>',
   paperclip: '<path d="M10.5 4.5 5.6 9.4a1.7 1.7 0 0 0 2.4 2.4l5.3-5.3a2.9 2.9 0 0 0-4.1-4.1L3.9 7.7"/>',
   external: '<path d="M9 3h4v4M13 3 8 8"/><path d="M11 9.5V12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h2.5"/>',
+  reply: '<path d="M6.5 5 3 8l3.5 3"/><path d="M3 8h6a3.5 3.5 0 0 1 3.5 3.5V13"/>',
+  replyAll: '<path d="M6.5 5 3 8l3.5 3"/><path d="M9.5 5 6 8l3.5 3"/><path d="M6 8h4.5a3 3 0 0 1 3 3V13"/>',
+  forward: '<path d="M9.5 5 13 8l-3.5 3"/><path d="M13 8H7a3.5 3.5 0 0 0-3.5 3.5V13"/>',
+  download: '<path d="M8 2.5v7M5 7l3 3 3-3"/><path d="M3 12.5h10"/>',
 };
 
 function icon(name) {
@@ -251,6 +267,9 @@ function applyAppearance(appearance) {
   document.documentElement.lang = state.locale;
   renderStatic();
   render();
+  // The composer is a second surface with its own sentence per control; a locale
+  // change has to reach it too, without dropping the half-written message.
+  composer?.relabel();
 }
 
 async function loadAppearance() {
@@ -311,6 +330,9 @@ function renderStatic() {
   nodes.counts.textContent = state.snapshot ? table.messages(state.snapshot.messages.length) : "";
   nodes.sidebar.title = table.sidebarToggle;
   nodes.check.textContent = table.check;
+  nodes.compose.textContent = table.compose.newMessage;
+  nodes.compose.title = table.composeHint;
+  nodes.compose.setAttribute("aria-label", table.composeHint);
   nodes.add.textContent = table.add;
   nodes.accountsTitle.textContent = table.accounts;
   nodes.accountsHint.textContent = table.accountsHint(state.snapshot?.accounts.length ?? 0);
@@ -791,6 +813,11 @@ function renderMessage(reader) {
   const read = flagsSupported ? (message.flags ?? []).includes("\\Seen") : message.readLocally === true;
   const starred = flagsSupported ? (message.flags ?? []).includes("\\Flagged") : false;
   const actions = [
+    // Answering comes first: a reader who opened a message is usually about to
+    // reply to it, and the three buttons sit where the eye already is.
+    iconButton("reply", table.replyHint, () => void openDraft("reply")),
+    iconButton("replyAll", table.replyAllHint, () => void openDraft("replyAll")),
+    iconButton("forward", table.forwardHint, () => void openDraft("forward")),
     iconButton(
       read ? "mailOpen" : "mail",
       read ? table.markUnread : table.markRead,
@@ -873,7 +900,7 @@ function recipientList(summary) {
   return el("div", { class: "recipients" }, line(table.recipientsTo, summary.to), line(table.recipientsCc, summary.cc));
 }
 
-/** The attachment cards: name, type and size, never downloaded in this release. */
+/** The attachment cards: name, type, size, and one click that saves that file. */
 function extras(message) {
   const table = t();
   const list = [];
@@ -883,19 +910,7 @@ function extras(message) {
       el(
         "ul",
         { class: "attachment-list" },
-        ...message.attachments.map((file) =>
-          el(
-            "li",
-            { class: "attachment", title: file.filename },
-            el("span", { class: "attachment-icon", dataset: { kind: fileKind(file.filename) }, text: fileKind(file.filename).toUpperCase() }),
-            el(
-              "span",
-              { class: "attachment-main" },
-              el("span", { class: "attachment-name", text: file.filename }),
-              el("span", { class: "attachment-meta", text: attachmentMeta(file, state.locale) }),
-            ),
-          ),
-        ),
+        ...message.attachments.map((file, index) => attachmentCard(message, file, index)),
       ),
     );
   }
@@ -923,6 +938,138 @@ function extras(message) {
     );
   }
   return list;
+}
+
+/**
+ * One attachment, with the one click that saves it.
+ *
+ * The bytes are not here: pressing the button asks the plugin to fetch exactly
+ * this part and to hand it to the host's own save dialog. While that is running
+ * the card says so and cannot be pressed again — the host allows one dialog per
+ * plugin, and a second click would only be refused.
+ */
+function attachmentCard(message, file, index) {
+  const table = t();
+  const id = `${message.accountId}:${message.key}:${index}`;
+  const busy = state.downloading.has(id);
+  const save = el("button", {
+    type: "button",
+    class: "attachment-save",
+    title: busy ? table.savingAttachment : table.saveAttachment,
+    "aria-label": `${table.saveAttachment}: ${file.filename}`,
+    disabled: busy || undefined,
+    onClick: () => void saveAttachment(message, file, index),
+  });
+  save.append(icon("download"), el("span", { text: busy ? table.savingAttachment : table.saveAttachment }));
+  return el(
+    "li",
+    { class: `attachment${busy ? " is-busy" : ""}`, title: file.filename },
+    el("span", {
+      class: "attachment-icon",
+      dataset: { kind: fileKind(file.filename) },
+      text: fileKind(file.filename).toUpperCase(),
+    }),
+    el(
+      "span",
+      { class: "attachment-main" },
+      el("span", { class: "attachment-name", text: file.filename }),
+      el("span", { class: "attachment-meta", text: attachmentMeta(file, state.locale) }),
+    ),
+    save,
+  );
+}
+
+/**
+ * Save one attachment, because the user pressed that attachment's button.
+ *
+ * A cancelled dialog is not an error and says nothing: the user closed it. Every
+ * other outcome — a refused size, a busy dialog, a path that could not be
+ * written — arrives as a code and is shown as a sentence.
+ */
+async function saveAttachment(message, file, index) {
+  const id = `${message.accountId}:${message.key}:${index}`;
+  if (state.downloading.has(id)) return;
+  const table = t();
+  state.downloading.add(id);
+  render();
+  try {
+    const result = await call("inbox.downloadAttachment", {
+      accountId: message.accountId,
+      key: message.key,
+      index,
+    });
+    if (!result.cancelled) setNotice(table.savedFile(result.name || file.filename));
+  } catch (error) {
+    setBanner(describe(error, table.saveFailed), true);
+  } finally {
+    state.downloading.delete(id);
+    render();
+  }
+}
+
+/**
+ * Open the composer: a new message, or the draft the plugin builds for this one.
+ *
+ * A reply is not composed here. The plugin knows the original's headers, its
+ * place in a thread and the account's own address, so it hands back the
+ * recipients, the subject and the quoted body it wants — this function only opens
+ * the form with them.
+ */
+async function openDraft(mode) {
+  if (composer?.isOpen) return;
+  const table = t();
+  const accounts = (state.snapshot?.accounts ?? []).map((account) => ({
+    instanceId: account.instanceId,
+    label: account.label,
+    email: account.email,
+    canSend: account.canSend !== false,
+    sendBlockedReason: account.sendBlockedReason ?? null,
+  }));
+  if (!accounts.length) {
+    setBanner(table.emptyAccounts, true);
+    return;
+  }
+  if (mode === "new") {
+    const preferred = state.accountId === "all" ? "" : state.accountId;
+    composer.open({ mode: "new", accounts, accountId: preferred });
+    return;
+  }
+  const message = state.reader?.status === "ready" ? state.reader.message : null;
+  if (!message) {
+    setBanner(table.readerEmpty, true);
+    return;
+  }
+  try {
+    const result = await call("inbox.draft", {
+      accountId: message.accountId,
+      key: message.key,
+      mode,
+    });
+    composer.open({ ...(result.draft ?? {}), mode, accounts });
+  } catch (error) {
+    setBanner(describe(error, table.openError), true);
+  }
+}
+
+/** What the panel says once a message is on its way. */
+function onComposerClosed(result) {
+  if (!result) {
+    setBanner(null);
+    return;
+  }
+  const table = t();
+  const accepted = Array.isArray(result.accepted) ? result.accepted : [];
+  const parts = [accepted.length > 1 ? table.sentTo(accepted.length) : table.sent];
+  const rejected = Array.isArray(result.rejected) ? result.rejected : [];
+  if (rejected.length) parts.push(table.sentRejected(rejected.join(", ")));
+  const filed = result.filed ?? null;
+  if (filed?.filed) parts.push(table.sentFiled(filed.folder));
+  else if (filed?.skipped === "gmail") parts.push(table.sentNotFiledGmail);
+  else if (filed && filed.skipped !== "no-folders") parts.push(table.sentNotFiled);
+  // Each sentence stands on its own; a Chinese line needs no space between them,
+  // an English one does.
+  const spacer = String(state.locale).startsWith("zh") ? "" : " ";
+  setNotice(parts.join(spacer));
 }
 
 /**
@@ -1196,6 +1343,12 @@ function targetMessage() {
 }
 
 function handleKey(event) {
+  // The composer is modal: while it is open every key belongs to it, so a `c`
+  // typed into a subject line cannot open a second composer behind it.
+  if (composer?.isOpen) {
+    composer.handleKey(event);
+    return;
+  }
   const action = keyboardAction(event, { inField: inField(event.target) });
   if (!action) return;
   const table = t();
@@ -1246,6 +1399,18 @@ function handleKey(event) {
       void archiveMessage(message);
       return;
     }
+    // Writing and answering: `c` anywhere, the other three on the message that is
+    // open, which is the one the shortcut is about.
+    case "compose":
+      event.preventDefault();
+      void openDraft("new");
+      return;
+    case "reply":
+    case "replyAll":
+    case "forward":
+      event.preventDefault();
+      void openDraft(action);
+      return;
     case "search":
       event.preventDefault();
       nodes.search.focus();
@@ -1287,6 +1452,15 @@ function wire() {
   nodes.searchClear.setAttribute("aria-label", t().searchClear);
   nodes.check.addEventListener("click", () => void checkNow());
   nodes.add.addEventListener("click", () => void addAccount());
+  // The composer is created once: building it per open would rebuild every field
+  // and drop the caret the user just put somewhere.
+  nodes.compose.addEventListener("click", () => void openDraft("new"));
+  composer = createComposer(nodes.composeLayer, {
+    stringsFor: t,
+    localeFor: () => state.locale,
+    onSend: (payload) => call("inbox.send", payload),
+    onClosed: onComposerClosed,
+  });
   nodes.older.addEventListener("click", () => void loadOlder());
   nodes.back.addEventListener("click", () => closeReader());
   nodes.confirmNo.addEventListener("click", () => closeConfirm());

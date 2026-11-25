@@ -310,6 +310,18 @@ export function keyboardAction(event, { inField = false } = {}) {
       return "archive";
     case "/":
       return "search";
+    // Since 0.5.0 the panel answers mail too: `c` writes, `r` replies, `a`
+    // replies to everyone and `f` forwards. All four are unmodified single keys,
+    // like the rest of this list, and none of them fires while the user is typing
+    // in a field.
+    case "c":
+      return "compose";
+    case "r":
+      return "reply";
+    case "a":
+      return "replyAll";
+    case "f":
+      return "forward";
     case "Escape":
       return "close";
     default:
@@ -320,4 +332,97 @@ export function keyboardAction(event, { inField = false } = {}) {
 /** The URL a link points at is only openable through the host; the rest is text. */
 export function isOpenableLink(value) {
   return /^https?:\/\//i.test(String(value ?? "").trim()) || /^mailto:/i.test(String(value ?? "").trim());
+}
+
+/**
+ * One address as a mail client writes it: a local part, one `@`, a real domain.
+ *
+ * The same rule `lib/compose.js` applies before it puts an address in an envelope
+ * — that file's `ADDRESS` constant is the authority, and a value this panel lets
+ * through and that one refuses becomes a coded refusal in the composer, so the
+ * two must agree.
+ */
+export const ADDRESS_INPUT =
+  /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/;
+
+/** Whether one value is a bare address this panel will accept. */
+export function isValidAddress(value) {
+  const text = String(value ?? "").trim();
+  return text.length <= 320 && ADDRESS_INPUT.test(text);
+}
+
+/**
+ * What a chip input holds as one value: `"Ann Lee" <ann@example.com>` or a bare
+ * address, in one entry or several separated by comma, semicolon or whitespace.
+ *
+ * A pasted list of recipients becomes several chips, which is what a user
+ * expects from pasting `a@b.com; c@d.com` into a mail form; anything that is not
+ * an address is returned in `invalid` so the composer can say so instead of
+ * silently dropping it.
+ */
+export function parseRecipientInput(value) {
+  const entries = [];
+  const invalid = [];
+  const source = String(value ?? "");
+  let current = "";
+  let quoted = false;
+  const commit = () => {
+    const text = current.trim();
+    current = "";
+    if (!text) return;
+    const angled = /^(.*)<([^<>]+)>\s*$/.exec(text);
+    if (angled) {
+      const address = angled[2].trim();
+      if (!isValidAddress(address)) {
+        invalid.push(text);
+        return;
+      }
+      const name = angled[1].trim().replace(/^"(.*)"$/, "$1").trim();
+      entries.push({ name, address });
+      return;
+    }
+    // A pasted list can be space-separated as well as comma-separated: every word
+    // has to be an address of its own, or the whole value is reported as invalid.
+    const words = text.split(/\s+/).filter(Boolean);
+    if (words.length > 1) {
+      if (words.every(isValidAddress)) {
+        for (const word of words) entries.push({ name: "", address: word });
+        return;
+      }
+      invalid.push(text);
+      return;
+    }
+    if (!isValidAddress(text)) {
+      invalid.push(text);
+      return;
+    }
+    entries.push({ name: "", address: text });
+  };
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === '"') {
+      quoted = !quoted;
+      current += char;
+      continue;
+    }
+    if (!quoted && /[,;\r\n\t]/.test(char)) {
+      commit();
+      continue;
+    }
+    // A space only separates two addresses when it is not part of a display name
+    // and there is no angle bracket on the way: `Ann Lee <a@b.com>` is one entry.
+    current += char;
+  }
+  commit();
+  return { entries, invalid };
+}
+
+/** How a chip reads: the display name when there is one, the address otherwise. */
+export function chipLabel(entry) {
+  return String(entry?.name || entry?.address || "").trim();
+}
+
+/** The total bytes of a set of attachments, ignoring anything unreadable. */
+export function totalBytes(list) {
+  return (Array.isArray(list) ? list : []).reduce((sum, file) => sum + (Number(file?.size) || 0), 0);
 }

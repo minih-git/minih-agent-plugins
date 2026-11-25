@@ -1031,8 +1031,9 @@ input {
   gap: 6px;
 }
 
-/* One attachment: a card with its type, name and size. Nothing is downloaded in
- * this release, so the card is a description rather than a control. */
+/* One attachment: a card with its type, name, size and the one button that saves
+ * it. The bytes are not here — pressing Save asks the plugin for that one part
+ * and hands it to the host's own save dialog. */
 .attachment {
   display: flex;
   align-items: center;
@@ -1299,5 +1300,419 @@ input {
 
   .skeleton {
     animation: none;
+  }
+}
+
+/*
+ * The composer.
+ *
+ * A sheet rather than a replacement of the reading pane: the message being
+ * answered stays visible behind it, and the panel keeps one place where a draft
+ * lives. On a narrow panel it becomes the whole surface, because a form with
+ * recipient chips needs the width.
+ *
+ * The card is anchored bottom-right — the place every mail client puts a new
+ * message — and its body grows with the window up to a comfortable measure.
+ */
+.compose-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: 18px 20px 20px;
+  background: rgba(8, 10, 14, 0.42);
+}
+
+.compose-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(680px, 100%);
+  max-height: min(760px, 100%);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.42);
+  overflow: hidden;
+}
+
+.compose-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px 10px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.compose-head h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.compose-close {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.compose-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 14px 4px;
+}
+
+.compose-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.compose-row-to {
+  align-items: center;
+}
+
+.compose-label {
+  flex: none;
+  width: 58px;
+  padding-top: 6px;
+  color: var(--ink-faint);
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+}
+
+.compose-row-to .compose-label,
+.compose-row-from .compose-label {
+  padding-top: 0;
+}
+
+.compose-select,
+.compose-subject {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.compose-select:focus,
+.compose-subject:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.compose-hint {
+  margin: 4px 0 6px 66px;
+  color: var(--danger);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+/* Recipient chips: one row that wraps, with the input at the end. */
+.chip-field {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  cursor: text;
+}
+
+.chip-field.is-invalid {
+  border-color: var(--danger);
+}
+
+.chips {
+  display: contents;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  padding: 2px 2px 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-size: 11.5px;
+}
+
+.chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chip-remove:hover {
+  background: var(--bg-hover);
+  color: var(--ink);
+}
+
+.chip-input {
+  flex: 1;
+  min-width: 120px;
+  padding: 3px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.chip-input:focus {
+  outline: none;
+}
+
+.compose-toggles {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+
+.chip-toggle {
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-faint);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chip-toggle:hover {
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.compose-body-wrap {
+  display: flex;
+  flex: 1;
+  min-height: 180px;
+  padding: 10px 18px 6px;
+}
+
+.compose-body {
+  flex: 1;
+  min-height: 180px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.62;
+  resize: none;
+}
+
+.compose-body:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.compose-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 18px 8px;
+}
+
+.compose-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 4px 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  font-size: 11.5px;
+}
+
+.compose-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compose-file-size {
+  color: var(--ink-faint);
+}
+
+/* The original's attachments, offered for a forward: one checkbox each. */
+.compose-forward {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 18px 8px;
+}
+
+.compose-forward-title {
+  margin: 0 0 2px;
+  color: var(--ink-faint);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.compose-forward-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.compose-forward-size {
+  color: var(--ink-faint);
+}
+
+.compose-size {
+  padding: 0 18px 4px;
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+
+.compose-size.is-over {
+  color: var(--danger);
+}
+
+.compose-error {
+  margin: 0;
+  padding: 0 18px 8px;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.compose-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-panel);
+}
+
+.compose-spacer {
+  flex: 1;
+}
+
+/* The one question a half-written message gets, over the composer itself. */
+.compose-confirm {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px 28px;
+  background: color-mix(in oklab, var(--bg-panel) 92%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.compose-confirm-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.compose-confirm-body {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: 12.5px;
+}
+
+.compose-confirm-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+/* The save button on an attachment card: quiet until the card is hovered. */
+.attachment-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  margin-left: auto;
+  padding: 4px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-dim);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.attachment-save:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
+.attachment-save:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.attachment.is-busy {
+  border-color: var(--accent);
+}
+
+@media (max-width: 699px) {
+  /* A narrow panel has no room for a sheet behind a message: the composer is the
+   * whole surface, which is also what a phone-sized mail client does. */
+  .compose-backdrop {
+    align-items: stretch;
+    justify-content: stretch;
+    padding: 0;
+  }
+
+  .compose-card {
+    width: 100%;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .compose-label {
+    width: 46px;
+  }
+
+  .compose-hint {
+    margin-left: 54px;
   }
 }
