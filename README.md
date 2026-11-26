@@ -87,7 +87,7 @@ call. Read failures show the real error with retry, never demo data. File reads
 use a bounded parallel batch, and vault configuration stays available while
 indexing. No permission or data-format changes are needed.
 
-`minih.inbox-mail` 0.5.1 is the resident assistant's first information source
+`minih.inbox-mail` 0.6.0 is the resident assistant's first information source
 and a small mail client of its own: it watches your mailboxes and writes what
 arrives into the notification centre — one alert for a message from an
 important sender, matching one of your keywords or marked urgent by its own
