@@ -83,6 +83,26 @@ function closedError() {
   return error;
 }
 
+/** The `SEARCH` date form: `1-Apr-2026`, month as an English three-letter name. */
+const SEARCH_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * One timestamp as an IMAP `date-text`, or `""` when it is not a date.
+ *
+ * `SINCE`/`BEFORE` name a day in the mailbox's calendar, not an instant, and the
+ * caller has already resolved "the first of the month" to local midnight
+ * (`lib/agent-tools.js` `parseDate`). Formatting the local day is what makes the
+ * server answer the same range the local filter does: in UTC+8, mail that arrived
+ * at 07:00 on the first belongs to the first, and a UTC formatter would put it on
+ * the previous day.
+ */
+function imapDate(value) {
+  if (value === null || value === undefined || value === "") return "";
+  const date = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  return `${date.getDate()}-${SEARCH_MONTHS[date.getMonth()]}-${date.getFullYear()}`;
+}
+
 function quote(value) {
   return `"${String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
@@ -157,14 +177,27 @@ function createSession(transport, options = {}) {
     // and answers it exactly once.
     if (kind === "cont") {
       if (inflight?.onContinuation) {
-        const accept = inflight.onContinuation;
-        inflight.onContinuation = null;
+        const entry = inflight;
+        const accept = entry.onContinuation;
+        // One command may ask for more than one literal: a `SEARCH CHARSET UTF-8`
+        // with a Chinese sender *and* a Chinese subject asks for two. The handler
+        // therefore stays armed until it answers `false`. `APPEND` sends exactly one
+        // literal and never sees a second continuation, so it keeps its meaning.
+        // The server cannot send the next `+` before the literal it is waiting for
+        // has arrived, so settling this way cannot race the parser.
+        const settle = (value) => {
+          if (value === false) entry.onContinuation = null;
+        };
         try {
           const result = accept();
           // A literal is written in pieces, so the writer is asynchronous; a failed
           // write has to end the session rather than become an unhandled rejection.
           if (result && typeof result.then === "function") {
-            result.catch((error) => fail(Object.assign(error ?? new Error("send failed"), { code: error?.code ?? "IMAP_SEND_FAILED" })));
+            result.then(settle, (error) =>
+              fail(Object.assign(error ?? new Error("send failed"), { code: error?.code ?? "IMAP_SEND_FAILED" })),
+            );
+          } else {
+            settle(result);
           }
         } catch (error) {
           fail(Object.assign(error, { code: error?.code ?? "IMAP_SEND_FAILED" }));
@@ -351,6 +384,106 @@ function createSession(transport, options = {}) {
       return [...new Set(uids)].sort((a, b) => a - b);
     },
 
+    /**
+     * One bounded `UID SEARCH` over the criteria an agent tool may name.
+     *
+     * The polling path only ever asks "what is newer than this UID", which the
+     * cached envelope list already answers. A question that reaches past that
+     * window — "invoices since the first of the month" — can only be answered by
+     * the server, so this is the one search the plugin sends that is not a
+     * cursor walk.
+     *
+     * Every key maps to a standard `SEARCH` criterion (`FROM`, `SUBJECT`,
+     * `SINCE`, `BEFORE`, `UNSEEN`, `FLAGGED`), so the server does the filtering
+     * and no body is downloaded to decide it. `SINCE`/`BEFORE` name a day in the
+     * mailbox's own calendar rather than a UTC instant, which is the day the user
+     * means.
+     *
+     * @returns every matching UID, oldest first. Bounding the reply is the
+     *   caller's job: the caller knows how many it intends to fetch.
+     */
+    async searchBy({ from = "", subject = "", since = null, before = null, unseen = false, flagged = false } = {}) {
+      // A control character would end the command line early, so it becomes a
+      // space before the value is quoted.
+      const clean = (value) => String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").trim();
+      const keys = [];
+      /**
+       * One text criterion, in the only form that can carry it.
+       *
+       * An RFC 3501 quoted string is 7-bit, so `SUBJECT "发票"` is not a search a
+       * server has to accept: most answer `BAD` or `NO [BADCHARSET]`, which would
+       * leave a Chinese keyword unsearchable past the local cache — exactly the
+       * case this search exists for. A non-ASCII value therefore travels as a
+       * literal under `CHARSET UTF-8`, which is the form the grammar has for it.
+       */
+      const literals = [];
+      const addText = (key, value) => {
+        if (!value) return;
+        if (/^[\x20-\x7e]*$/.test(value)) {
+          keys.push(`${key} ${quote(value)}`);
+          return;
+        }
+        literals.push(value);
+        keys.push(`${key} {${Buffer.byteLength(value, "utf8")}}`);
+      };
+      addText("FROM", clean(from));
+      addText("SUBJECT", clean(subject));
+      const sinceDate = imapDate(since);
+      if (sinceDate) keys.push(`SINCE ${sinceDate}`);
+      const beforeDate = imapDate(before);
+      if (beforeDate) keys.push(`BEFORE ${beforeDate}`);
+      if (unseen) keys.push("UNSEEN");
+      if (flagged) keys.push("FLAGGED");
+      // No criterion means "everything the mailbox holds": `ALL` says that
+      // instead of sending a `SEARCH` with no key at all.
+      if (!keys.length) keys.push("ALL");
+      // `CHARSET` is only legal once there is a literal to interpret.
+      const charset = literals.length ? "CHARSET UTF-8 " : "";
+      /**
+       * The command, split where the grammar forces a line break.
+       *
+       * `literal = "{" number "}" CRLF *CHAR8` — the marker has to be the last thing
+       * on its line, and the command continues on the next one after those bytes.
+       * A single line such as `SUBJECT {6} SINCE 1-Apr-2026` is `BAD` on a real
+       * server, so each piece is written on a line of its own and a piece ending in
+       * `{n}` is continued once its literal has gone out.
+       */
+      const pieces = [];
+      let current = "";
+      for (const key of keys) {
+        current = current ? `${current} ${key}` : key;
+        if (/\{\d+\}$/.test(key)) {
+          pieces.push(current);
+          current = "";
+        }
+      }
+      if (current) pieces.push(current);
+      let next = 1;
+      const options2 = literals.length
+        ? {
+            // One continuation per literal, in the order the keys were written.
+            onContinuation: async () => {
+              const literal = literals.shift();
+              if (literal === undefined) return false;
+              const rest = pieces[next++] ?? "";
+              const tail = rest ? ` ${rest}` : "";
+              // The literal's bytes and the rest of the command are one write: the
+              // server is waiting for exactly those bytes and then reads a line.
+              await transport.send(
+                Buffer.concat([Buffer.from(literal, "utf8"), Buffer.from(`${tail}\r\n`, "utf8")]),
+              );
+              // A piece that still ends in `{n}` means another continuation follows.
+              return /\{\d+\}$/.test(rest) ? undefined : false;
+            },
+          }
+        : {};
+      const reply = await command(`UID SEARCH ${charset}${pieces[0]}`, options2);
+      const uids = reply.untagged
+        .filter((record) => record.kind === "search")
+        .flatMap((record) => record.uids)
+        .filter((uid) => Number.isInteger(uid) && uid >= 1);
+      return [...new Set(uids)].sort((a, b) => a - b);
+    },
     /**
      * One envelope fetch for the given UIDs.
      *
@@ -643,4 +776,4 @@ function createSession(transport, options = {}) {
   };
 }
 
-module.exports = { HEADER_FIELDS, OLDER_LIMIT, PREVIEW_BYTES, createSession };
+module.exports = { HEADER_FIELDS, OLDER_LIMIT, PREVIEW_BYTES, createSession, imapDate };

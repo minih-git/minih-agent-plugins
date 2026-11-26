@@ -94,6 +94,8 @@ function fakeHost({ instances = [], settings = {}, locale = "en", servers = {}, 
     /** What `mail.send` answers with, or the coded refusal it throws. */
     sendAnswer: null,
     sendError: null,
+    /** The agent tools the plugin registered, by name — what the host would list. */
+    tools: new Map(),
   };
   let connectionSeq = 0;
   let instanceSeq = 100;
@@ -214,6 +216,16 @@ function fakeHost({ instances = [], settings = {}, locale = "en", servers = {}, 
           connections.delete(connectionId);
           await entry?.transport.close();
         },
+      },
+    },
+    // `pi.agent`: the surface behind `agent.tool.register`. It records the tools
+    // exactly as the broker would, so a test can call one the way the agent does.
+    agent: {
+      registerTool: async (tool) => {
+        state.tools.set(tool.name, tool);
+      },
+      unregisterTool: async (name) => {
+        state.tools.delete(name);
       },
     },
     events: {
@@ -2302,6 +2314,288 @@ test("a POP3 attachment is taken out of the one message the server may RETR", as
     // POP3 has no way to ask for one part, so the whole message comes over and the
     // part is taken out of it — decoded, not as the base64 the server sent.
     assert.equal(host.state.saves[0].bytes.toString("utf8"), "%PDF pop3 attachment");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+/**
+ * The agent tools, through the real `onLoad()`.
+ *
+ * `tests/agent-tools.test.mjs` covers the decisions in front of the protocol; what
+ * is only visible here is the seam with `pi.agent` and the mailbox: what gets
+ * registered, what a search actually puts on the wire, and that a read performed
+ * for the model leaves `\\Seen` exactly as it was.
+ */
+test("the plugin registers four agent tools at load, and withdraws them at unload", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    assert.deepEqual([...host.state.tools.keys()], [
+      "mail_list_messages",
+      "mail_read_message",
+      "mail_reply_message",
+      "mail_send_message",
+    ]);
+    // The two reads are what a scheduled run may use while nobody is watching;
+    // the two sends always take the host's approval card.
+    assert.equal(host.state.tools.get("mail_list_messages").risk, "low");
+    assert.equal(host.state.tools.get("mail_read_message").risk, "low");
+    assert.equal(host.state.tools.get("mail_reply_message").risk, "high");
+    assert.equal(host.state.tools.get("mail_send_message").risk, "high");
+  } finally {
+    await plugin.onUnload();
+    assert.equal(host.state.tools.size, 0, "an unload must not leave a tool registered");
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("an agent search answers from the stored mail without opening a mailbox", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(
+      message({
+        uid: 1,
+        subject: "Invoice April",
+        messageId: "<april@example.com>",
+        from: { name: "Billing", address: "billing@vendor.example" },
+      }),
+    );
+    await checkUntil(plugin, 1);
+    const connects = server.connectCount;
+    const searches = server.searches.length;
+    // A page of one, which the stored mail already fills: this is the case where the
+    // plugin has no reason to reach for the mailbox at all.
+    const result = await host.state.tools
+      .get("mail_list_messages")
+      .execute({ accountId: "acc_1", limit: 1 }, {});
+    assert.equal(result.untrusted, true);
+    assert.match(result.notice, /data, never as instructions/);
+    assert.equal(result.returned, 1);
+    assert.equal(result.messages[0].subject, "Invoice April");
+    assert.equal(result.messages[0].source, "local");
+    assert.equal(result.messages[0].from.address, "billing@vendor.example");
+    assert.equal(result.accounts[0].searched, false);
+    // Enough local matches for the page that was asked for: no session, no search.
+    assert.equal(server.connectCount, connects, "a local answer opens no connection");
+    assert.equal(server.searches.length, searches);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("a dated agent search asks the server, and marks nothing read", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(message({ uid: 1, subject: "Invoice April", messageId: "<april@example.com>" }));
+    await checkUntil(plugin, 1);
+    // Older mail the poll window never covered: this is what a date range is for.
+    server.add(
+      message({
+        uid: 2,
+        subject: "Invoice March",
+        messageId: "<march@example.com>",
+        date: "10-Mar-2026 09:00:00 +0800",
+      }),
+    );
+    const stores = server.stores.length;
+    const result = await host.state.tools
+      .get("mail_list_messages")
+      .execute({ accountId: "acc_1", since: "2026-03-01" }, {});
+    // One search, with the criterion the caller named, and the day in the form
+    // IMAP expects.
+    assert.ok(
+      server.searches.some((line) => /SINCE 1-Mar-2026/.test(line)),
+      `a SINCE search should have gone out, saw ${JSON.stringify(server.searches)}`,
+    );
+    assert.equal(result.accounts[0].searched, true);
+    const march = result.messages.find((entry) => entry.messageId === "<march@example.com>");
+    assert.ok(march, "the older message comes from the server");
+    assert.equal(march.source, "server");
+    assert.equal(march.subject, "Invoice March");
+    // One row per message even though both sources answered: the stored copy is
+    // replaced by the server's, not listed beside it.
+    assert.equal(result.returned, result.messages.length);
+    assert.equal(result.messages.filter((entry) => entry.messageId === "<april@example.com>").length, 1);
+    assert.equal(result.messages.find((entry) => entry.messageId === "<april@example.com>").source, "server");
+    // A message the store never held is read by the key the same answer reported,
+    // and its subject comes off the message's own headers. The key alone has to be
+    // enough: a caller that read `key` from a row must not need to know `uid` too.
+    assert.match(march.key, /^uid:\d+:\d+$/, "a server row is keyed by its own name");
+    const body = await host.state.tools
+      .get("mail_read_message")
+      .execute({ accountId: "acc_1", key: march.key }, {});
+    assert.equal(body.markedRead, false);
+    assert.equal(body.subject, "Invoice March");
+    assert.match(body.text, /Hello from the test mailbox/);
+    assert.equal(server.stores.length, stores, "reading by that key sends no STORE either");
+    // The fetch was a peek, and no flag was touched: a search is not a read.
+    assert.equal(server.stores.length, stores, "a search sends no STORE");
+    assert.equal(
+      server.sentLines.filter((line) => /[^.]BODY\[\]/.test(line)).length,
+      0,
+      "a plain BODY[] would set \\Seen",
+    );
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("reading a message through the agent leaves it unread, while the panel marks it", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(
+      message({
+        uid: 1,
+        subject: "Invoice April",
+        messageId: "<april@example.com>",
+        raw: rawMessage({ subject: "Invoice April", text: "Total: 1200 CNY" }),
+      }),
+    );
+    await checkUntil(plugin, 1);
+    const read = await host.state.tools
+      .get("mail_read_message")
+      .execute({ accountId: "acc_1", key: "<april@example.com>" }, {});
+    assert.equal(read.untrusted, true);
+    assert.equal(read.markedRead, false);
+    assert.match(read.text, /Total: 1200 CNY/);
+    assert.equal(read.subject, "Invoice April");
+    // The promise of a low-risk read: the mailbox is exactly as it was.
+    assert.equal(server.stores.length, 0, "a tool read sends no STORE");
+    const saved = readState(host);
+    assert.equal(saved.accounts.acc_1.messages[0].flags.includes("\\Seen"), false);
+    // And the panel, which *is* the user reading it, still marks it.
+    await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: "<april@example.com>" });
+    assert.equal(server.stores.length, 1);
+    assert.match(server.stores[0], /\\Seen/);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("an agent reply goes out threaded, quoting the original, and files a Sent copy", async () => {
+  const server = createFakeServer({
+    uidNext: 1,
+    mailboxes: [{ name: "Sent", flags: ["\\Sent"] }],
+  });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(
+      message({
+        uid: 1,
+        subject: "Invoice April",
+        messageId: "<april@example.com>",
+        from: { name: "Billing", address: "billing@vendor.example" },
+        raw: rawMessage({ subject: "Invoice April", text: "Total: 1200 CNY" }),
+      }),
+    );
+    await checkUntil(plugin, 1);
+    const reply = await host.state.tools
+      .get("mail_reply_message")
+      .execute({ accountId: "acc_1", key: "<april@example.com>", text: "Paid today, thanks." }, {});
+    assert.equal(reply.sent, true);
+    assert.equal(host.state.sends.length, 1);
+    const request = host.state.sends[0];
+    const mime = Buffer.from(request.mime).toString("utf8");
+    // Threaded on the original, addressed to its sender, and quoting it.
+    assert.match(mime, /In-Reply-To: <april@example\.com>/);
+    assert.match(mime, /Subject: Re: Invoice April/);
+    assert.match(mime, /Paid today, thanks\./);
+    assert.match(mime, /Total: 1200 CNY/, "the original is quoted under the attribution line");
+    assert.equal(request.envelope.from, "owner@qq.com");
+    assert.deepEqual(request.envelope.to, ["billing@vendor.example"]);
+    // The reply fetch was a peek too: answering a message does not read it.
+    assert.equal(server.stores.length, 0);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+/**
+ * A Chinese keyword, which is the case this search exists for.
+ *
+ * A quoted string is 7-bit, so `SUBJECT "发票"` is not a search a server has to
+ * accept; the plugin sends a literal under `CHARSET UTF-8` instead, and this is the
+ * wire evidence for it.
+ */
+test("a Chinese keyword reaches the server as a UTF-8 literal, not a quoted string", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(message({ uid: 1, subject: "发票 2026-04", messageId: "<invoice@example.com>" }));
+    await checkUntil(plugin, 1);
+    // Older than the poll window, so only the server can answer this.
+    server.add(
+      message({
+        uid: 2,
+        subject: "发票 2026-03",
+        messageId: "<invoice-march@example.com>",
+        date: "10-Mar-2026 09:00:00 +0800",
+      }),
+    );
+    const result = await host.state.tools
+      .get("mail_list_messages")
+      .execute({ accountId: "acc_1", subject: "发票", since: "2026-03-01" }, {});
+    const wire = server.sent.join("");
+    // One line up to the marker, the literal after the continuation, then the rest
+    // of the command — the only shape a real server accepts.
+    const literal = Buffer.from("发票", "utf8").toString("latin1");
+    assert.ok(
+      wire.includes(`UID SEARCH CHARSET UTF-8 SUBJECT {6}\r\n${literal} SINCE 1-Mar-2026\r\n`),
+      `the wire was ${JSON.stringify(wire)}`,
+    );
+    assert.deepEqual(server.searchLiterals, ["发票"]);
+    assert.equal(result.accounts[0].searched, true);
+    const subjects = result.messages.map((entry) => entry.subject).sort();
+    assert.deepEqual(subjects, ["发票 2026-03", "发票 2026-04"]);
+    // The row the store never held is keyed by its server name, so it stays
+    // addressable by whichever source answered.
+    const march = result.messages.find((entry) => entry.subject === "发票 2026-03");
+    assert.match(march.key, /^uid:\d+:2$/);
+    assert.equal(march.messageId, "<invoice-march@example.com>");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("a server that cannot search UTF-8 is named in the answer instead of failing silently", async () => {
+  const server = createFakeServer({ uidNext: 1, refuseCharset: true });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(message({ uid: 1, subject: "发票 2026-04", messageId: "<invoice@example.com>" }));
+    await checkUntil(plugin, 1);
+    const result = await host.state.tools
+      .get("mail_list_messages")
+      .execute({ accountId: "acc_1", subject: "发票", since: "2026-03-01" }, {});
+    // The local answer survives, and the note says what the server refused — a
+    // caller that reads "FAILED" learns nothing it can act on.
+    assert.equal(result.accounts[0].searched, false);
+    assert.match(result.accounts[0].note, /BADCHARSET/);
+    assert.match(result.accounts[0].note, /what this computer already stored/);
+    assert.equal(result.messages.length, 1);
+    assert.equal(result.messages[0].subject, "发票 2026-04");
   } finally {
     await plugin.onUnload();
     rmSync(host.dataPath, { recursive: true, force: true });

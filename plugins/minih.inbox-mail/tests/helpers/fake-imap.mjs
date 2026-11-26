@@ -16,6 +16,17 @@ function quote(value) {
   return `"${String(value ?? "").replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
+const SEARCH_MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+/** One `SINCE`/`BEFORE` argument (`1-Apr-2026`) as a UTC midnight, or `null`. */
+function imapDay(value) {
+  const match = /^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/.exec(String(value ?? ""));
+  if (!match) return null;
+  const month = SEARCH_MONTHS.indexOf(match[2].toLowerCase());
+  if (month < 0) return null;
+  return Date.UTC(Number(match[3]), month, Number(match[1]));
+}
+
 function addressEntry(entry) {
   const [mailbox, host] = String(entry?.address ?? "").split("@");
   return `(${quote(entry?.name ?? "")} NIL ${quote(mailbox ?? "")} ${quote(host ?? "")})`;
@@ -159,6 +170,8 @@ export function createFakeServer(options = {}) {
     bodyFetches: [],
     /** Every STORE the plugin sent, as the raw command line. */
     stores: [],
+    /** Every `UID SEARCH` the plugin sent, as the raw command line. */
+    searches: [],
     /** Every `BODY.PEEK[<part>]` fetch, so a test can prove only one part was asked for. */
     partFetches: [],
     /**
@@ -177,11 +190,22 @@ export function createFakeServer(options = {}) {
     appends: [],
     /** What a one-part attachment fetch answers with, before base64 encoding. */
     attachmentData: options.attachmentData ?? "%PDF-1.4 fake attachment",
+    /**
+     * Whether a `SEARCH CHARSET` is refused with `NO [BADCHARSET]`.
+     *
+     * A server that cannot search UTF-8 answers exactly that, and the plugin has
+     * to fall back to the stored answer while saying why.
+     */
+    refuseCharset: options.refuseCharset ?? false,
+    /** Every literal a `SEARCH CHARSET` sent, decoded, in order. */
+    searchLiterals: [],
   };
   let dataListener = null;
   let closeListener = null;
   let idleTag = null;
   let open = false;
+  /** A `UID SEARCH CHARSET` waiting for the literal(s) it declared. */
+  let pendingSearch = null;
 
   function pushBuffer(buffer) {
     if (!open || !dataListener) return;
@@ -317,14 +341,102 @@ export function createFakeServer(options = {}) {
     push(`${tag} OK FETCH completed\r\n`);
   }
 
+  /**
+   * `UID SEARCH … SUBJECT {12}`, continued after the literal.
+   *
+   * The grammar is `literal = "{" number "}" CRLF *CHAR8`: the marker ends its
+   * line, the client waits for the continuation, sends exactly that many bytes, and
+   * then *continues the same command on the next line* — which may itself end in
+   * another marker. This is strict on purpose: a marker in the middle of a line is
+   * answered `BAD`, as Dovecot, Gmail and the Chinese providers do, so a client
+   * that builds one long line cannot pass these tests.
+   *
+   * The buffer holds raw bytes because the literal is what they are for; the text
+   * of each line is UTF-8, which is the charset the command declared.
+   */
+  function beginSearchWithLiteral(tag, line) {
+    const marker = /\{(\d+)\}$/.exec(line);
+    // The marker is not part of the command: the literal that replaces it is
+    // appended when its bytes arrive, and only one continuation is asked for.
+    pendingSearch = { tag, command: line.slice(0, marker.index), buffer: Buffer.alloc(0), size: Number(marker[1]) };
+    push("+ Ready for literal data\r\n");
+  }
+
+  function feedSearch(chunk) {
+    if (!pendingSearch) return;
+    if (chunk) pendingSearch.buffer = Buffer.concat([pendingSearch.buffer, chunk]);
+    for (;;) {
+      if (pendingSearch.size !== null) {
+        if (pendingSearch.buffer.length < pendingSearch.size) return;
+        const literal = pendingSearch.buffer.subarray(0, pendingSearch.size).toString("utf8");
+        pendingSearch.buffer = pendingSearch.buffer.subarray(pendingSearch.size);
+        pendingSearch.command += quote(literal);
+        server.searchLiterals.push(literal);
+        pendingSearch.size = null;
+      }
+      const index = pendingSearch.buffer.indexOf("\r\n");
+      if (index < 0) return;
+      const line = pendingSearch.buffer.subarray(0, index).toString("utf8");
+      pendingSearch.buffer = pendingSearch.buffer.subarray(index + 2);
+      const marker = /\{(\d+)\}$/.exec(line);
+      if (marker) {
+        // The marker is not part of the command: the literal that replaces it is
+        // appended when its bytes arrive.
+        pendingSearch.command += line.slice(0, marker.index);
+        pendingSearch.size = Number(marker[1]);
+        push("+ Ready for literal data\r\n");
+        continue;
+      }
+      if (/\{\d+\}/.test(line)) {
+        // A marker that does not end the line is not a literal, and a real server
+        // answers BAD rather than guessing what the client meant.
+        const { tag } = pendingSearch;
+        pendingSearch = null;
+        push(`${tag} BAD a literal must be the last thing on its line\r\n`);
+        return;
+      }
+      pendingSearch.command += line;
+      const { tag, command } = pendingSearch;
+      pendingSearch = null;
+      searchReply(tag, command);
+      return;
+    }
+  }
+
+  /**
+   * `UID SEARCH`, with the criteria an agent tool may name.
+   *
+   * The polling path only sends a UID range (plus `UNSEEN`); a tool search adds
+   * `FROM`, `SUBJECT`, `SINCE`, `BEFORE` and `FLAGGED`, which are the keys this
+   * answers so a test proves the right command went out and the right rows came
+   * back. IMAP ANDs its keys, so every filter here narrows the same list.
+   */
   function searchReply(tag, rest) {
+    server.searches.push(`UID SEARCH ${rest}`.trim());
     const unseenOnly = /\bUNSEEN\b/i.test(rest);
+    const flaggedOnly = /\bFLAGGED\b/i.test(rest);
+    const quoted = (key) => {
+      const match = new RegExp(`${key} "((?:[^"\\\\]|\\\\.)*)"`, "i").exec(rest);
+      return match ? match[1].replace(/\\(.)/g, "$1").toLowerCase() : "";
+    };
+    const sender = quoted("FROM");
+    const subject = quoted("SUBJECT");
+    const since = imapDay(/SINCE (\S+)/i.exec(rest)?.[1]);
+    const before = imapDay(/BEFORE (\S+)/i.exec(rest)?.[1]);
     const range = /UID (\d+):(\S+)/i.exec(rest);
     const from = range ? Number(range[1]) : 1;
     const to = range && range[2] !== "*" ? Number(range[2]) : Number.MAX_SAFE_INTEGER;
     const uids = server.entries
       .filter((entry) => entry.uid >= from && entry.uid <= to)
       .filter((entry) => !unseenOnly || !entry.flags.includes("\\Seen"))
+      .filter((entry) => !flaggedOnly || entry.flags.includes("\\Flagged"))
+      .filter((entry) => {
+        if (!sender) return true;
+        return `${entry.from?.name ?? ""} ${entry.from?.address ?? ""}`.toLowerCase().includes(sender);
+      })
+      .filter((entry) => !subject || String(entry.subject ?? "").toLowerCase().includes(subject))
+      .filter((entry) => since === null || Date.parse(entry.date) >= since)
+      .filter((entry) => before === null || Date.parse(entry.date) < before)
       .map((entry) => entry.uid);
     push(`* SEARCH${uids.length ? ` ${uids.join(" ")}` : ""}\r\n`);
     push(`${tag} OK SEARCH completed\r\n`);
@@ -428,6 +540,10 @@ export function createFakeServer(options = {}) {
       const text = typeof data === "string" ? data : Buffer.from(data).toString("latin1");
       server.sent.push(text);
       if (server.offline) return;
+      if (pendingSearch) {
+        feedSearch(typeof data === "string" ? Buffer.from(data, "latin1") : Buffer.from(data));
+        return;
+      }
       if (pendingAppend) {
         const bytes = typeof data === "string" ? Buffer.from(data, "latin1") : Buffer.from(data);
         pendingAppend.chunks.push(bytes);
@@ -463,7 +579,15 @@ export function createFakeServer(options = {}) {
         } else if (upper.startsWith("SELECT")) {
           selectReply(tag);
         } else if (upper.startsWith("UID SEARCH")) {
-          searchReply(tag, command);
+          if (server.refuseCharset && /\bCHARSET\b/i.test(command)) {
+            push(`${tag} NO [BADCHARSET (US-ASCII)] this server cannot search that charset\r\n`);
+          } else if (/\{\d+\}(?!\s*$)/.test(command)) {
+            push(`${tag} BAD a literal must be the last thing on its line\r\n`);
+          } else if (/\{\d+\}$/.test(command.trimEnd())) {
+            beginSearchWithLiteral(tag, command.trimEnd());
+          } else {
+            searchReply(tag, command);
+          }
         } else if (upper.startsWith("UID FETCH")) {
           fetchReply(tag, /\s(\S+)\s+\(/.exec(command)?.[1] ?? "", command);
         } else if (upper.startsWith("UID STORE")) {

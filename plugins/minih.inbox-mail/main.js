@@ -1,10 +1,10 @@
 "use strict";
 
 /**
- * Inbox mail — Minih-Agent-Desktop plugin entry (plugin process).
+ * Mail Assistant (`minih.inbox-mail`) — Minih-Agent-Desktop plugin entry.
  *
- * The plugin watches the mailboxes the user added (up to five, each a host-owned
- * credential instance) and turns what arrives into notification-centre entries:
+ * The plugin watches the mailboxes the user added (each a host-owned credential
+ * instance) and turns what arrives into notification-centre entries:
  * one `alert` for a message the rules consider important, one rolling `digest`
  * per account for everything else. The Inbox panel in the sidebar shows the same
  * accounts together, opens one message body when the user clicks it, and changes
@@ -35,6 +35,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 
 const accountsFile = require("./lib/accounts");
+const { createAgentTools } = require("./lib/agent-tools");
 const messages = require("./lib/messages");
 const providers = require("./lib/providers");
 const { normalizeSettings } = require("./lib/settings");
@@ -69,6 +70,8 @@ let rawSettings = {};
 let root = accountsFile.emptyRoot();
 let runtime = null;
 let subscriptions = [];
+/** The tools this plugin contributes to the agent, and their registration handle. */
+let agentTools = null;
 let writing = Promise.resolve();
 /** Rows posted once per load, so a retry loop cannot fill the notification list. */
 const postedRows = new Set();
@@ -380,6 +383,19 @@ async function onLoad() {
   });
   await runtime.load();
   await announceAccounts();
+  // The agent can read this mailbox on the user's behalf: four tools, two of them
+  // reads the host lets a scheduled run use without a card, two of them sends the
+  // host asks about every time (`lib/agent-tools.js`).
+  agentTools = createAgentTools({ host, runtime, log });
+  // A refused registration must not cost the user their mailbox: an app that has
+  // `pi.agent` but not the grant answers with a coded error, and the panel, the
+  // watcher and the command all work without these tools.
+  await agentTools.register().catch(async (error) => {
+    log("warn", `could not register the agent tools: ${error?.code ?? ""} ${error?.message ?? error}`.trim());
+    // A half-registered set is worse than none: withdraw whatever went through.
+    await agentTools?.unregister().catch(() => undefined);
+    agentTools = null;
+  });
 
   if (typeof host.commands?.register === "function") {
     // The palette entry: the same check as the panel's button, and no longer the
@@ -435,6 +451,8 @@ async function onUnload() {
   await runtime?.unload().catch(() => undefined);
   runtime = null;
   await writing;
+  await agentTools?.unregister().catch(() => undefined);
+  agentTools = null;
   postedRows.clear();
   host = null;
 }

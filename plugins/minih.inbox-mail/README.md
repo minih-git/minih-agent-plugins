@@ -1,9 +1,14 @@
-# Inbox mail
+# Mail Assistant
 
 Watches your mailboxes — as many as you add — and does three things with them: puts
 only the mail you care about into the app's notification centre, shows all of them
 in one **Inbox** panel in the sidebar, and sends mail from that same panel.
-Nothing here calls a model.
+
+Since 0.6.0 it also hands the agent four tools — search mail, read one message,
+reply, and write — so a conversation, or an automation you set up in the app, can
+work through the mailbox for you. The plugin itself still calls no model: those
+tools are the only way mail leaves this computer for one, and
+[what each of them does](#reading-mail-from-the-agent) is written down below.
 
 Since 0.5.0 the panel writes as well as reads: **write**, **reply**, **reply to
 all** and **forward**, with attachments picked from your disk, delivered by the app
@@ -40,7 +45,7 @@ one message you picked (see below for exactly what they send).
    anyway: it can be revoked without changing your login.
 2. **Open the Inbox panel in the sidebar → "Add mailbox"**, then fill the host's
    form with your full email address and that code. Repeat for each mailbox you
-   want; the same dialog also works in Settings → Plugins → Inbox mail.
+   want; the same dialog also works in Settings → Plugins → Mail Assistant.
 3. **Pick your mail service in that same form** — QQ Mail, NetEase 163/126, Gmail,
    Tencent Exmail, or **Custom server**. The form is where the provider belongs:
    it is a required choice, so the plugin never has to guess from a domain. If your
@@ -57,7 +62,7 @@ one message you picked (see below for exactly what they send).
    Nothing is dialled until you save the account. The server belongs to that one
    account: the app injects its password only into the endpoint stored beside it,
    so this plugin cannot send your password anywhere it likes. To change any of
-   this later, edit the account in **Settings → Plugins → Inbox mail**; the account
+   this later, edit the account in **Settings → Plugins → Mail Assistant**; the account
    keeps its identity, its baseline and its read progress, and only a switch
    between IMAP and POP3 starts a fresh baseline (the two protocols do not share a
    cursor).
@@ -140,7 +145,7 @@ common case on a mainland-China network: the connection is reset no matter what
 the account is set to, and a system-wide TUN proxy is the only other way out.
 Each mailbox can now go through its own proxy:
 
-1. Open **Settings → Plugins → Inbox mail** and add (or edit) the account.
+1. Open **Settings → Plugins → Mail Assistant** and add (or edit) the account.
 2. Open the **Proxy** section of that form: pick **HTTP** or **SOCKS5**, type the
    host and port, and — only if the proxy asks for them — a username and password.
    For a local Clash or Mihomo, that is `HTTP`, `127.0.0.1`, `7897`.
@@ -266,9 +271,62 @@ frame's own rules, where it wins. Nothing is forced onto the message's layout: n
 border or padding on `td`/`th`, only a `max-width` on images and tables so a wide
 mail cannot push the panel sideways.
 
+## Reading mail from the agent
+
+Four tools, registered with `pi.agent.registerTool` and declared in the manifest so
+that the install review shows exactly what they are:
+
+| Tool | Risk | What it does |
+| --- | --- | --- |
+| `mail_list_messages` | `low` | Search every mailbox, or one: sender, subject, `since`/`before` day (the caller's own calendar day), unread, starred, `limit` 1–50 and `offset` for paging. Envelopes only — sender, subject, date, one-line summary, attachment flag. |
+| `mail_read_message` | `low` | One message's text: the same 1 MiB `BODY.PEEK` fetch that opening it in the panel uses, cut to 20,000 characters. Never marks it read. |
+| `mail_reply_message` | `high` | A threaded reply that quotes the original, sent through the app's SMTP session and filed in Sent. |
+| `mail_send_message` | `high` | A new message from one account, with the same sender lock and Sent copy. |
+
+**Why the reads are `low` risk.** Desktop answers a low-risk call with `AllowOnce`
+and no card (`crates/host-core/src/permissions.rs`), and that is the only risk level
+that can run in an app automation, where nobody is there to press a button. It is
+also a promise the tools keep: a read changes nothing. Neither one sends
+`STORE \Seen`, writes the plugin's data file, or keeps a body after the answer.
+Opening a message in the panel still marks it read; asking the agent to read it does
+not. The two tools that send are `high` risk on purpose — the host puts a card in
+front of every call.
+
+**Where the search actually runs.** The plugin's own envelope store holds the newest
+200 messages per account, which is what the panel shows. A call that names a date
+range, or whose local matches are fewer than the page it asked for, also asks an IMAP
+server with one bounded `UID SEARCH` (`FROM`, `SUBJECT`, `SINCE`, `BEFORE`, `UNSEEN`,
+`FLAGGED`) and fetches at most the newest 50 envelopes. That is what makes "last
+month's invoices" an answer from the mailbox instead of from a three-day cache. A
+POP3 mailbox has no search at all, and its answer says so and covers only what is
+stored here.
+
+**What reaches the model.** Whatever a tool returns becomes part of that
+conversation, so it goes to the model provider the session is configured with —
+envelopes, or one message's text, exactly as if you had pasted it yourself. Nothing
+is sent on a timer, on arrival or from a rule: the plugin answers only when a session
+calls a tool. Every answer that carries mail opens with `untrusted: true` and a
+sentence saying the text is data and not instructions, and the tool descriptions say
+the same, so a message cannot talk the agent into mailing something out.
+
+**A word that is not ASCII.** A `SUBJECT "发票"` is not a legal IMAP search key — a
+quoted string is 7-bit — so a Chinese keyword travels as a literal under an explicit
+`CHARSET UTF-8`, which is the form the grammar has for it. A server that still
+refuses (`NO [BADCHARSET]`) leaves the stored answer in place and says so in the
+answer's own note, instead of pretending the mailbox was searched.
+
+**A scheduled run can only read.** This plugin schedules nothing; the app's own
+scheduled task does the timing, and such a run has nobody to approve anything. The
+two `low`-risk reads answer it — that is the whole reason they are `low` — while
+`mail_reply_message` and `mail_send_message` do not: a `high`-risk call puts a card
+in front of the user and waits, so a run with no user stops at that call instead of
+sending. Write a scheduled prompt that reads and summarizes. The same rule is why
+the read tools do not ask either when you are in the conversation: a low-risk call
+is answered without a card, in both cases.
+
 ## How importance is decided
 
-Nothing here calls a model, so the rule is short enough to predict:
+The importance rule calls no model, so it is short enough to predict:
 
 | Situation | Result |
 | --- | --- |
@@ -424,17 +482,21 @@ archive.
 - A rich-text composer: the body is plain text, and a reply quotes the original as
   text (an HTML-only message is converted for the quote). Signatures, drafts saved
   between launches, and scheduled send are not implemented either.
-- AI triage of what the deterministic rule missed.
+- AI triage built into the notifier itself: the rule that decides alert versus
+  digest stays deterministic, and mail reaches a model only when a session calls one
+  of the tools below.
 - Anything about an account's own settings inside this panel: the host owns that
   form, and from 1.10.0 it offers an edit entry per account (the connection code
   fills in the values, and the authorization code has to be entered again).
 - Outlook/Hotmail, which needs XOAUTH2 in the host.
 
-`minih.inbox-mail` 0.5.0 needs Minih-Agent-Desktop 1.11.0 or newer — the first
+`minih.inbox-mail` 0.6.0 needs Minih-Agent-Desktop 1.11.0 or newer — the first
 release with a per-instance mail endpoint (`userEndpoint` on a credential slot), the
 POP3 login behind `net.tcp.connect`, the `mail` sidebar icon, and a per-account
 proxy (`userProxy`). Sending needs the `mail.send` grant (the host dials, logs in and
 delivers) and `userSend` on the slot for an account with its own outgoing server;
 saving an attachment needs `fs.saveAs`, which writes the one path the user picks.
-The catalog in this repository still points at an older release: publishing 0.5.0 is
-a separate step that updates `catalog.json` and the release history.
+The agent tools need `agent.tool.register`; agent tools predate 1.5.0, so they do not
+raise the app floor. The catalog in this repository still points at 0.5.1: publishing
+0.6.0 is a separate step that builds `packages/minih.inbox-mail-0.6.0.piplug` and
+regenerates `catalog.json` and the release history.

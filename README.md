@@ -43,7 +43,7 @@ keeping its own `LICENSE` and notice files inside its directory.
 | `minih.personal-knowledge` (`Personal Knowledge`) | 0.7.2 | minih-git | MIT | this repository |
 | `minih.selection-translate` (`Selection Translate`) | 0.3.2 | minih-git | MIT | this repository |
 | `minih.cache-keepwarm` (`Cache keep-warm`) | 0.1.0 | minih-git | MIT | this repository |
-| `minih.inbox-mail` (`Inbox mail`) | 0.5.1 | minih-git | MIT | this repository |
+| `minih.inbox-mail` (`Mail Assistant`) | 0.6.0 | minih-git | MIT | this repository |
 | `minih.session-titles` (`Session Titles`) | 0.1.0 | minih-git | MIT | this repository |
 | `pi.file-manager` (`File Manager`) | 0.9.0 | Tioit-Wang | not declared by the author | not published by the author |
 
@@ -124,12 +124,27 @@ dialog (`pi.fs.saveAs`), 50 MiB at most, one dialog at a time, nothing written
 into the plugin's data folder. An HTML body is shown as it arrives inside a
 scriptless, origin-less sandbox that loads nothing remote.
 
-Collecting, deciding, notifying, composing and sending call no model, so
-nothing you receive or write reaches an AI provider. It needs Desktop v1.11.0
-or newer (`engines.minihAgent` is `>=1.11.0`): `mail.send` and `pi.fs.saveAs`
-are host capabilities that arrived in 1.11.0, and the marketplace now enforces
-the declared floor, so a 1.10.x app is not offered this version. The host
-still performs every sign-in, so the plugin never receives a password.
+Collecting, deciding, notifying, composing and sending call no model, so the
+mail client on its own never reaches an AI provider.
+
+0.6.0 renames the plugin to **Mail Assistant** (`邮件助手`; the id stays
+`minih.inbox-mail`, because an installed account's credentials and cursor hang off
+it) and adds four agent tools: `mail_list_messages` and `mail_read_message` at `low`
+risk, `mail_reply_message` and `mail_send_message` at `high`. That changes what the
+privacy statement can claim, and the manifest, both safety notes, the CHANGELOG and
+the plugin README now say it precisely: a tool's answer becomes part of the
+conversation, so envelopes or one message's text reach the model the session uses,
+while nothing is sent on a timer, on arrival or from a rule. The reads are `low`
+because they change nothing — no `STORE \Seen`, nothing written to the plugin's data
+file — which is also what lets the app's own scheduled task summarize mail while
+nobody is watching; the two sends are `high`, so every call takes the host's
+approval card. Search with a date range runs one bounded IMAP `UID SEARCH` instead
+of trusting the 200-envelope cache, and a POP3 mailbox reports that it can only
+answer from what is stored. It needs Desktop v1.11.0 or newer
+(`engines.minihAgent` is `>=1.11.0`): `mail.send` and `pi.fs.saveAs` are host
+capabilities that arrived in 1.11.0, and the marketplace now enforces the
+declared floor, so a 1.10.x app is not offered this version. The host still
+performs every sign-in, so the plugin never receives a password.
 
 The redistributed ones are listed with `trust: "community"` and
 `verified: false`: the `verified` badge is a claim about a publisher this

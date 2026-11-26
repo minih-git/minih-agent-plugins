@@ -32,7 +32,7 @@ const TEXT = {
     needsSetup: "Mailbox not connected",
     needsProvider: "Choose a mail provider",
     needsProviderBody: (label) =>
-      `${label || "This account"} has no mail service yet, so it is not connected. Open Settings → Plugins → Inbox mail and edit the account: pick your provider there, or “Custom server” and fill in its address.`,
+      `${label || "This account"} has no mail service yet, so it is not connected. Open Settings → Plugins → Mail Assistant and edit the account: pick your provider there, or “Custom server” and fill in its address.`,
     // Used when a proxy error arrives for an account whose proxy fields are not
     // readable: the sentence still has to make sense without an endpoint.
     proxyWord: "the proxy",
@@ -48,7 +48,7 @@ const TEXT = {
       proxyFailed: (label) =>
         `Could not reach ${label}. Check that it is running and that the address is right; this account is never retried without it.`,
       proxyAuthFailed: (label) =>
-        `${label} rejected the username or password. Open the account in Settings → Plugins → Inbox mail and enter the proxy credentials again.`,
+        `${label} rejected the username or password. Open the account in Settings → Plugins → Mail Assistant and enter the proxy credentials again.`,
       tls:
         "The encrypted connection to this mail server could not be established: its certificate did not verify, or that port is not the encrypted one. Check the server, the port and the encryption in the account settings.",
       unsupported:
@@ -70,7 +70,7 @@ const TEXT = {
     needsSetup: "邮箱尚未连接",
     needsProvider: "请选择邮箱服务商",
     needsProviderBody: (label) =>
-      `${label || "这个账号"}还没指定邮箱服务，所以暂时不连接。请打开 设置 → 插件 → 邮箱收件 编辑这个账号：选择你的服务商，或者选「自定义服务器」并填写服务器信息。`,
+      `${label || "这个账号"}还没指定邮箱服务，所以暂时不连接。请打开 设置 → 插件 → 邮件助手 编辑这个账号：选择你的服务商，或者选「自定义服务器」并填写服务器信息。`,
     proxyWord: "代理",
     reasons: {
       missing: "插件还没有邮箱凭据。请在侧栏「收件箱」面板或设置里添加一个账号。",
@@ -81,7 +81,7 @@ const TEXT = {
       proxyFailed: (label) =>
         `无法连接${label}。请确认代理已启动、地址填写正确；这个账号不会绕过代理直连。`,
       proxyAuthFailed: (label) =>
-        `${label} 拒绝了用户名或密码。请在 设置 → 插件 → 邮箱收件 里编辑这个账号，重新填写代理凭据。`,
+        `${label} 拒绝了用户名或密码。请在 设置 → 插件 → 邮件助手 里编辑这个账号，重新填写代理凭据。`,
       tls: "无法与这个邮件服务器建立加密连接：证书没有通过校验，或者那个端口并不是加密端口。请核对账号设置里的服务器、端口和加密方式。",
       unsupported: "当前应用版本缺少本插件需要的宿主能力（需要桌面 1.10.0 及以上）。",
       other: "暂时无法连接邮箱，稍后会自动重试。",

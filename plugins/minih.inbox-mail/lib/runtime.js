@@ -31,6 +31,7 @@ const compose = require("./compose");
 const { createGate } = require("./gate");
 const mailboxes = require("./mailboxes");
 const messages = require("./messages");
+const mime = require("./mime");
 const pop3 = require("./pop3");
 const { createPop3Watcher } = require("./pop3-watcher");
 const providers = require("./providers");
@@ -178,6 +179,80 @@ function createRuntime(deps) {
     const envelope = store.findEnvelope(state, String(key ?? ""));
     if (!envelope) throw coded("MESSAGE_NOT_FOUND", "this message is not in the list");
     return envelope;
+  }
+
+  /**
+   * An envelope the store does not hold, named by the UID a server search returned.
+   *
+   * The panel only ever opens mail its own list holds, but a tool call can ask
+   * about a message the poll window never covered — an invoice from the first of
+   * the month is older than the last 200 envelopes. A `UID` is the server's own
+   * name for that message inside one `UIDVALIDITY`, and the era carried here is
+   * the one the last poll saw, which is exactly what `requireCurrentEra` compares
+   * against: a mailbox that renumbered its messages answers `MESSAGE_STALE`
+   * instead of handing back whichever message holds that number now.
+   *
+   * The sender, subject and date are unknown until the message arrives;
+   * `fillEnvelopeFromHeaders` fills them from the bytes themselves.
+   */
+  function envelopeFromUid(state, uid, era = null) {
+    if (!Number.isInteger(uid) || uid < 1) return null;
+    return {
+      key: `uid:${uid}`,
+      uid,
+      // The era named by the key that produced this envelope, so a mailbox that
+      // renumbered its messages since the search is refused rather than read.
+      uidValidity: Number.isInteger(era) ? era : state.cursor?.uidValidity ?? null,
+      messageId: "",
+      from: { name: "", address: "" },
+      subject: "",
+      receivedAt: null,
+      flags: [],
+      important: false,
+      summary: "",
+      to: [],
+      cc: [],
+      hasAttachments: false,
+    };
+  }
+
+  /**
+   * Fill a synthesized envelope's facts from the message it names.
+   *
+   * Only the header block is read, and only for the five fields a caller needs to
+   * recognise the message: answering with an empty subject would make a read of
+   * old mail useless.
+   */
+  function fillEnvelopeFromHeaders(envelope, raw) {
+    const headers = mime.parseHeaders(body.splitEntity(raw).header);
+    envelope.subject = mime.headerValue(headers, "subject");
+    envelope.from = compose.parseAddressHeader(mime.headerValue(headers, "from"))[0] ?? {
+      name: "",
+      address: "",
+    };
+    const receivedAt = Date.parse(mime.headerValue(headers, "date"));
+    envelope.receivedAt = Number.isFinite(receivedAt) ? receivedAt : null;
+    envelope.messageId = mime.headerValue(headers, "message-id").trim();
+    return envelope;
+  }
+
+  /**
+   * A message named by a key, by a UID, or by the key a server search reported.
+   *
+   * A row that came from the server is not in the stored list, so its key cannot
+   * be a store key: it is `uid:<uidValidity>:<uid>`, which this resolves back to
+   * the same message — the era travels with it, so a renumbered mailbox answers
+   * `MESSAGE_STALE` instead of handing back whichever message holds that number
+   * now. A key that is neither stored nor in that form, with no UID beside it, is
+   * not a message this plugin can name.
+   */
+  function envelopeFor(state, input) {
+    const key = String(input?.key ?? "");
+    const stored = store.findEnvelope(state, key);
+    if (stored) return stored;
+    const serverKey = /^uid:(\d+):(\d+)$/.exec(key);
+    if (serverKey) return envelopeFromUid(state, Number(serverKey[2]), Number(serverKey[1]));
+    return envelopeFromUid(state, Number(input?.uid));
   }
 
   /**
@@ -831,6 +906,79 @@ function createRuntime(deps) {
     }
   }
 
+  /**
+   * Deliver one message the user asked for: the panel's Send, or a tool call the
+   * host approved.
+   *
+   * Everything that decides what leaves is here rather than at either caller, so a
+   * reply written by the agent and a reply written in the panel go out the same
+   * way — same sender lock, same endpoint rule, same Sent copy.
+   */
+  async function sendMessage(input) {
+    const record = requireAccount(input?.accountId);
+    const blocked = sendBlockedReasonOf(record);
+    if (blocked) throw coded(blocked, "this mailbox cannot send mail as it is configured");
+    if (!compose.isAddress(record.email)) {
+      throw coded("BAD_SENDER", "this mailbox has no usable address to send from");
+    }
+    const files = [];
+    for (const file of Array.isArray(input?.attachments) ? input.attachments : []) {
+      const data = Buffer.from(String(file?.data ?? ""), "base64");
+      if (!data.length) continue;
+      files.push({ name: String(file?.name ?? ""), type: String(file?.type ?? ""), data });
+    }
+    let forwarded = null;
+    if (input?.forwardOf?.accountId && input?.forwardOf?.key) {
+      const source = requireAccount(input.forwardOf.accountId);
+      const sourceState = accountStateOf(source.instanceId);
+      const envelope = requireEnvelope(sourceState, input.forwardOf.key);
+      const wanted = Array.isArray(input.forwardOf.attachments) ? input.forwardOf.attachments : [];
+      for (const wantedFile of wanted) {
+        // Each ticked attachment is fetched by its own section number, so what
+        // goes out is the file the user chose and nothing beside it.
+        const file = await attachmentBytes(source, envelope, {
+          part: wantedFile?.part,
+          filename: wantedFile?.filename,
+        });
+        files.push({ name: file.filename, type: file.type, data: file.data });
+      }
+      forwarded = { accountId: source.instanceId, key: envelope.key, attachments: wanted.length };
+    }
+    const built = compose.buildMessage({
+      // The display name is the account's label only when it says something the
+      // address does not; the address itself is always the account's own.
+      from: { name: record.label && record.label !== record.email ? record.label : "", address: record.email },
+      to: input?.to ?? [],
+      cc: input?.cc ?? [],
+      bcc: input?.bcc ?? [],
+      subject: input?.subject ?? "",
+      text: input?.text ?? "",
+      attachments: files,
+      inReplyTo: input?.inReplyTo ?? "",
+      references: input?.references ?? [],
+    });
+    const request = {
+      credential: { slot: SLOT_ID, instanceId: record.instanceId },
+      envelope: built.envelope,
+      mime: new Uint8Array(built.mime),
+      timeoutMs: SEND_TIMEOUT_MS,
+    };
+    if (record.sendTarget?.endpoint) request.endpoint = record.sendTarget.endpoint;
+    const result = await host.mail.send(request);
+    const filed = await fileSentCopy(record, built.mime);
+    return {
+      accountId: record.instanceId,
+      accepted: Array.isArray(result?.accepted) ? result.accepted : [],
+      rejected: Array.isArray(result?.rejected) ? result.rejected : [],
+      messageId: built.messageId,
+      serverMessageId: result?.messageId ?? null,
+      size: built.size,
+      attachments: files.length,
+      forwarded,
+      filed,
+    };
+  }
+
   return {
     get accounts() {
       return [...accounts.values()];
@@ -903,18 +1051,29 @@ function createRuntime(deps) {
      * Nothing here is persisted: the parsed body is returned to the caller and
      * dropped with the response, so "open a message" cannot leave a mailbox's
      * text on disk.
+     *
+     * `options.markRead` is the difference between the panel and the agent tools.
+     * Opening a message in the panel is the user reading it, so it is marked read
+     * once its body has arrived; a tool call is a read the user asked an agent to
+     * perform, and it must not change `\Seen` in the mailbox. Everything else —
+     * the 1 MiB cap, the parsed text, the cached headers — is the same path.
      */
-    async openMessage(input) {
+    async openMessage(input, options = {}) {
+      const markRead = options.markRead !== false;
       const record = accounts.get(String(input?.accountId ?? ""));
       if (!record) throw coded("ACCOUNT_NOT_FOUND", "this mailbox is not in the list");
       const state = accountStateOf(record.instanceId);
-      const envelope = store.findEnvelope(state, String(input?.key ?? ""));
+      const envelope = envelopeFor(state, input);
       if (!envelope) throw coded("MESSAGE_NOT_FOUND", "this message is not in the list");
       if (!record.watcher) throw coded("ACCOUNT_OFFLINE", "this mailbox is not connected yet");
+      // A UID the store does not hold names a message the poll window never
+      // covered; its own headers are the only place its subject and sender are.
+      const stored = store.findEnvelope(state, envelope.key) !== null;
       // Two ways to read one message body, one per protocol, and one rule for
-      // both: a body that was fetched is a message the user just read, so it is
-      // marked read only after the body actually arrived. IMAP sends one
-      // `UID STORE +FLAGS (\\Seen)`; POP3 has no such flag, so the mark is local.
+      // both: a body the panel fetched is a message the user just read, so it is
+      // marked read only after the body actually arrived — and not at all when an
+      // agent tool asked for it. IMAP sends one `UID STORE +FLAGS (\\Seen)`;
+      // POP3 has no such flag, so the mark is local.
       let fetched;
       let readError = null;
       if (record.protocol === "pop3") {
@@ -922,8 +1081,10 @@ function createRuntime(deps) {
           maxBytes: BODY_LIMIT,
           timeoutMs: BODY_TIMEOUT_MS,
         });
-        store.markReadLocally(state, envelope.key);
-        await deps.persist();
+        if (markRead) {
+          store.markReadLocally(state, envelope.key);
+          await deps.persist();
+        }
       } else {
         // The panel's own envelope carries the flags the poll saw: a body fetch
         // does not report flags on every server, and a message the user already
@@ -935,7 +1096,9 @@ function createRuntime(deps) {
             maxBytes: BODY_LIMIT,
             timeoutMs: BODY_TIMEOUT_MS,
           });
-          if (!alreadySeen) {
+          // `markRead` is false for an agent tool: one `\Seen` STORE is a mail
+          // state change, and a read performed for the model must not make one.
+          if (!alreadySeen && markRead) {
             try {
               const stored = await session.storeFlags(message.uid, { add: ["\\Seen"], remove: [] });
               message.flags = Array.isArray(stored?.flags) && stored.flags.length
@@ -948,11 +1111,12 @@ function createRuntime(deps) {
           }
           return message;
         });
-        if (Array.isArray(fetched.flags) && fetched.flags.length) {
+        if (markRead && Array.isArray(fetched.flags) && fetched.flags.length) {
           store.setFlags(state, envelope.key, fetched.flags);
           await deps.persist();
         }
       }
+      if (!stored) fillEnvelopeFromHeaders(envelope, fetched.body);
       const parsed = body.parseMessage(fetched.body);
       // Kept for a reply or a forward: the same bytes just carried the headers
       // that decide threading, so asking the server again would be one round trip
@@ -1229,7 +1393,59 @@ function createRuntime(deps) {
     },
 
     /**
-     * Send one message, because the user pressed send.
+     * Answer one message, for the agent tool the user approved.
+     *
+     * A reply has to thread (`In-Reply-To`, `References`) and quote, and both
+     * come from the original's own headers and text. That is the same capped
+     * fetch opening a message does, except this one leaves `\Seen` alone: an
+     * agent reading mail is not the user reading it.
+     */
+    async sendReply(input) {
+      const record = requireAccount(input?.accountId);
+      const state = accountStateOf(record.instanceId);
+      const envelope = envelopeFor(state, input);
+      if (!envelope) throw coded("MESSAGE_NOT_FOUND", "this message is not in the list");
+      const text = String(input?.text ?? "").trim();
+      if (!text) throw coded("INVALID_ARGUMENT", "a reply needs a text body");
+      if (!record.watcher) throw coded("ACCOUNT_OFFLINE", "this mailbox is not connected yet");
+      const fetched = record.protocol === "pop3"
+        ? await record.watcher.fetchBody(envelope.key, { maxBytes: BODY_LIMIT, timeoutMs: BODY_TIMEOUT_MS })
+        : await record.watcher.withSession((session, box) => {
+            requireCurrentEra(envelope, box);
+            return session.fetchMessage(envelope.uid, { maxBytes: BODY_LIMIT, timeoutMs: BODY_TIMEOUT_MS });
+          });
+      if (!store.findEnvelope(state, envelope.key)) fillEnvelopeFromHeaders(envelope, fetched.body);
+      const parsed = body.parseMessage(fetched.body);
+      const headers = parsed.headers ?? {};
+      const messageId = String(headers["message-id"] || envelope.messageId || "").trim();
+      const locale = deps.locale();
+      const targets = replyRecipients(record, envelope, headers, { all: input?.replyAll === true });
+      if (!targets.to.length) throw coded("NO_RECIPIENTS", "this message has no sender to answer");
+      return sendMessage({
+        accountId: record.instanceId,
+        to: targets.to,
+        cc: targets.cc,
+        subject: compose.replySubject(envelope.subject ?? ""),
+        // The agent's own words, then the quoted original the panel would have
+        // put there — the same attribution line, in the user's language.
+        text: `${text}${compose.replyBody({
+          text: parsed.text ?? "",
+          html: parsed.html ?? "",
+          from: envelope.from ?? {},
+          date: formatMessageDate(envelope.receivedAt, locale),
+          locale,
+        })}`,
+        inReplyTo: messageId,
+        references: compose.referencesFor({
+          references: String(headers["references"] || "").trim(),
+          inReplyTo: messageId,
+        }),
+        attachments: [],
+      });
+    },
+
+    /**
+     * Send one message, because the user pressed send or approved a tool call.
      *
      * The message is built here (`lib/compose.js`) and delivered by the host
      * (`pi.mail.send`): the plugin never sees the password, the connection or the
@@ -1240,69 +1456,8 @@ function createRuntime(deps) {
      * A send that succeeded files one copy in the account's Sent mailbox; a send
      * the host refused throws its own code, and the panel keeps the draft.
      */
-    async send(input) {
-      const record = requireAccount(input?.accountId);
-      const blocked = sendBlockedReasonOf(record);
-      if (blocked) throw coded(blocked, "this mailbox cannot send mail as it is configured");
-      if (!compose.isAddress(record.email)) {
-        throw coded("BAD_SENDER", "this mailbox has no usable address to send from");
-      }
-      const files = [];
-      for (const file of Array.isArray(input?.attachments) ? input.attachments : []) {
-        const data = Buffer.from(String(file?.data ?? ""), "base64");
-        if (!data.length) continue;
-        files.push({ name: String(file?.name ?? ""), type: String(file?.type ?? ""), data });
-      }
-      let forwarded = null;
-      if (input?.forwardOf?.accountId && input?.forwardOf?.key) {
-        const source = requireAccount(input.forwardOf.accountId);
-        const sourceState = accountStateOf(source.instanceId);
-        const envelope = requireEnvelope(sourceState, input.forwardOf.key);
-        const wanted = Array.isArray(input.forwardOf.attachments) ? input.forwardOf.attachments : [];
-        for (const wantedFile of wanted) {
-          // Each ticked attachment is fetched by its own section number, so what
-          // goes out is the file the user chose and nothing beside it.
-          const file = await attachmentBytes(source, envelope, {
-            part: wantedFile?.part,
-            filename: wantedFile?.filename,
-          });
-          files.push({ name: file.filename, type: file.type, data: file.data });
-        }
-        forwarded = { accountId: source.instanceId, key: envelope.key, attachments: wanted.length };
-      }
-      const built = compose.buildMessage({
-        // The display name is the account's label only when it says something the
-        // address does not; the address itself is always the account's own.
-        from: { name: record.label && record.label !== record.email ? record.label : "", address: record.email },
-        to: input?.to ?? [],
-        cc: input?.cc ?? [],
-        bcc: input?.bcc ?? [],
-        subject: input?.subject ?? "",
-        text: input?.text ?? "",
-        attachments: files,
-        inReplyTo: input?.inReplyTo ?? "",
-        references: input?.references ?? [],
-      });
-      const request = {
-        credential: { slot: SLOT_ID, instanceId: record.instanceId },
-        envelope: built.envelope,
-        mime: new Uint8Array(built.mime),
-        timeoutMs: SEND_TIMEOUT_MS,
-      };
-      if (record.sendTarget?.endpoint) request.endpoint = record.sendTarget.endpoint;
-      const result = await host.mail.send(request);
-      const filed = await fileSentCopy(record, built.mime);
-      return {
-        accountId: record.instanceId,
-        accepted: Array.isArray(result?.accepted) ? result.accepted : [],
-        rejected: Array.isArray(result?.rejected) ? result.rejected : [],
-        messageId: built.messageId,
-        serverMessageId: result?.messageId ?? null,
-        size: built.size,
-        attachments: files.length,
-        forwarded,
-        filed,
-      };
+    send(input) {
+      return sendMessage(input);
     },
 
     /**

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { test } from "node:test";
 
@@ -11,7 +12,8 @@ import { createFakeServer, message } from "./helpers/fake-imap.mjs";
  */
 
 const require = createRequire(import.meta.url);
-const { createSession } = require("../lib/session.js");
+const { createSession, imapDate } = require("../lib/session.js");
+const agentTools = require("../lib/agent-tools.js");
 
 function connect(server, options = {}) {
   return createSession(server.accept(), { timeoutMs: options.timeoutMs ?? 50, log: () => {} });
@@ -159,4 +161,101 @@ test("a structure fetch and a one-part fetch ask for exactly one message's part"
     false,
   );
   await session.close();
+});
+
+test("a Chinese keyword is a literal that ends its line, continued after the bytes", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  server.add(message({ uid: 1, subject: "发票 2026-04", date: "02-Apr-2026 09:00:00 +0800" }));
+  server.add(message({ uid: 2, subject: "Invoice 2026-04", date: "02-Apr-2026 09:00:00 +0800" }));
+  const session = connect(server, { timeoutMs: 400 });
+  const uids = await session.searchBy({ subject: "发票", since: new Date(2026, 3, 1) });
+  assert.deepEqual(uids, [1]);
+  // The exact bytes: the marker closes its line, the literal follows the server's
+  // continuation, and the rest of the command continues on the next line. A single
+  // line with `SUBJECT {6} SINCE …` is `BAD` on a real server.
+  const wire = server.sent.join("");
+  const literal = Buffer.from("发票", "utf8").toString("latin1");
+  const expected = `UID SEARCH CHARSET UTF-8 SUBJECT {6}\r\n${literal} SINCE 1-Apr-2026\r\n`;
+  assert.ok(wire.includes(expected), `the wire was ${JSON.stringify(wire)}`);
+  assert.deepEqual(server.searchLiterals, ["发票"]);
+  await session.close();
+});
+
+test("an ASCII keyword stays a quoted string and asks for no charset", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  server.add(message({ uid: 1, subject: "发票 2026-04" }));
+  server.add(message({ uid: 2, subject: "Invoice 2026-04" }));
+  const session = connect(server, { timeoutMs: 400 });
+  const uids = await session.searchBy({ subject: "Invoice" });
+  assert.deepEqual(uids, [2]);
+  const wire = server.sent.join("");
+  assert.match(wire, /UID SEARCH SUBJECT "Invoice"/);
+  assert.doesNotMatch(wire, /CHARSET/);
+  await session.close();
+});
+
+test("a sender and a subject that are both non-ASCII get one literal each, on its own line", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  server.add(message({ uid: 1, subject: "发票", from: { name: "财务", address: "finance@example.com" } }));
+  server.add(message({ uid: 2, subject: "快递", from: { name: "财务", address: "finance@example.com" } }));
+  const session = connect(server, { timeoutMs: 400 });
+  const uids = await session.searchBy({ from: "财务", subject: "发票" });
+  assert.deepEqual(uids, [1], "both criteria narrow the same search");
+  assert.deepEqual(server.searchLiterals, ["财务", "发票"]);
+  const wire = server.sent.join("");
+  const caiwu = Buffer.from("财务", "utf8").toString("latin1");
+  const fapiao = Buffer.from("发票", "utf8").toString("latin1");
+  const expected = `UID SEARCH CHARSET UTF-8 FROM {6}\r\n${caiwu} SUBJECT {6}\r\n${fapiao}\r\n`;
+  assert.ok(wire.includes(expected), `the wire was ${JSON.stringify(wire)}`);
+  await session.close();
+});
+
+test("a literal marker in the middle of a line is BAD, as a real server answers", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  server.accept();
+  const replies = [];
+  server.transport.onData((chunk) => replies.push(Buffer.from(chunk).toString("utf8")));
+  // The shape the plugin used to send: one line, marker in the middle.
+  await server.transport.send("A1 UID SEARCH SUBJECT {6} SINCE 1-Apr-2026\r\n");
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.match(replies.join(""), /^A1 BAD a literal must be the last thing on its line/);
+});
+
+test("a server that refuses the charset says BADCHARSET rather than failing generically", async () => {
+  const server = createFakeServer({ uidNext: 1, refuseCharset: true });
+  const session = connect(server, { timeoutMs: 400 });
+  await assert.rejects(
+    () => session.searchBy({ subject: "发票" }),
+    (error) => error.code === "IMAP_NO" && /BADCHARSET/.test(error.message),
+  );
+  await session.close();
+});
+
+test("a bare date is the local calendar day, for the filter and for IMAP", () => {
+  // A fixed zone, because the bug only exists in one: a UTC+8 user asking for
+  // "since 2026-04-01" must get mail from 2026-04-01 00:30 local time, and the
+  // server must be asked for that same day.
+  const script = `
+    const assert = require("node:assert/strict");
+    const tools = require(${JSON.stringify(require.resolve("../lib/agent-tools.js"))});
+    const { imapDate } = require(${JSON.stringify(require.resolve("../lib/session.js"))});
+    const since = tools.parseDate("2026-04-01", "since");
+    assert.equal(since.getHours(), 0, "local midnight");
+    assert.equal(since.toISOString(), "2026-03-31T16:00:00.000Z");
+    assert.equal(imapDate(since), "1-Apr-2026");
+    const row = (iso) => ({ subject: "发票", from: { name: "", address: "a@b.example" }, receivedAt: Date.parse(iso) });
+    const criteria = tools.criteriaOf({ since: "2026-04-01" });
+    assert.equal(tools.matchesCriteria(row("2026-03-31T16:30:00Z"), criteria), true, "00:30 on the day asked for");
+    assert.equal(tools.matchesCriteria(row("2026-03-31T15:30:00Z"), criteria), false, "23:30 the day before");
+    assert.equal(tools.parseDate("2026-04-01", "since").getDate(), 1);
+    process.stdout.write("local-day-ok");
+  `;
+  const output = execFileSync(process.execPath, ["-e", script], {
+    env: { ...process.env, TZ: "Asia/Shanghai" },
+    encoding: "utf8",
+  });
+  assert.equal(output.trim(), "local-day-ok");
+  // And the same calendar day is what the ASCII `SINCE` line says.
+  assert.equal(imapDate(new Date(2026, 3, 1)), "1-Apr-2026");
+  assert.equal(agentTools.parseDate("2026-04-01", "since").getHours(), 0);
 });

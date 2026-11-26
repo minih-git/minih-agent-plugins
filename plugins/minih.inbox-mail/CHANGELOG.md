@@ -1,5 +1,74 @@
 # Changelog
 
+## 0.6.0
+
+- **The plugin is now called Mail Assistant** (`邮件助手`), in the marketplace, in
+  Settings → Plugins and wherever a message points at it. The id stays
+  `minih.inbox-mail`: an installed mailbox's credentials, cursor and stored mail hang
+  off that id, so renaming it would have been a new plugin with no accounts.
+- **The agent can read your mail, on your request.** Four tools are registered with
+  `pi.agent.registerTool` and declared in the manifest (`agent.tool.register`):
+  `mail_list_messages` and `mail_read_message` are `low` risk, `mail_reply_message`
+  and `mail_send_message` are `high` risk. So a conversation — or a scheduled task
+  you set up yourself, such as "every morning, summarize yesterday's invoices" — can
+  work through the mailbox instead of you copying mail into the chat.
+- **Search reaches past the cache.** A call with a date range, or one whose local
+  matches are fewer than the page it asked for, sends one bounded IMAP `UID SEARCH`
+  (`FROM`, `SUBJECT`, `SINCE`, `BEFORE`, `UNSEEN`, `FLAGGED`) and fetches at most the
+  newest 50 envelopes; the local store still answers first for the newest 200 per
+  account. A POP3 mailbox has no server-side search, and the answer says so instead
+  of implying the cache is the mailbox.
+- **A read changes nothing.** Reading through a tool never sends `STORE \Seen`,
+  never writes the plugin's data file, and never keeps a body after the answer: the
+  same 1 MiB `BODY.PEEK` fetch the panel uses, with at most 20,000 characters
+  returned. Opening a message in the panel still marks that one message read.
+- **The two sends still ask.** A reply or a new message from a tool is `high` risk,
+  so the host shows its card before every call; the message leaves through the same
+  sender lock, endpoint rule and Sent-copy step the panel uses, and a reply threads
+  with `In-Reply-To`/`References` and quotes the original.
+- **The old promise is corrected.** 0.5.1's description and notes said no model was
+  ever called and nothing you received was sent to an AI provider. The plugin still
+  calls no model and still sends nothing on a timer, on arrival or from a rule — but
+  what a tool returns becomes part of that conversation, so it reaches the model
+  provider the session uses. The manifest, both safety notes and the README now say
+  that in as many words, including why the reads are `low` risk and what that means
+  for a scheduled run.
+- **Mail is marked as data.** Every answer that carries mail opens with
+  `untrusted: true` and a sentence saying the text is data and not instructions, and
+  the tool descriptions repeat it, so a message cannot talk the agent into acting on
+  what it says.
+- **A Chinese keyword is a real search.** An IMAP quoted string is 7-bit, so
+  `SUBJECT "发票"` used to be a command servers answered `BAD` or `NO [BADCHARSET]`,
+  which left the tool on the local cache — exactly the case the search exists for. A
+  non-ASCII sender or subject now travels as a literal under `CHARSET UTF-8`, with
+  its byte length, and the command is split where the grammar forces it: the marker
+  ends its line, the bytes follow the server's continuation, and the remaining
+  criteria continue on the next line — `UID SEARCH CHARSET UTF-8 SUBJECT {6}\r\n`
+  then `发票 SINCE 1-Apr-2026\r\n`. A server that still refuses leaves the stored
+  answer in place and the answer names `BADCHARSET` instead of `FAILED`.
+- **A row from the server is readable by its own key.** Such a row carries
+  `uid:<uidValidity>:<uid>`, so `mail_read_message` and `mail_reply_message` resolve
+  it from the key the list reported, era check included, without needing the uid
+  passed alongside. One message that both the cache and the server answered is listed
+  once, not twice.
+- **A day is the user's day.** `since`/`before` used to be read as UTC midnight, so a
+  UTC+8 user lost the first eight hours of the day in the local filter while the
+  server was asked for a different day. They now mean local midnight, and IMAP gets
+  that same calendar day.
+- **Docs say what a scheduled run can do.** The README and the notes state that an
+  unattended run can only read and summarize — a reply or a send waits for the
+  approval card — and that the reads do not prompt in an interactive session either.
+- Tests: 295 → 324. `tests/agent-tools.test.mjs` covers the criteria, the date form,
+  the paging bounds, the untrusted wrapper and the account resolution;
+  `tests/plugin.test.mjs` registers the tools through the real `onLoad()`, runs a
+  local search, a server search (asserting the `SEARCH` line and that no `STORE` and
+  no `\Seen` came of it), a read that leaves the message unread, and a reply that
+  goes out threaded. `tests/session.test.mjs` proves the wire form of a Chinese
+  keyword (the exact `CHARSET UTF-8` bytes, one line per literal, a mid-line marker
+  answered `BAD`, and a `BADCHARSET` refusal) and the local-day reading under a
+  fixed `Asia/Shanghai`. The fake IMAP server now enforces the grammar the way a
+  real one does instead of accepting a marker anywhere on the line.
+
 ## 0.5.1
 
 - **A link in a message is a link.** Pressing one opens the address in your browser,

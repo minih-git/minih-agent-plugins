@@ -19,7 +19,7 @@ const TEXT = {
     // The provider is chosen in the account form, so this line says where the
     // other way in is instead of offering a picker the panel cannot honour.
     customServerHint:
-      "The mail service is chosen with the account. Not in the list — a company mailbox, for example? Open Settings → Plugins → Inbox mail, edit this account, pick “Custom server” and fill in the server, port and encryption (IMAP or POP3). Accounts are added, edited and removed there.",
+      "The mail service is chosen with the account. Not in the list — a company mailbox, for example? Open Settings → Plugins → Mail Assistant, edit this account, pick “Custom server” and fill in the server, port and encryption (IMAP or POP3). Accounts are added, edited and removed there.",
     // POP3 has no read flag on the server, and nothing here may invent one.
     pop3Note:
       "POP3 only delivers mail: read state is kept on this computer only, a star is not supported, and “Only report unread mail” does not apply to this account.",
@@ -180,7 +180,7 @@ const TEXT = {
       blocked: {
         "send-disabled": "This app version cannot send mail from a plugin.",
         "send-no-server":
-          "This mailbox sends through an outgoing server and none is filled in. Add one in Settings → Plugins → Inbox mail → this account.",
+          "This mailbox sends through an outgoing server and none is filled in. Add one in Settings → Plugins → Mail Assistant → this account.",
         "send-no-preset": "The provider of this mailbox has no submission server this plugin knows.",
       },
     },
@@ -239,7 +239,7 @@ const TEXT = {
       TOO_MANY_RECIPIENTS: "One message may name at most 50 recipients.",
       BAD_SENDER: "This mailbox has no usable address to send from.",
       MAIL_SEND_NOT_CONFIGURED:
-        "This mailbox has no outgoing server. Fill one in in Settings → Plugins → Inbox mail → this account.",
+        "This mailbox has no outgoing server. Fill one in in Settings → Plugins → Mail Assistant → this account.",
       MAIL_FROM_MISMATCH: "The app refused the message: its sender is not the address of this account.",
       MAIL_BCC_HEADER: "The app refused the message: a blind copy must not be a header.",
       MAIL_TOO_LARGE: "The message is larger than the 25 MiB the app accepts.",
@@ -259,7 +259,7 @@ const TEXT = {
       SAVE_AS_FAILED: "That file could not be written there. Pick another place.",
       POP3_NO_FLAGS: "POP3 does not report read or starred state, so this cannot be changed.",
       CUSTOM_SERVER_ACCOUNT:
-        "This mailbox names its own server. Edit it in Settings → Plugins → Inbox mail to use a provider instead.",
+        "This mailbox names its own server. Edit it in Settings → Plugins → Mail Assistant to use a provider instead.",
       POP3_ERR: "The POP3 server refused the request.",
       POP3_TIMEOUT: "The POP3 server did not answer in time.",
       POP3_CLOSED: "The connection to the POP3 server closed. It reconnects on its own.",
@@ -282,7 +282,7 @@ const TEXT = {
     add: "添加邮箱",
     accountsHint: (count) => `${count} 个账号`,
     customServerHint:
-      "服务商是跟账号一起配置的。不在列表里（比如公司邮箱）？请打开 设置 → 插件 → 邮箱收件，编辑这个账号，选「自定义服务器」，再填上服务器、端口和加密方式（IMAP 或 POP3）。账号的添加、修改和删除都在那里。",
+      "服务商是跟账号一起配置的。不在列表里（比如公司邮箱）？请打开 设置 → 插件 → 邮件助手，编辑这个账号，选「自定义服务器」，再填上服务器、端口和加密方式（IMAP 或 POP3）。账号的添加、修改和删除都在那里。",
     pop3Note: "POP3 只负责收信：已读状态只保存在这台电脑上，不支持星标，「只提醒未读」对它也不适用。",
     status: {
       connecting: "连接中…",
@@ -428,7 +428,7 @@ const TEXT = {
       accountBlocked: "无法发信",
       blocked: {
         "send-disabled": "当前应用版本不允许插件发信。",
-        "send-no-server": "这个邮箱要通过自填的发信服务器发送，但还没填。请在 设置 → 插件 → 邮箱收件 → 这个账号 里补上。",
+        "send-no-server": "这个邮箱要通过自填的发信服务器发送，但还没填。请在 设置 → 插件 → 邮件助手 → 这个账号 里补上。",
         "send-no-preset": "这个邮箱的服务商没有本插件已知的发信服务器。",
       },
     },
@@ -482,7 +482,7 @@ const TEXT = {
       TOO_MANY_RECIPIENTS: "一封邮件最多 50 个收件人。",
       BAD_SENDER: "这个邮箱没有可用的发件地址。",
       MAIL_SEND_NOT_CONFIGURED:
-        "这个邮箱还没有发信服务器。请在 设置 → 插件 → 邮箱收件 → 这个账号 里补上。",
+        "这个邮箱还没有发信服务器。请在 设置 → 插件 → 邮件助手 → 这个账号 里补上。",
       MAIL_FROM_MISMATCH: "应用拒绝了这封邮件：发件人不是这个账号的地址。",
       MAIL_BCC_HEADER: "应用拒绝了这封邮件：密送不能写成邮件头。",
       MAIL_TOO_LARGE: "这封邮件超过了应用允许的 25 MiB。",
@@ -500,7 +500,7 @@ const TEXT = {
       ATTACHMENT_MISMATCH: "那个部分号对应的不是这个附件，所以什么都没有保存。",
       SAVE_AS_FAILED: "那个位置写不进去，请换一个位置。",
       POP3_NO_FLAGS: "POP3 不提供已读和星标状态，无法做这个修改。",
-      CUSTOM_SERVER_ACCOUNT: "这个邮箱用的是自己填写的服务器。想改用服务商，请在 设置 → 插件 → 邮箱收件 里编辑这个账号。",
+      CUSTOM_SERVER_ACCOUNT: "这个邮箱用的是自己填写的服务器。想改用服务商，请在 设置 → 插件 → 邮件助手 里编辑这个账号。",
       POP3_ERR: "POP3 服务器拒绝了这个请求。",
       POP3_TIMEOUT: "POP3 服务器没有及时响应。",
       POP3_CLOSED: "与 POP3 服务器的连接断开了，插件会自动重连。",

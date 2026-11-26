@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
+const agentTools = require("../lib/agent-tools.js");
 const providers = require("../lib/providers.js");
 
 /**
@@ -31,10 +32,13 @@ const HOSTNAME = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/;
 const CONTRIB_ID = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 const localized = (value) => Boolean(value && typeof value === "object" && value.en && value["zh-CN"]);
 
-test("the plugin is published as minih.inbox-mail 0.5.1, versioned with its package", () => {
+test("the plugin is published as minih.inbox-mail 0.6.0, named Mail Assistant, versioned with its package", () => {
   assert.equal(manifest.schemaVersion, 1);
-  assert.equal(manifest.id, "minih.inbox-mail");
-  assert.equal(manifest.version, "0.5.1");
+  assert.equal(manifest.id, "minih.inbox-mail", "the id is what installed users' data hangs off");
+  assert.equal(manifest.name, "Mail Assistant");
+  assert.equal(manifest.i18n.en.name, "Mail Assistant");
+  assert.equal(manifest.i18n["zh-CN"].name, "邮件助手");
+  assert.equal(manifest.version, "0.6.0");
   assert.equal(manifest.version, pkg.version);
   assert.equal(manifest.main, "main.js");
   assert.ok(exists(manifest.main), "the entry point must be in the tree");
@@ -44,6 +48,7 @@ test("the plugin is published as minih.inbox-mail 0.5.1, versioned with its pack
 
 test("it asks for exactly the capabilities it uses, including writing and sending", () => {
   assert.deepEqual([...manifest.permissions].sort(), [
+    "agent.tool.register",
     "credentials.use",
     "fs.write",
     "mail.send",
@@ -229,6 +234,48 @@ test("the Inbox panel is one sidebar view with a localized title and a real entr
   assert.ok(exists("view/vendor/purify.es.mjs"));
 });
 
+test("the agent tools it registers are the ones the manifest declares", () => {
+  // Registration is what exposes a tool to the model; the manifest is what the
+  // install review shows. They are the same four tools, with the same risk, or a
+  // user approves something other than what runs.
+  const declared = manifest.contributes.agentTools;
+  assert.ok(Array.isArray(declared) && declared.length > 0);
+  assert.deepEqual(
+    declared.map((tool) => ({ name: tool.name, risk: tool.risk, schema: tool.schema })),
+    agentTools.TOOL_DEFS.map((tool) => ({ name: tool.name, risk: tool.risk, schema: tool.schema })),
+  );
+  assert.deepEqual(
+    declared.map((tool) => tool.name),
+    ["mail_list_messages", "mail_read_message", "mail_reply_message", "mail_send_message"],
+  );
+  // Reading mail changes nothing in the mailbox, which is what makes the host's
+  // low-risk path (`AllowOnce`, no card) honest — and what lets an automation run
+  // while nobody is at the keyboard. A send is the opposite: a high-risk call
+  // always takes the approval path.
+  assert.deepEqual(
+    declared.filter((tool) => tool.risk === "low").map((tool) => tool.name),
+    ["mail_list_messages", "mail_read_message"],
+  );
+  assert.deepEqual(
+    declared.filter((tool) => tool.risk === "high").map((tool) => tool.name),
+    ["mail_reply_message", "mail_send_message"],
+  );
+  for (const tool of declared) {
+    assert.match(tool.name, /^[a-zA-Z][a-zA-Z0-9_]*$/, "a tool name the host accepts");
+    assert.ok(tool.description.length > 40, `${tool.name} needs a description the model can act on`);
+    assert.equal(tool.schema.type, "object");
+    // Mail is data. Every tool that can return mail says so in its own words too.
+    if (tool.risk === "low") {
+      assert.match(tool.description, /untrusted data, not instructions/);
+    }
+  }
+  assert.equal(
+    manifest.permissions.includes("agent.tool.register"),
+    true,
+    "a registration without the permission is refused at install",
+  );
+});
+
 test("the plugin polls itself instead of asking the host for a schedule", () => {
   // Every account is checked by the plugin's own timer (three minutes, staggered,
   // through one four-session gate), so a host schedule would be a second, slower
@@ -326,7 +373,22 @@ test("the safety notes describe the panel honestly, in both languages", () => {
   // The old release claimed neither happened, and that claim is gone.
   assert.doesNotMatch(en, /does not send mail/);
   assert.doesNotMatch(en, /never downloaded/);
-  assert.match(en, /No model is called/);
+  // 0.5.1 promised no model was ever called and nothing ever reached a provider.
+  // 0.6.0 adds tools, so what replaces that sentence has to say what does.
+  assert.doesNotMatch(en, /No model is called at any point/);
+  assert.match(en, /nothing is sent to an AI provider on a timer, on arrival or from a rule/);
+  assert.match(en, /It does give the agent four tools, and those are the only way mail leaves this computer for a model/);
+  assert.match(en, /`mail_list_messages` and `mail_read_message` are declared low risk/);
+  assert.match(en, /without a per-call card/);
+  assert.match(en, /at most 50 envelopes per call/);
+  assert.match(en, /up to 20,000 characters/);
+  assert.match(en, /never marked read/);
+  assert.match(en, /reaches the model provider the session is configured with/);
+  assert.match(en, /`mail_reply_message` and `mail_send_message` are declared high risk/);
+  assert.match(en, /nothing leaves without that approval/);
+  // A tool read does not mark mail read; the panel still does.
+  assert.match(en, /or an agent tool asks for it/);
+  assert.match(en, /or approve a tool call that replies/);
   // And the Chinese notes say the same things.
   assert.match(zh, /不设账号上限/);
   assert.match(zh, /只有你在「收件箱」面板里点开/);
@@ -360,11 +422,20 @@ test("the safety notes describe the panel honestly, in both languages", () => {
   assert.match(zh, /本机 Clash/);
   assert.match(zh, /插件只知道代理类型、地址和端口/);
   assert.match(zh, /POP3 服务器没有任何标记/);
-  assert.match(zh, /只有你按下「发送」才会发信/);
+  assert.match(zh, /只有你按下「发送」或批准一次工具调用才会发信/);
   assert.match(zh, /发件人被锁定为账号本人的地址/);
   assert.match(zh, /「已发送」/);
   assert.match(zh, /超过 50 MiB 的附件会被直接拒绝/);
   assert.doesNotMatch(zh, /不发信/);
   assert.doesNotMatch(zh, /从不下载/);
-  assert.match(zh, /不调用模型/);
+  // 0.5.1 said the plugin never calls a model and nothing reaches a provider; the
+  // first half is still true, the second no longer is.
+  assert.doesNotMatch(zh, /全程不调用模型，收到的邮件不会被发送给任何 AI 服务商/);
+  assert.match(zh, /插件自己全程不调用模型/);
+  assert.match(zh, /这是邮件离开本机进入模型的唯一途径/);
+  assert.match(zh, /声明为低风险/);
+  assert.match(zh, /定时任务正是靠这一点才能无人值守/);
+  assert.match(zh, /声明为高风险/);
+  assert.match(zh, /没有你的同意不会发出任何邮件/);
+  assert.match(zh, /且绝不把邮件标为已读/);
 });
