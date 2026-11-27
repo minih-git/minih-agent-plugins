@@ -155,6 +155,8 @@ test("an empty topic returns no sections and says how to get them", async () => 
   const text = renderKnowledgeContext(context);
   assert.doesNotMatch(text, /## Sections for/);
   assert.match(text, /Next: knowledge_read \{note, section\}/);
+  // Nothing was retrieved, so the mode line must not report a channel state.
+  assert.match(text, /Vector: not attempted/);
 });
 
 test("the pack stops at maxChars with truncated: true and drops sections whole", async () => {
@@ -238,4 +240,20 @@ test("estimatedTokens matches the rendered text and counts Chinese characters on
   assert.equal(context.estimatedTokens, estimateTokens(text));
   const chinese = (text.match(/[\u3000-\u9fff\uff00-\uffef]/g) ?? []).length;
   assert.ok(context.estimatedTokens >= chinese, `${context.estimatedTokens} >= ${chinese}`);
+});
+
+test("a section reports the lines and hash knowledge_read reports for it", async () => {
+  const note = projectNote(
+    "# Demo\n\n## A\n\n第一段 alpha。\n\n### A1\n\n嵌套段落。\n\n## B\n\nbeta 段落的正文，用来命中主题。\n",
+  );
+  const { service } = await serviceFor({ "01 Projects/Project - Demo.md": note }, { projects: DEMO_PROJECTS });
+  const context = await service.context({ cwd: "/workspace/demo/src", topic: "beta" });
+  const section = context.sections.find((item) => item.headingPath.join(" > ") === "Demo > B");
+  assert.ok(section, `expected the B section, got ${context.sections.map((item) => item.headingPath.join(" > ")).join(" | ")}`);
+
+  const read = await service.read({ note: "01 Projects/Project - Demo.md", section: "B" });
+  assert.equal(section.startLine, read.section.startLine + 1, "1-based line numbers, same section");
+  assert.equal(section.endLine, read.section.endLine);
+  assert.equal(section.sectionSha256, read.sectionSha256, "a later write can reuse the hash");
+  assert.equal(section.content, read.content, "the excerpt is the section, not a chunk of it");
 });

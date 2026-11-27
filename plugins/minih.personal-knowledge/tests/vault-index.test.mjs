@@ -244,7 +244,10 @@ test("section addressing reports not-found and ambiguous headings", async () => 
       operation: "replaceSection",
       expectedSha256: twins.sha256,
     }),
-    (error) => error.code === "SECTION_AMBIGUOUS" && /Same > Same/.test(error.message),
+    // Both headings are H1s, so neither has an ancestor to show: the
+    // candidates read `Same` twice, not `Same > Same` (which was the old
+    // ancestor trail treating the second H1 as a child of the first).
+    (error) => error.code === "SECTION_AMBIGUOUS" && /Candidates: Same; Same\./.test(error.message),
   );
 });
 

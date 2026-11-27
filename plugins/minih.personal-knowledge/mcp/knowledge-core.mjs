@@ -728,13 +728,15 @@ export class KnowledgeService {
     const lexicalHits = bm25.search(query, channelLimit).filter(([doc]) => inScope(doc.path));
     const lexicalByKey = new Map();
     for (const [doc, score] of lexicalHits) {
-      // Re-setting a key keeps its first position, so the insert order stays
-      // best-first and the fusion ranks by rank, not by score.
-      lexicalByKey.set(keyFor(doc.path, doc.chunkIndex), {
-        path: doc.path,
-        chunkIndex: doc.chunkIndex,
-        score,
-      });
+      const key = keyFor(doc.path, doc.chunkIndex);
+      const entry = lexicalByKey.get(key);
+      // At note granularity every chunk of a note shares one key, and
+      // `#searchRanked` reads the chunk behind it for `section` and `snippet`:
+      // keep the best-scoring chunk. Overwriting unconditionally left the last
+      // (weakest) chunk in place while the Map kept the key's first position.
+      if (!entry || score > entry.score) {
+        lexicalByKey.set(key, { path: doc.path, chunkIndex: doc.chunkIndex, score });
+      }
     }
 
     // Another process may have written the index since this one started (a
@@ -774,12 +776,13 @@ export class KnowledgeService {
         for (const { chunk, score } of hits) {
           const record = this.index.note(chunk.path);
           const chunkIndex = record ? record.chunks.findIndex((item) => item.sha === chunk.sha) : -1;
-          vectorByKey.set(keyFor(chunk.path, chunkIndex), {
-            path: chunk.path,
-            chunkIndex,
-            chunk,
-            score,
-          });
+          const key = keyFor(chunk.path, chunkIndex);
+          const entry = vectorByKey.get(key);
+          // Same reasoning as the lexical channel: one key per note at note
+          // granularity, and the best-scoring chunk is the one to describe.
+          if (!entry || score > entry.score) {
+            vectorByKey.set(key, { path: chunk.path, chunkIndex, chunk, score });
+          }
         }
         reason = this.pendingChunkCount > 0 ? "pending" : null;
       } catch (error) {
@@ -1241,7 +1244,9 @@ export class KnowledgeService {
     // L2: only a real topic turns the retrieval on. Graph expansion stays a
     // note-level behavior of `knowledge_search` (§3).
     const sections = [];
-    let retrieval = this.#vectorState();
+    // Nothing is retrieved without a topic and a routed note, so the mode line
+    // says so rather than reporting a channel state that was never probed.
+    let retrieval = { ...this.#vectorState(), attempted: false };
     if (topicText && routed.length > 0) {
       const scope = new Set(routed);
       const { fused, lexicalByKey, vectorByKey, retrieval: state } = await this.#retrieve({
@@ -1266,14 +1271,20 @@ export class KnowledgeService {
         const dedupe = `${hit.path}\u0000${chunk.headingPath.join(" > ")}`;
         if (seen.has(dedupe)) continue;
         seen.add(dedupe);
+        const span = this.#sectionSpanFor(record, chunk);
         const section = {
           path: record.path,
           title: record.title,
           headingPath: chunk.headingPath,
-          ...this.#sectionSpanFor(record, chunk),
+          startLine: span.startLine,
+          endLine: span.endLine,
+          sectionSha256: span.sectionSha256,
           score: Number(score.toFixed(4)),
           matchedBy: [lexicalByKey.has(key) ? "lexical" : null, vectorByKey.has(key) ? "vector" : null].filter(Boolean),
-          content: redactSensitiveContent(record.raw.slice(chunk.start, chunk.end)).slice(0, maxSectionChars),
+          // The excerpt, the line numbers, and the hash describe the same
+          // object: the whole section when its heading path resolves, and the
+          // matched chunk when it does not.
+          content: redactSensitiveContent(span.text).slice(0, maxSectionChars),
         };
         const block = renderContextSection(section);
         if (block.length + 2 > remaining) {
@@ -1304,10 +1315,12 @@ export class KnowledgeService {
   }
 
   /**
-   * Line numbers and section hash for one chunk, chosen so a later
-   * `knowledge_read {note, section}` or `knowledge_write {operation:
-   * "replaceSection"}` lands on the same span. When the heading path is not
-   * unique the chunk's own span and hash are what the caller gets.
+   * The span, hash, and text of the section one chunk belongs to, chosen so a
+   * later `knowledge_read {note, section}` or `knowledge_write {operation:
+   * "replaceSection"}` lands on the same lines with the same hash (ADR 0004
+   * §2). When the heading path does not resolve to one section — a preamble
+   * chunk, or a duplicated heading — the chunk's own span, hash, and text are
+   * what the caller gets.
    */
   #sectionSpanFor(record, chunk) {
     const headingPath = chunk.headingPath ?? [];
@@ -1316,13 +1329,19 @@ export class KnowledgeService {
       if (lookup.ok) {
         const lines = record.raw.split(/(?<=\n)/);
         const text = lines.slice(lookup.startLine, lookup.endLine).join("");
-        return { startLine: lookup.startLine + 1, endLine: lookup.endLine, sectionSha256: sha256(text) };
+        return {
+          startLine: lookup.startLine + 1,
+          endLine: lookup.endLine,
+          sectionSha256: sha256(text),
+          text,
+        };
       }
     }
     return {
       startLine: 1 + (record.raw.slice(0, chunk.start).match(/\n/g)?.length ?? 0),
       endLine: 1 + (record.raw.slice(0, Math.max(chunk.start, chunk.end - 1)).match(/\n/g)?.length ?? 0),
       sectionSha256: chunk.sha,
+      text: record.raw.slice(chunk.start, chunk.end),
     };
   }
 

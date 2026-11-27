@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   appendToSectionSpan,
+  chunkNote,
   cutAtSentence,
   firstIsoDate,
   firstParagraphAfterH1,
@@ -141,4 +142,16 @@ test("cutAtSentence prefers a sentence end and never exceeds the limit", () => {
   assert.equal(cutAtSentence("short.", 100), "short.");
   // A version number is not a sentence end.
   assert.ok(cutAtSentence(`v1.4.0 ${"y".repeat(200)}`, 60).endsWith("…"));
+});
+
+test("a chunk's heading path lists its real ancestors, not the previous sibling", () => {
+  // `## B` used to inherit the preceding `### A1`: the trail was only unwound
+  // for headings seen before the boundary, never for the boundary's own level.
+  // Every consumer of `headingPath` depends on it being the real ancestor
+  // chain — the L2 breadcrumb, and the section lookup that turns a chunk back
+  // into a `knowledge_read` section (ADR 0004 §2).
+  const body = "# Demo\n\n## A\n\n### A1\n\nalpha\n\n## B\n\nbeta\n";
+  const paths = chunkNote(body).map((chunk) => chunk.headingPath.join(" > "));
+  assert.deepEqual(paths, ["Demo", "Demo > A", "Demo > A > A1", "Demo > B"]);
+  assert.equal(locateSection(body, "Demo > B").ok, true);
 });

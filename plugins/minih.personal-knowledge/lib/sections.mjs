@@ -44,13 +44,23 @@ export function headingOutline(content) {
   return outline;
 }
 
-function headingPathAt(outline, line) {
+/**
+ * Ancestor headings of a line, outermost first.
+ *
+ * `level` is the level of the heading whose ancestors are wanted: entries at
+ * that level or higher are popped, because a heading is never its own ancestor
+ * and a sibling is not one either. Without it a `## B` that follows a `### A1`
+ * came back as `H1 > A > A1 > B`, which made the breadcrumb wrong and stopped
+ * `locateSection` from finding the section a chunk belongs to.
+ */
+function headingPathAt(outline, line, level = 0) {
   const trail = [];
   for (const entry of outline) {
     if (entry.line >= line) break;
     while (trail.length > 0 && trail[trail.length - 1].level >= entry.level) trail.pop();
     trail.push(entry);
   }
+  while (trail.length > 0 && trail[trail.length - 1].level >= level) trail.pop();
   return trail.map((entry) => entry.text);
 }
 
@@ -109,7 +119,8 @@ export function chunkNote(content, maxChars = 2000) {
     const startLine = boundary.line;
     const endLine = i + 1 < boundaries.length ? boundaries[i + 1].line : lines.length;
     const sectionText = lines.slice(startLine, endLine).join("");
-    const headingPath = boundary.level === 0 ? [] : headingPathAt(outline, startLine).concat(boundary.text);
+    const headingPath =
+      boundary.level === 0 ? [] : headingPathAt(outline, startLine, boundary.level).concat(boundary.text);
     const offset = lines.slice(0, startLine).reduce((sum, line) => sum + line.length, 0);
     const pieces = splitLongText(sectionText, maxChars);
     let cursor = offset;
@@ -179,7 +190,7 @@ export function locateSection(content, spec) {
       code: "SECTION_AMBIGUOUS",
       candidates: matches.map((entry) => ({
         level: entry.level,
-        text: headingPathAt(outline, entry.line).concat(entry.text).join(" > "),
+        text: headingPathAt(outline, entry.line, entry.level).concat(entry.text).join(" > "),
       })),
     };
   }

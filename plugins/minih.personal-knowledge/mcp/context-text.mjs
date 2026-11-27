@@ -57,10 +57,12 @@ export function renderContextSection(section) {
     section.content,
   ].join("\n");
 }
-
 /** `Vector:` field of the mode line (ADR 0004 §5). */
 export function vectorLabel(retrieval) {
-  if (!retrieval || retrieval.vector === "disabled") return "disabled";
+  if (!retrieval) return "unknown";
+  // A pack with no topic, or no routed note, never asks the channel anything.
+  if (retrieval.attempted === false) return "not attempted";
+  if (retrieval.vector === "disabled") return "disabled";
   if (retrieval.vector === "partial") return `partial (${retrieval.pendingChunks ?? 0} pending)`;
   if (retrieval.vector === "unavailable") return `unavailable (${retrieval.reason ?? "unknown"})`;
   return "ready";

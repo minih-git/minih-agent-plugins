@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { KnowledgeService } from "../mcp/knowledge-core.mjs";
-import { createContextVault } from "./helpers/context-fixture.mjs";
+import { createContextVault, createVault } from "./helpers/context-fixture.mjs";
 import { isolatedHome } from "./helpers/home.mjs";
 // Keep every fixture away from the real ~/.personal-knowledge (see helpers/home.mjs).
 await isolatedHome();
@@ -165,4 +165,39 @@ api_key: sk-abcdefghijklmnopqrstuvwxyz123456
     service.write({ path: "Credentials.md", content: unsafe, create: true, dryRun: false }),
     /sensitive credentials/,
   );
+});
+
+test("ranked search keeps the chunk that matched, not the note's last chunk", async () => {
+  // One note, two sections: the query fills the first and appears once in the
+  // second. Keeping the last chunk seen instead of the best one made `section`
+  // and `snippet` describe the wrong half of the note.
+  const note = `---
+title: Demo
+type: project
+status: active
+repo: /workspace/demo
+---
+# Demo
+
+## Alpha
+
+${"zebra ".repeat(12).trim()}
+
+## Beta
+
+zebra once.
+`;
+  const { vault } = await createVault({ "Demo.md": note });
+  await writeFile(SANDBOX_EMBEDDING_PATH, '{"enabled": false}\n');
+  const service = await new KnowledgeService({
+    vaultPath: vault,
+    config: { ignoreFolders: [], backupRetentionDays: 0 },
+    now: fixedNow,
+  }).initialize();
+
+  const ranked = await service.search({ query: "zebra", mode: "ranked" });
+  assert.equal(ranked.results[0].path, "Demo.md");
+  assert.equal(ranked.results[0].section, "Demo > Alpha", "the matching chunk names the section");
+  assert.match(ranked.results[0].snippet, /zebra zebra/);
+  assert.doesNotMatch(ranked.results[0].snippet, /once/, "the snippet comes from the same chunk");
 });
