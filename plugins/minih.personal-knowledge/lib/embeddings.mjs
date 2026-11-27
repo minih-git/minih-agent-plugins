@@ -153,6 +153,17 @@ export function validateEmbeddingSettings(raw, { applyRemoteRules = true } = {})
       throw configError("EMBEDDING_CONFIG_INVALID", `exclude entry "${entry}" must be a relative vault folder without ".."`);
     }
   }
+  // ADR 0004 §3: the score floor below which a vector hit does not enter
+  // fusion. Absent means the default, so an untouched file keeps working.
+  const scoreThreshold = value.scoreThreshold ?? EMBEDDING_DEFAULTS.scoreThreshold;
+  if (
+    typeof scoreThreshold !== "number" ||
+    !Number.isFinite(scoreThreshold) ||
+    scoreThreshold < 0 ||
+    scoreThreshold > 1
+  ) {
+    throw configError("EMBEDDING_CONFIG_INVALID", "scoreThreshold must be a number between 0 and 1");
+  }
   // A host model is named by `${providerId}/${modelId}`; the endpoint, the key,
   // and the remote switch belong to Desktop in that mode, so they are neither
   // validated nor used here.
@@ -181,6 +192,7 @@ export function validateEmbeddingSettings(raw, { applyRemoteRules = true } = {})
       allowRemote: hostAllowRemote,
       apiKeyEnv: "",
       exclude: [...exclude],
+      scoreThreshold,
     };
   }
   const model = value.model ?? EMBEDDING_DEFAULTS.model;
@@ -207,6 +219,7 @@ export function validateEmbeddingSettings(raw, { applyRemoteRules = true } = {})
     allowRemote,
     apiKeyEnv,
     exclude: [...exclude],
+    scoreThreshold,
   };
 }
 

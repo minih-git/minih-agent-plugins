@@ -857,17 +857,42 @@ async function settingsGet() {
  * `kg.settings.set`: validate against §6.1 and write `embedding.json`
  * atomically with mode 0600. The file never holds a key, only its variable
  * name.
+ *
+ * The panel form carries the fields it shows, so a field it does not show is
+ * taken from the file being rewritten (ADR 0004 §3: `scoreThreshold`), and a
+ * key this plugin does not know is kept untouched instead of being dropped by
+ * a save.
  */
 async function settingsSet(payload) {
   const { validateEmbeddingSettings } = await loadEmbeddingLib();
-  const settings = validateEmbeddingSettings(payload?.embedding);
   const { writeFile, rename, mkdir } = await import("node:fs/promises");
   const filePath = embeddingSettingsPath();
+  const existing = await readEmbeddingFileForMerge(filePath);
+  const incoming = payload?.embedding;
+  const merged = incoming !== null && typeof incoming === "object" && !Array.isArray(incoming)
+    ? { ...existing, ...incoming }
+    : incoming;
+  const settings = validateEmbeddingSettings(merged);
+  const unknown = {};
+  for (const [key, value] of Object.entries(existing)) {
+    if (!(key in settings)) unknown[key] = value;
+  }
   await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
   const temporary = `${filePath}.${process.pid}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(settings, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  await writeFile(temporary, `${JSON.stringify({ ...unknown, ...settings }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   await rename(temporary, filePath);
   return { settings };
+}
+
+/** The current `embedding.json` as an object, or `{}` when absent/unreadable. */
+async function readEmbeddingFileForMerge(filePath) {
+  const { readFile } = await import("node:fs/promises");
+  try {
+    const parsed = JSON.parse(await readFile(filePath, "utf8"));
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 /**

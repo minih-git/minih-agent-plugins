@@ -591,3 +591,32 @@ test("kg.openExternal forwards http(s) only", async () => {
   await assert.rejects(backend.onPanelInvoke("kg.openExternal", { url: "https://example.com" }), /pi\.shell\.openExternal/);
   await backend.onUnload();
 });
+
+test("kg.settings.set keeps a field the panel does not show and keys it does not know", async () => {
+  const { backend, root } = await makeBackend();
+  const settingsPath = path.join(root, "embedding.json");
+  process.env.PERSONAL_KNOWLEDGE_EMBEDDING_CONFIG = settingsPath;
+  // The file a user (or an older version) left behind: a tuned floor, and a key
+  // this version does not define.
+  await writeFile(
+    settingsPath,
+    `${JSON.stringify({ enabled: false, scoreThreshold: 0.9, futureKey: "keep me" }, null, 2)}\n`,
+  );
+  const saved = await backend.onPanelInvoke("kg.settings.set", {
+    embedding: {
+      enabled: true,
+      provider: "ollama",
+      baseUrl: "http://127.0.0.1:11434",
+      model: "bge-m3",
+      allowRemote: false,
+      apiKeyEnv: "",
+      exclude: [],
+    },
+  });
+  assert.equal(saved.settings.scoreThreshold, 0.9, "the result reports the floor in force");
+  const onDisk = JSON.parse(await readFile(settingsPath, "utf8"));
+  assert.equal(onDisk.scoreThreshold, 0.9, "a field the panel does not render survives a save");
+  assert.equal(onDisk.futureKey, "keep me", "an unknown key survives a save");
+  assert.equal(onDisk.enabled, true, "the fields the panel does send are written");
+  delete process.env.PERSONAL_KNOWLEDGE_EMBEDDING_CONFIG;
+});

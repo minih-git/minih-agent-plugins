@@ -51,6 +51,24 @@ test("settings rules reject every §6.1 violation and keep valid remote settings
   assert.deepEqual(ok.exclude, ["04 Archive", "05 Daily"]);
 });
 
+test("scoreThreshold is validated as a number in [0, 1] and defaults to 0.35", () => {
+  assert.equal(validateEmbeddingSettings({}).scoreThreshold, 0.35);
+  assert.equal(validateEmbeddingSettings({ scoreThreshold: 0.5 }).scoreThreshold, 0.5);
+  assert.equal(
+    validateEmbeddingSettings({ provider: "host", modelKey: "minih-router/embed", scoreThreshold: 0 })
+      .scoreThreshold,
+    0,
+    "the host branch carries the floor too",
+  );
+  for (const value of [2, -0.1, "0.4", Number.NaN]) {
+    assert.throws(
+      () => validateEmbeddingSettings({ scoreThreshold: value }),
+      (error) => error.code === "EMBEDDING_CONFIG_INVALID" && /scoreThreshold/.test(error.message),
+      `${String(value)} must be refused by name`,
+    );
+  }
+});
+
 test("the API key resolves from the process environment first", async () => {
   const found = await resolveApiKey("PK_SETTINGS_TEST_KEY", { env: { PK_SETTINGS_TEST_KEY: "from-env" } });
   assert.deepEqual(found, { status: "found", value: "from-env" });

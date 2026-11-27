@@ -19,4 +19,7 @@ export const EMBEDDING_DEFAULTS = Object.freeze({
   allowRemote: false,
   apiKeyEnv: "",
   exclude: [],
+  // ADR 0004 §3: a vector hit below this cosine score does not enter fusion.
+  // Before it, a scoped query with no relevant vectors still filled `limit`.
+  scoreThreshold: 0.35,
 });
