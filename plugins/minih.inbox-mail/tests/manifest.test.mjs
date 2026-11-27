@@ -32,13 +32,13 @@ const HOSTNAME = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/;
 const CONTRIB_ID = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 const localized = (value) => Boolean(value && typeof value === "object" && value.en && value["zh-CN"]);
 
-test("the plugin is published as minih.inbox-mail 0.7.1, named Mail Assistant, versioned with its package", () => {
+test("the plugin is published as minih.inbox-mail 0.8.0, named Mail Assistant, versioned with its package", () => {
   assert.equal(manifest.schemaVersion, 1);
   assert.equal(manifest.id, "minih.inbox-mail", "the id is what installed users' data hangs off");
   assert.equal(manifest.name, "Mail Assistant");
   assert.equal(manifest.i18n.en.name, "Mail Assistant");
   assert.equal(manifest.i18n["zh-CN"].name, "邮件助手");
-  assert.equal(manifest.version, "0.7.1");
+  assert.equal(manifest.version, "0.8.0");
   assert.equal(manifest.version, pkg.version);
   assert.equal(manifest.main, "main.js");
   assert.ok(exists(manifest.main), "the entry point must be in the tree");
@@ -332,10 +332,18 @@ test("the safety notes describe the panel honestly, in both languages", () => {
   // No account ceiling, and the panel.
   assert.match(en, /no mailbox limit in this plugin/i);
   assert.match(en, /Inbox panel/);
-  // Bodies only on click, capped, in memory.
+  // Bodies only on click, capped — and since 0.8.0 kept on this computer in a
+  // bounded, expiring cache the panel can empty.
   assert.match(en, /only when you open that message/);
   assert.match(en, /1 MiB/);
-  assert.match(en, /never written to disk/);
+  assert.match(en, /body cache/);
+  assert.match(en, /at most 200 MB/);
+  assert.match(en, /30 days after it was last opened/);
+  assert.match(en, /Those bytes are not encrypted/);
+  // The 0.7 promise is gone: a body does reach the disk now, so the notes may no
+  // longer say it never does or that it only ever lives in memory.
+  assert.doesNotMatch(en, /never written to disk/);
+  assert.doesNotMatch(en, /kept in memory/);
   // Header-only watching.
   assert.match(en, /BODY\.PEEK/);
   // Opening marks read (one STORE), and a click is one STORE more.
@@ -396,6 +404,13 @@ test("the safety notes describe the panel honestly, in both languages", () => {
   assert.match(zh, /从不放开脚本/);
   assert.match(zh, /mailto 链接则打开面板自己的写信界面/);
   assert.match(zh, /远程图片默认拦截/);
+  // The body cache, said the same way in Chinese: plain bytes on this computer,
+  // bounded, expiring, and emptied from the panel.
+  assert.match(zh, /正文缓存（body-cache）/);
+  assert.match(zh, /总大小最多 200 MB/);
+  assert.match(zh, /30 天没再打开就删除/);
+  assert.match(zh, /这些字节没有加密/);
+  assert.doesNotMatch(zh, /绝不写盘/);
   // The other way in: a server the user typed, and the protocol with no flags.
   assert.match(en, /a server you typed into the account form yourself/);
   assert.match(en, /the app injects the password only into the endpoint stored in the same instance/);

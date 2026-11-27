@@ -43,6 +43,14 @@
         </div>
         <ul class="account-list" id="account-list"></ul>
         <p class="empty" id="accounts-empty" hidden></p>
+        <!-- What opening a message leaves on this computer, and the one action
+             that empties it. The host builds the settings page from the manifest
+             and that page cannot hold a button, so the panel owns this line. -->
+        <div class="cache-foot" id="cache-foot">
+          <h2 class="visually-hidden" id="cache-title"></h2>
+          <p class="cache-size" id="cache-size"></p>
+          <button type="button" class="btn btn-quiet" id="btn-clear-cache"></button>
+        </div>
       </aside>
 
       <main class="list" id="list-column" aria-labelledby="list-title">

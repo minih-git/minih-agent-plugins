@@ -56,15 +56,15 @@ const SAVE_LIMIT = attachments.MAX_ATTACHMENT_BYTES;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 /** A send is the host's session; the plugin only waits for the answer. */
 const SEND_TIMEOUT_MS = 120_000;
-/**
- * How many opened messages keep their parsed headers in memory.
+/*
+ * How a body the panel already opened is remembered.
  *
- * A reply has to know the original's `Message-ID`, `Reply-To` and `References`,
- * and those come from the body the panel already fetched. Eight is more than the
- * panel can have open at once and keeps a session's worth of text out of the
- * plugin's long-lived memory.
+ * Since 0.8.0 it is on disk, in `lib/body-cache.js`: the raw bytes the server sent,
+ * under a hashed name, with a small index of size and last-open time. A reply or a
+ * forward re-reads those bytes and parses them again — the headers it needs
+ * (`Message-ID`, `Reply-To`, `References`) come out of the same parse, so there is
+ * one cache rather than one in memory and one on disk.
  */
-const OPEN_CACHE_LIMIT = 8;
 /**
  * Sessions this plugin may have open at once.
  *
@@ -103,16 +103,14 @@ function createRuntime(deps) {
    */
   const folders = mailboxes.createFolderCache();
   /**
-   * The last few messages the panel opened: their parsed headers, their text and
-   * their attachment list.
+   * The bodies the user has opened, kept on this computer by `lib/body-cache.js`.
    *
    * A reply has to know the original's `Message-ID`, `Reply-To` and `References`,
-   * and a forward needs the original's text and its attachment part numbers. All
-   * of that is already in the body the panel asked for when the user opened the
-   * message, so this cache is what makes "reply" cost no network request at all.
-   * It holds nothing on disk and nothing beyond the last few opens.
+   * and a forward needs its text and its attachment part numbers. All of that is in
+   * the bytes the panel already downloaded, so the cache is what makes "reply" cost
+   * no network request — and what makes a second open cost none either.
    */
-  const openCache = new Map();
+  const bodyCache = deps.bodyCache;
   let loaded = false;
 
   const accountStateOf = (instanceId) => accountsFile.accountState(root, instanceId);
@@ -233,6 +231,39 @@ function createRuntime(deps) {
     envelope.receivedAt = Number.isFinite(receivedAt) ? receivedAt : null;
     envelope.messageId = mime.headerValue(headers, "message-id").trim();
     return envelope;
+  }
+
+  /**
+   * The name one message's body is kept under.
+   *
+   * A key is not enough on its own. A stored IMAP envelope carries either its
+   * Message-ID or `uid:<uid>`, and neither says which `UIDVALIDITY` it belongs to:
+   * a mailbox that was rebuilt hands out the same `uid:<uid>` for a different
+   * message. The era is therefore part of the cache's name, so an entry from a
+   * previous era cannot be served — it stops being reachable and ages out on its
+   * own. POP3 has no such era; its key is the server's UIDL.
+   */
+  function bodyKeyOf(record, envelope) {
+    if (record.protocol === "pop3") return envelope.key;
+    return `${envelope.uidValidity ?? 0}:${envelope.key}`;
+  }
+
+  /**
+   * Remember one downloaded body, and never let that fail the open.
+   *
+   * `write` answers `false` rather than throwing for anything it cannot store, and
+   * this catch is the second half of the same promise: a cache that has gone bad
+   * costs the user one re-download, never the message they asked to read.
+   */
+  async function keepBody(record, envelope, fetched) {
+    try {
+      await bodyCache.write(record.instanceId, bodyKeyOf(record, envelope), fetched.body, {
+        size: fetched.size,
+        truncated: fetched.truncated === true,
+      });
+    } catch (error) {
+      log("warn", `could not keep a message body: ${error?.message ?? error}`);
+    }
   }
 
   /**
@@ -465,6 +496,9 @@ function createRuntime(deps) {
       const record = accounts.get(instanceId);
       accounts.delete(instanceId);
       folders.forget(instanceId);
+      // A mailbox that is no longer watched keeps none of the bodies opened from
+      // it: the account is gone, so nothing would ever ask for them again.
+      await bodyCache.clearAccount(instanceId);
       if (record) await stopAccount(record);
     }
     let startedAny = false;
@@ -708,19 +742,20 @@ function createRuntime(deps) {
   }
 
   /**
-   * The message the panel opened, from the cache, or the coded refusal.
+   * The message the panel opened, from the body cache, or the coded refusal.
    *
-   * A reply or a forward is built from what opening the message already fetched:
+   * A reply or a forward is built from what opening the message already downloaded:
    * its text, its HTML alternative, its attachment part numbers, and the four
    * headers that decide threading. No second request, and no guessing from an
-   * `ENVELOPE` that some servers fill with `NIL`.
+   * `ENVELOPE` that some servers fill with `NIL` — the same bytes are parsed again
+   * here, which is why there is one cache and not one in memory beside one on disk.
    */
-  function openedMessageOf(record, envelope) {
-    const cached = openCache.get(`${record.instanceId}:${envelope.key}`) ?? null;
+  async function openedMessageOf(record, envelope) {
+    const cached = await bodyCache.read(record.instanceId, bodyKeyOf(record, envelope));
     if (!cached) {
       throw coded("MESSAGE_NOT_OPEN", "open this message before replying to or forwarding it");
     }
-    return cached;
+    return body.parseMessage(cached.body);
   }
 
   /**
@@ -942,6 +977,9 @@ function createRuntime(deps) {
         accounts: list.map((record) => accountView(record, locale)),
         providers: providers.catalogue(locale),
         messages: messageViews(),
+        // What "open a message" has kept on this computer, so the panel can show it
+        // and offer to empty it.
+        cache: bodyCache.stats(),
         // No account ceiling: the manifest declares no `max`, and the host keeps
         // its own safety bound. What is bounded here is one account's list.
         limits: { messagesPerAccount: store.MESSAGES_LIMIT },
@@ -984,17 +1022,22 @@ function createRuntime(deps) {
     },
 
     /**
-     * Download one message body for the panel, in memory only.
+     * One message's body, for the panel or for an agent tool.
      *
-     * Nothing here is persisted: the parsed body is returned to the caller and
-     * dropped with the response, so "open a message" cannot leave a mailbox's
-     * text on disk.
+     * The bytes are kept on this computer by `lib/body-cache.js`, so opening the
+     * same message a second time downloads nothing. Nothing else about opening
+     * changes:
      *
-     * `options.markRead` is the difference between the panel and the agent tools.
-     * Opening a message in the panel is the user reading it, so it is marked read
-     * once its body has arrived; a tool call is a read the user asked an agent to
-     * perform, and it must not change `\Seen` in the mailbox. Everything else —
-     * the 1 MiB cap, the parsed text, the cached headers — is the same path.
+     * - the cache is a miss whenever it cannot answer — missing, expired, damaged,
+     *   unwritable — and the body is downloaded exactly as before, so a broken cache
+     *   is never something the user sees;
+     * - IMAP still asks the server for the mailbox's `UIDVALIDITY` before it hands
+     *   anything back, so a renumbered mailbox refuses a stale key instead of serving
+     *   whatever that number means now;
+     * - `options.markRead` still separates the panel from the tools: the panel
+     *   opening an unread message sends one `UID STORE +FLAGS (\Seen)` even when the
+     *   body came from disk, while a tool's read changes no flag anywhere. A failed
+     *   mark is reported as `readError` and never costs the user the message.
      */
     async openMessage(input, options = {}) {
       const markRead = options.markRead !== false;
@@ -1007,18 +1050,22 @@ function createRuntime(deps) {
       // A UID the store does not hold names a message the poll window never
       // covered; its own headers are the only place its subject and sender are.
       const stored = store.findEnvelope(state, envelope.key) !== null;
+      const cached = await bodyCache.read(record.instanceId, bodyKeyOf(record, envelope));
       // Two ways to read one message body, one per protocol, and one rule for
       // both: a body the panel fetched is a message the user just read, so it is
       // marked read only after the body actually arrived — and not at all when an
       // agent tool asked for it. IMAP sends one `UID STORE +FLAGS (\\Seen)`;
       // POP3 has no such flag, so the mark is local.
-      let fetched;
+      let fetched = cached;
       let readError = null;
       if (record.protocol === "pop3") {
-        fetched = await record.watcher.fetchBody(envelope.key, {
-          maxBytes: BODY_LIMIT,
-          timeoutMs: BODY_TIMEOUT_MS,
-        });
+        if (!fetched) {
+          fetched = await record.watcher.fetchBody(envelope.key, {
+            maxBytes: BODY_LIMIT,
+            timeoutMs: BODY_TIMEOUT_MS,
+          });
+          await keepBody(record, envelope, fetched);
+        }
         if (markRead) {
           store.markReadLocally(state, envelope.key);
           await deps.persist();
@@ -1029,8 +1076,12 @@ function createRuntime(deps) {
         // read must not be stored again.
         const alreadySeen = Array.isArray(envelope.flags) && envelope.flags.includes("\\Seen");
         fetched = await record.watcher.withSession(async (session, box) => {
+          // A cached body is this message's only while the era still matches: an
+          // entry's name carries the `UIDVALIDITY` (`bodyKeyOf`), and a mailbox that
+          // was rebuilt answers `MESSAGE_STALE` here rather than handing over bytes
+          // that belong to whatever holds that number now.
           requireCurrentEra(envelope, box);
-          const message = await session.fetchMessage(envelope.uid, {
+          const message = cached ?? await session.fetchMessage(envelope.uid, {
             maxBytes: BODY_LIMIT,
             timeoutMs: BODY_TIMEOUT_MS,
           });
@@ -1038,9 +1089,9 @@ function createRuntime(deps) {
           // state change, and a read performed for the model must not make one.
           if (!alreadySeen && markRead) {
             try {
-              const stored = await session.storeFlags(message.uid, { add: ["\\Seen"], remove: [] });
-              message.flags = Array.isArray(stored?.flags) && stored.flags.length
-                ? stored.flags
+              const flags = await session.storeFlags(envelope.uid, { add: ["\\Seen"], remove: [] });
+              message.flags = Array.isArray(flags?.flags) && flags.flags.length
+                ? flags.flags
                 : [...(message.flags ?? []), "\\Seen"];
             } catch (error) {
               // A failed mark must not lose the message the user asked for.
@@ -1049,6 +1100,7 @@ function createRuntime(deps) {
           }
           return message;
         });
+        if (!cached) await keepBody(record, envelope, fetched);
         if (markRead && Array.isArray(fetched.flags) && fetched.flags.length) {
           store.setFlags(state, envelope.key, fetched.flags);
           await deps.persist();
@@ -1056,21 +1108,6 @@ function createRuntime(deps) {
       }
       if (!stored) fillEnvelopeFromHeaders(envelope, fetched.body);
       const parsed = body.parseMessage(fetched.body);
-      // Kept for a reply or a forward: the same bytes just carried the headers
-      // that decide threading, so asking the server again would be one round trip
-      // for something already in hand. Bounded, and never written anywhere.
-      const cacheKey = `${record.instanceId}:${envelope.key}`;
-      openCache.delete(cacheKey);
-      openCache.set(cacheKey, {
-        headers: parsed.headers,
-        text: parsed.text,
-        html: parsed.html,
-        attachments: parsed.attachments,
-        at: Date.now(),
-      });
-      while (openCache.size > OPEN_CACHE_LIMIT) {
-        openCache.delete(openCache.keys().next().value);
-      }
       return {
         accountId: record.instanceId,
         accountLabel: record.label,
@@ -1260,6 +1297,7 @@ function createRuntime(deps) {
         await record.watcher.deleteMessage(envelope.key);
         store.removeEnvelope(state, envelope.key);
         store.pop3Forget(state, envelope.key.replace(/^pop3:/, ""));
+        await bodyCache.remove(record.instanceId, bodyKeyOf(record, envelope));
         await deps.persist();
         return { accountId: record.instanceId, key: envelope.key, removed: true, final: true, folder: null };
       }
@@ -1273,6 +1311,8 @@ function createRuntime(deps) {
         return { folder: known.trash, how };
       });
       store.removeEnvelope(state, envelope.key);
+      // The message left this mailbox, so the body kept for it goes too.
+      await bodyCache.remove(record.instanceId, bodyKeyOf(record, envelope));
       await deps.persist();
       return { accountId: record.instanceId, key: envelope.key, removed: true, final: false, ...result };
     },
@@ -1301,6 +1341,7 @@ function createRuntime(deps) {
         return { folder: known.archive, how };
       });
       store.removeEnvelope(state, envelope.key);
+      await bodyCache.remove(record.instanceId, bodyKeyOf(record, envelope));
       await deps.persist();
       return { accountId: record.instanceId, key: envelope.key, removed: true, ...result };
     },
@@ -1322,7 +1363,7 @@ function createRuntime(deps) {
       if (mode !== "reply" && mode !== "replyAll" && mode !== "forward") {
         throw coded("INVALID_ARGUMENT", "unknown draft mode");
       }
-      const opened = openedMessageOf(record, envelope);
+      const opened = await openedMessageOf(record, envelope);
       const headers = opened.headers ?? {};
       const locale = deps.locale();
       const original = {
@@ -1404,12 +1445,16 @@ function createRuntime(deps) {
       const text = String(input?.text ?? "").trim();
       if (!text) throw coded("INVALID_ARGUMENT", "a reply needs a text body");
       if (!record.watcher) throw coded("ACCOUNT_OFFLINE", "this mailbox is not connected yet");
-      const fetched = record.protocol === "pop3"
+      // The same bytes a read of this message would have downloaded: a reply to mail
+      // the user (or the agent) already opened costs no second fetch.
+      const cached = await bodyCache.read(record.instanceId, bodyKeyOf(record, envelope));
+      const fetched = cached ?? (record.protocol === "pop3"
         ? await record.watcher.fetchBody(envelope.key, { maxBytes: BODY_LIMIT, timeoutMs: BODY_TIMEOUT_MS })
         : await record.watcher.withSession((session, box) => {
             requireCurrentEra(envelope, box);
             return session.fetchMessage(envelope.uid, { maxBytes: BODY_LIMIT, timeoutMs: BODY_TIMEOUT_MS });
-          });
+          }));
+      if (!cached) await keepBody(record, envelope, fetched);
       if (!store.findEnvelope(state, envelope.key)) fillEnvelopeFromHeaders(envelope, fetched.body);
       const parsed = body.parseMessage(fetched.body);
       const headers = parsed.headers ?? {};

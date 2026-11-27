@@ -24,6 +24,7 @@ import {
   attachmentMeta,
   avatarColor,
   fileKind,
+  formatBytes,
   fullTime,
   groupMessages,
   initials,
@@ -75,6 +76,13 @@ const state = {
    * be refused by the host; disabling the card is what says so before the click.
    */
   downloading: new Set(),
+  /**
+   * Whether the body cache is being emptied, and whether the user has been asked
+   * first. Clearing is not undoable, so it takes the panel's own card — the same
+   * one a POP3 delete uses, not `window.confirm`.
+   */
+  clearingCache: false,
+  confirmCache: false,
 };
 
 let noticeTimer = null;
@@ -97,6 +105,9 @@ const nodes = {
   accountsHint: document.getElementById("accounts-hint"),
   accountList: document.getElementById("account-list"),
   accountsEmpty: document.getElementById("accounts-empty"),
+  cacheTitle: document.getElementById("cache-title"),
+  cacheSize: document.getElementById("cache-size"),
+  cacheClear: document.getElementById("btn-clear-cache"),
   search: document.getElementById("search"),
   searchClear: document.getElementById("btn-search-clear"),
   filters: document.getElementById("filters"),
@@ -358,6 +369,7 @@ function render() {
   renderStatic();
   renderFilters();
   renderAccounts();
+  renderCache();
   renderList();
   renderReader();
   renderConfirm();
@@ -575,6 +587,26 @@ function renderAccounts() {
   nodes.accountsEmpty.hidden = accounts.length > 0;
 }
 
+/**
+ * The one line about this computer, under the mailbox list.
+ *
+ * The size comes from the plugin, not from the panel: the cache is a directory
+ * the plugin owns and the panel cannot read a filesystem. Zero entries is not a
+ * failure — it is the state of a mailbox nobody has opened a message in yet — so
+ * the button that empties it is disabled rather than hidden, which is what keeps
+ * the line from jumping when the first body arrives.
+ */
+function renderCache() {
+  const table = t();
+  const cache = state.snapshot?.cache ?? { bytes: 0, entries: 0 };
+  nodes.cacheTitle.textContent = table.cacheTitle;
+  nodes.cacheSize.textContent = cache.entries
+    ? table.cacheLine(formatBytes(cache.bytes, state.locale), cache.entries)
+    : table.cacheEmpty;
+  nodes.cacheClear.textContent = state.clearingCache ? table.cacheClearing : table.cacheClear;
+  nodes.cacheClear.disabled = state.busy || state.clearingCache || !cache.entries;
+}
+
 function listOptions() {
   return { accountId: state.accountId, filter: state.filter, query: state.query };
 }
@@ -696,28 +728,39 @@ function mailRow(message) {
 }
 
 /**
- * The delete confirmation.
+ * The panel's one confirmation card, for the two actions that cannot be undone.
  *
- * Focus lands on "cancel": a dialog that opens on the destructive button deletes
- * a message the moment someone presses Enter out of habit.
+ * A POP3 delete is final on the server, and emptying the body cache throws away
+ * what took a download to fetch. Focus lands on "cancel": a dialog that opens on
+ * the destructive button does the damage the moment someone presses Enter out of
+ * habit.
  */
 function renderConfirm() {
   const table = t();
   const target = state.confirmDelete;
-  nodes.confirm.classList.toggle("is-hidden", !target);
-  if (!target) return;
-  nodes.confirmTitle.textContent = table.deleteConfirmTitle;
-  nodes.confirmBody.textContent = table.deleteConfirmBody(target.subject || table.noSubject);
-  nodes.confirmYes.textContent = table.deleteConfirmYes;
-  nodes.confirmNo.textContent = table.deleteConfirmNo;
+  const clearing = !target && state.confirmCache;
+  nodes.confirm.classList.toggle("is-hidden", !target && !clearing);
+  if (!target && !clearing) return;
+  if (clearing) {
+    nodes.confirmTitle.textContent = table.cacheConfirmTitle;
+    nodes.confirmBody.textContent = table.cacheConfirmBody;
+    nodes.confirmYes.textContent = table.cacheConfirmYes;
+    nodes.confirmNo.textContent = table.cacheConfirmNo;
+  } else {
+    nodes.confirmTitle.textContent = table.deleteConfirmTitle;
+    nodes.confirmBody.textContent = table.deleteConfirmBody(target.subject || table.noSubject);
+    nodes.confirmYes.textContent = table.deleteConfirmYes;
+    nodes.confirmNo.textContent = table.deleteConfirmNo;
+  }
   if (document.activeElement !== nodes.confirmNo && !nodes.confirm.contains(document.activeElement)) {
     nodes.confirmNo.focus();
   }
 }
 
 function closeConfirm() {
-  if (!state.confirmDelete) return;
+  if (!state.confirmDelete && !state.confirmCache) return;
   state.confirmDelete = null;
+  state.confirmCache = false;
   render();
 }
 
@@ -1415,6 +1458,31 @@ async function checkNow() {
   }
 }
 
+/**
+ * Empty the body cache, after the card has asked.
+ *
+ * Nothing else is touched: the stored envelopes, the read marks and the mailboxes
+ * stay as they are, and the next open of a message simply downloads it again.
+ */
+async function clearBodyCache() {
+  if (state.busy || state.clearingCache) return;
+  const table = t();
+  state.busy = true;
+  state.clearingCache = true;
+  render();
+  try {
+    await call("inbox.clearBodyCache");
+    setNotice(table.cacheCleared);
+    await refresh({ quiet: true });
+  } catch (error) {
+    setBanner(describe(error, table.cacheFailed), true);
+  } finally {
+    state.busy = false;
+    state.clearingCache = false;
+    render();
+  }
+}
+
 async function openWebmail(account) {
   try {
     await call("inbox.openWebmail", { instanceId: account.instanceId });
@@ -1582,9 +1650,16 @@ function wire() {
   nodes.confirmNo.addEventListener("click", () => closeConfirm());
   nodes.confirmYes.addEventListener("click", () => {
     const target = state.confirmDelete;
-    if (!target) return;
+    const clearing = state.confirmCache;
     state.confirmDelete = null;
-    void deleteMessage(target, { confirmed: true });
+    state.confirmCache = false;
+    if (clearing) void clearBodyCache();
+    else if (target) void deleteMessage(target, { confirmed: true });
+  });
+  // Clearing the body cache asks first, in the same card a POP3 delete uses.
+  nodes.cacheClear.addEventListener("click", () => {
+    state.confirmCache = true;
+    render();
   });
   nodes.sidebar.addEventListener("click", () => {
     state.sidebar = !state.sidebar;

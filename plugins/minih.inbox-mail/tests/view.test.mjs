@@ -532,3 +532,53 @@ test("the bulk-read toolbar wraps on narrow panels and has localized action copy
     }
   }
 });
+
+test("the panel shows what the body cache holds and can empty it, in both languages", () => {
+  // The settings page is built from the manifest and cannot hold a button, so the
+  // size of what a click left on disk, and the one action that empties it, live in
+  // the panel — under the mailbox list, not in the reading pane.
+  assert.match(indexSource, /id="cache-title"/);
+  assert.match(indexSource, /id="cache-size"/);
+  assert.match(indexSource, /id="btn-clear-cache"/);
+  assert.match(appSource, /nodes\.cacheSize\.textContent = cache\.entries/);
+  assert.match(appSource, /formatBytes\(cache\.bytes, state\.locale\)/);
+  assert.match(appSource, /call\("inbox\.clearBodyCache"\)/);
+  // Emptying it is not undoable, so it asks first — in the panel's own card, the
+  // same one a POP3 delete uses, never `window.confirm`.
+  assert.match(appSource, /state\.confirmCache = true/);
+  assert.match(appSource, /table\.cacheConfirmTitle/);
+  assert.match(appSource, /table\.cacheConfirmBody/);
+  assert.doesNotMatch(appSource, /window\.confirm\(/);
+  for (const locale of ["en", "zh-CN"]) {
+    const table = strings(locale);
+    for (const key of [
+      "cacheTitle",
+      "cacheEmpty",
+      "cacheClear",
+      "cacheClearing",
+      "cacheCleared",
+      "cacheFailed",
+      "cacheConfirmTitle",
+      "cacheConfirmBody",
+      "cacheConfirmYes",
+      "cacheConfirmNo",
+    ]) {
+      assert.equal(typeof table[key], "string", `${locale}.${key} is not a sentence`);
+      assert.ok(table[key].length > 0, `${locale}.${key} is empty`);
+    }
+    // The line itself carries the size and the count, so neither is invented by
+    // the panel.
+    assert.equal(typeof table.cacheLine, "function", `${locale}.cacheLine`);
+    assert.match(table.cacheLine("1.2 MB", 3), /1\.2 MB/);
+    assert.match(table.cacheLine("900 B", 1), /900 B/);
+    // Both languages say plainly that the bytes are on this computer, in the clear,
+    // bounded and expiring — the promise the manifest used to make in reverse.
+    assert.match(table.cacheConfirmBody, /200 MB/);
+    assert.match(table.cacheConfirmBody, /30/);
+  }
+  assert.match(strings("en").cacheConfirmBody, /plain text/);
+  assert.match(strings("zh-CN").cacheConfirmBody, /明文/);
+  // The line paints its own surface: rows scroll underneath a sticky footer.
+  assert.match(styleSource, /\.cache-foot \{[^}]*position: sticky;/);
+  assert.match(styleSource, /\.cache-foot \{[^}]*background: var\(--bg-panel\);/);
+});

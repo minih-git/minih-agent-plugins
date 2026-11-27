@@ -25,9 +25,10 @@ everything else works the same for both.
 
 In the panel you get every account's recent mail in one list — grouped by day,
 with a one-line preview of each message, a search box and four filters — and one
-message at a time in a reading pane. A message body is downloaded only when you
-open that message, and opening it marks it read — one `STORE` of `\Seen` after the
-body has actually arrived, never before. The star changes only when you click it,
+message at a time in a reading pane. A message body is downloaded the first time
+you open it and then kept on this computer, so opening it again downloads
+nothing; opening it marks it read — one `STORE` of `\Seen` after the body has
+actually arrived, never before. The star changes only when you click it,
 "mark unread" is always there to undo the read, and delete and archive act on the
 one message you picked (see below for exactly what they send).
 
@@ -174,8 +175,9 @@ A few properties are deliberate:
   **Open web mailbox** (only for a provider this plugin knows) and **Remove this
   mailbox**, which asks for confirmation in the panel first. A failed mailbox
   explains itself in one folded line, with the account's stored error in the
-  tooltip. Below 1100 px the column collapses to a rail of dots and the panel's
-  own button hides it entirely.
+  tooltip. Under the list, one line says how much this computer's body cache holds
+  and offers **Clear body cache** (it asks first). Below 1100 px the column
+  collapses to a rail of dots and the panel's own button hides it entirely.
 - **List (middle)** — a search box (press <kbd>/</kbd>, <kbd>Esc</kbd> clears it)
   over sender, subject, preview and account; four filters — **All**, **Unread**,
   **Starred**, **Important**; and mail grouped under **Today / Yesterday / This
@@ -377,21 +379,34 @@ account is polled instead of connected:
   `RETR` when the server has no `TOP`).
 - When you open a message it fetches that message only, capped at 1 MiB (IMAP:
   `BODY.PEEK[]<0.1048576>`, POP3: `RETR` with the same cap): truncated with a
-  notice beyond that, held in memory for the panel and never written to disk.
+  notice beyond that, and then kept in the body cache below, so a second open, a
+  reply, a forward and an agent's read or reply all reuse those bytes instead of
+  downloading them again.
   Attachments are listed by name and size; one is fetched only when you press
   **Save** on it — IMAP asks for that one MIME part
   (`UID FETCH <uid> BODY.PEEK[<part>]`, which never sets `\Seen`), POP3 fetches the
   message it already has to, and the bytes go straight from memory into the app's
   save dialog. A file above 50 MiB is refused rather than truncated.
-- It keeps one small file in its own data folder: per account `UIDVALIDITY` and
-  the highest UID already handled (IMAP) or the UIDLs already handled (POP3, at
+- It keeps one small state file in its own data folder: per account `UIDVALIDITY`
+  and the highest UID already handled (IMAP) or the UIDLs already handled (POP3, at
   most 500), the Message-IDs it has already reported (at most 200), the digest
   queue, the last error, and the envelope of the newest 200 messages (sender,
   subject, up to 20 To and 20 Cc addresses, time, flags, whether it has an
   attachment, and **at most 140 characters of plain-text summary** taken from
-  those first bytes). The message body itself is still never written to disk, and
-  the file is replaced atomically so a crash cannot leave half a JSON document
-  behind.
+  those first bytes). The file is replaced atomically, so a crash cannot leave
+  half a JSON document behind.
+- Beside it, in `body-cache/`, it keeps the message bodies you opened: one file per
+  message, named by a SHA-256 of the account and the message key, with an
+  `index.json` that records each body's size and when it was last opened. The
+  total is capped at **200 MB** — the body opened longest ago goes first — and a
+  body is deleted **30 days** after it was last opened. Opening a body touches it,
+  so the ones you actually re-read stay. Deleting or archiving a message removes
+  its body, removing a mailbox removes every body of that mailbox, and the total is
+  shown under the mailbox list with a **Clear body cache** button that asks first.
+  These bytes are **plain text, not encrypted**; they are protected exactly as the
+  state file beside them is. A body that is missing, damaged or cannot be written
+  counts as no cache at all: the message is downloaded again and nothing is
+  reported, because nothing went wrong for you.
 - Opening a message marks that one message read, once, and after its body arrived:
   a failed fetch leaves it unread. "Mark unread" and the star are your clicks, each
   sending exactly one `STORE`. Sending happens only when you press **Send**, and

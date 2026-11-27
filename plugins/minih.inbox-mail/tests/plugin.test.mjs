@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -386,7 +386,7 @@ test("important mail reaches both inboxes without notification centre entries", 
   }
 });
 
-test("opening a message downloads that one body, capped, and writes none of it", async () => {
+test("opening a message downloads that one body, capped, and the state file keeps none of it", async () => {
   const server = createFakeServer({ uidNext: 1 });
   const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
   const plugin = await loadWith(host);
@@ -417,7 +417,8 @@ test("opening a message downloads that one body, capped, and writes none of it",
     assert.match(fetchLine, /BODY\.PEEK\[\]<0\.1048576>/);
     const plainBodyFetch = server.sentLines.filter((line) => /[^.]BODY\[\]/.test(line));
     assert.equal(plainBodyFetch.length, 0, "a plain BODY[] would set \\Seen");
-    // Nothing of the body reached the data file.
+    // Nothing of the body reached the state file. Its bytes live in the body cache
+    // instead, which `tests/body-cache.test.mjs` and the cache tests below cover.
     const saved = JSON.stringify(readState(host));
     assert.equal(saved.includes("见附件"), false);
     assert.equal(saved.includes("附件"), false);
@@ -2682,6 +2683,351 @@ test("a refused bulk STORE leaves server and local mail unread", async () => {
     assert.equal(server.entries[0].flags.includes("\\Seen"), false);
     assert.equal((await panel(plugin, "inbox.snapshot")).snapshot.messages[0].unread, true);
     assert.equal(readState(host).accounts.acc_1.messages[0].flags.includes("\\Seen"), false);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+/**
+ * The body cache, as the panel and the agent tools meet it.
+ *
+ * `tests/body-cache.test.mjs` owns the file rules — hashing, eviction, expiry,
+ * damage. What is checked here is the part only a mailbox can answer: the first
+ * open downloads a body and the second does not, a cached body still marks an
+ * unread message read, and a body is forgotten when its message or its mailbox
+ * goes away.
+ */
+
+/** The cache directory a plugin instance keeps beside its state file. */
+function bodyCacheDir(host) {
+  return join(host.dataPath, "body-cache");
+}
+
+/** The bodies on disk, by file name — one per cached message. */
+function bodyCacheFiles(host) {
+  const dir = bodyCacheDir(host);
+  return existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith(".eml")).sort() : [];
+}
+
+/** The cache's own index, which is where the panel's size comes from. */
+function bodyCacheIndex(host) {
+  const file = join(bodyCacheDir(host), "index.json");
+  return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
+}
+
+test("the second open of a message downloads nothing, and the body is on disk in between", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(
+      message({
+        uid: 1,
+        subject: "缓存",
+        messageId: "<cached@example.com>",
+        raw: rawMessage({ subject: "缓存", text: "cache me" }),
+      }),
+    );
+    const snapshot = await checkUntil(plugin, 1);
+    const target = snapshot.messages[0];
+
+    const first = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
+    assert.equal(first.ok, true);
+    assert.equal(first.message.text.trim(), "cache me");
+    assert.equal(first.message.truncated, false);
+    assert.equal(server.bodyFetches.length, 1, "the first open is a download");
+    assert.equal(bodyCacheFiles(host).length, 1, "the body was kept, one file per message");
+
+    const second = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
+    assert.equal(second.ok, true);
+    assert.equal(second.message.text.trim(), "cache me", "the same message comes back");
+    assert.equal(second.message.subject, "缓存");
+    assert.equal(second.message.truncated, false);
+    assert.equal(server.bodyFetches.length, 1, "the second open fetched no body");
+
+    // What is on disk is the message itself, and the state file is still free of it.
+    const [file] = bodyCacheFiles(host);
+    assert.match(readFileSync(join(bodyCacheDir(host), file), "utf8"), /cache me/);
+    assert.equal(JSON.stringify(readState(host)).includes("cache me"), false);
+    const index = bodyCacheIndex(host);
+    assert.equal(index.entries.length, 1);
+    assert.equal(index.entries[0].accountId, "acc_1");
+    // The entry is named by the mailbox's era and the message's key: a body cached
+    // under one `UIDVALIDITY` can never answer for another.
+    assert.equal(index.entries[0].key, `7:${target.key}`);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("a cached body still marks an unread message read, and a read one is not stored again", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(message({ uid: 1, subject: "Read me", messageId: "<mark@example.com>", raw: rawMessage({ text: "marks" }) }));
+    const snapshot = await checkUntil(plugin, 1);
+    const target = snapshot.messages[0];
+
+    // Opening marks it read — the one `STORE` the panel sends — and caches the body.
+    const opened = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
+    assert.equal(opened.ok, true);
+    assert.deepEqual(server.stores, ["UID STORE 1 +FLAGS (\\Seen)"]);
+    assert.equal((await panel(plugin, "inbox.snapshot")).snapshot.messages[0].unread, false);
+
+    // "Mark unread" is the user saying it was not read after all. Opening it again
+    // must mark it again even though the body now comes from disk.
+    await panel(plugin, "inbox.setFlag", { accountId: "acc_1", key: target.key, flag: "unseen" });
+    assert.equal((await panel(plugin, "inbox.snapshot")).snapshot.messages[0].unread, true);
+    const again = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
+    assert.equal(again.ok, true);
+    assert.equal(again.message.readError, null);
+    assert.deepEqual(server.stores, [
+      "UID STORE 1 +FLAGS (\\Seen)",
+      "UID STORE 1 -FLAGS (\\Seen)",
+      "UID STORE 1 +FLAGS (\\Seen)",
+    ]);
+    assert.equal(server.bodyFetches.length, 1, "only the first open downloaded");
+    assert.equal((await panel(plugin, "inbox.snapshot")).snapshot.messages[0].unread, false);
+
+    // A message the mailbox already calls read costs no STORE at all.
+    const quiet = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
+    assert.equal(quiet.ok, true);
+    assert.equal(server.stores.length, 3, "a seen message is not stored again");
+    assert.equal(server.bodyFetches.length, 1);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("an agent reading a cached message downloads nothing and changes no flag", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(
+      message({ uid: 1, subject: "For the agent", messageId: "<agent@example.com>", raw: rawMessage({ text: "agent body" }) }),
+    );
+    const snapshot = await checkUntil(plugin, 1);
+    const target = snapshot.messages[0];
+    const read = host.state.tools.get("mail_read_message");
+
+    const first = await read.execute({ accountId: "acc_1", key: target.key }, {});
+    assert.match(first.text, /agent body/);
+    assert.equal(first.markedRead, false);
+    assert.equal(server.bodyFetches.length, 1);
+
+    const second = await read.execute({ accountId: "acc_1", key: target.key }, {});
+    assert.match(second.text, /agent body/);
+    assert.equal(server.bodyFetches.length, 1, "the tool read the cached body the second time");
+    assert.deepEqual(server.stores, [], "reading for the model never sends a STORE");
+    assert.equal((await panel(plugin, "inbox.snapshot")).snapshot.messages[0].unread, true);
+    assert.equal(bodyCacheFiles(host).length, 1, "a tool's read is cached too, so the panel's open is free");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("a body cached in one UIDVALIDITY is never served for another", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(message({ uid: 1, subject: "Era seven", raw: rawMessage({ text: "first era" }) }));
+    await checkUntil(plugin, 1);
+    const read = host.state.tools.get("mail_read_message");
+
+    // The cache's name for this body carries the `UIDVALIDITY`, so the second read
+    // of the same number is a hit...
+    const first = await read.execute({ accountId: "acc_1", uid: 1 }, {});
+    assert.match(first.text, /first era/);
+    assert.equal(server.bodyFetches.length, 1);
+    assert.deepEqual(bodyCacheIndex(host).entries.map((entry) => entry.key), ["7:uid:1"]);
+    await read.execute({ accountId: "acc_1", uid: 1 }, {});
+    assert.equal(server.bodyFetches.length, 1);
+
+    // ...and the moment the mailbox is rebuilt, the same number is a different
+    // message, so the old body must not be handed back.
+    server.uidValidity = 8;
+    await panel(plugin, "inbox.check");
+    await read.execute({ accountId: "acc_1", uid: 1 }, {});
+    assert.equal(server.bodyFetches.length, 2, "a renumbered mailbox downloads again");
+    assert.deepEqual(
+      bodyCacheIndex(host)
+        .entries.map((entry) => entry.key)
+        .sort(),
+      ["7:uid:1", "8:uid:1"],
+    );
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("a cache file damaged on disk sends the panel back to the mailbox, without an error", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(
+      message({ uid: 1, subject: "Damaged", messageId: "<damaged@example.com>", raw: rawMessage({ text: "intact body" }) }),
+    );
+    const snapshot = await checkUntil(plugin, 1);
+    const target = snapshot.messages[0];
+    await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
+    assert.equal(server.bodyFetches.length, 1);
+
+    // Half a file is what a crash or a full disk leaves behind.
+    const [file] = bodyCacheFiles(host);
+    writeFileSync(join(bodyCacheDir(host), file), "Subject: tru");
+    const opened = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
+    assert.equal(opened.ok, true, "the user sees their mail, not a cache error");
+    assert.equal(opened.message.readError, null);
+    assert.equal(opened.message.text.trim(), "intact body");
+    assert.equal(server.bodyFetches.length, 2, "the body was downloaded again");
+    assert.equal(bodyCacheFiles(host).length, 1, "and the damaged file was replaced");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("a cache that cannot be written still opens mail", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  // A file where the cache wants its directory: every write into it fails.
+  writeFileSync(bodyCacheDir(host), "not a directory");
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(
+      message({ uid: 1, subject: "No cache", messageId: "<nocache@example.com>", raw: rawMessage({ text: "still here" }) }),
+    );
+    const snapshot = await checkUntil(plugin, 1);
+    const opened = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: snapshot.messages[0].key });
+    assert.equal(opened.ok, true);
+    assert.equal(opened.message.text.trim(), "still here");
+    assert.deepEqual((await panel(plugin, "inbox.snapshot")).snapshot.cache, { bytes: 0, entries: 0 });
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("deleting a message forgets its cached body", async () => {
+  const server = deletableServer();
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    await seedOneMessage(plugin, server);
+    const snapshot = (await panel(plugin, "inbox.snapshot")).snapshot;
+    await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: snapshot.messages[0].key });
+    assert.equal(bodyCacheFiles(host).length, 1);
+
+    const removed = await panel(plugin, "inbox.delete", { accountId: "acc_1", key: snapshot.messages[0].key });
+    assert.equal(removed.ok, true);
+    assert.deepEqual(bodyCacheFiles(host), [], "a message that left the mailbox leaves the cache");
+    assert.deepEqual(bodyCacheIndex(host).entries, []);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("archiving a message forgets its cached body", async () => {
+  const server = deletableServer();
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    await seedOneMessage(plugin, server);
+    const snapshot = (await panel(plugin, "inbox.snapshot")).snapshot;
+    await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: snapshot.messages[0].key });
+    assert.equal(bodyCacheFiles(host).length, 1);
+
+    const archived = await panel(plugin, "inbox.archive", { accountId: "acc_1", key: snapshot.messages[0].key });
+    assert.equal(archived.ok, true);
+    assert.deepEqual(bodyCacheFiles(host), []);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("removing a mailbox clears that mailbox's cached bodies and no other", async () => {
+  const personal = createFakeServer({ uidNext: 1 });
+  const work = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({
+    instances: [oneAccount("owner@qq.com"), { instanceId: "acc_2", username: "someone@163.com" }],
+    servers: { "mailbox#acc_1": personal, "mailbox#acc_2": work },
+  });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host, ["acc_1", "acc_2"]);
+    personal.deliver(message({ uid: 1, messageId: "<p@example.com>", raw: rawMessage({ text: "personal body" }) }));
+    work.deliver(message({ uid: 1, messageId: "<w@example.com>", raw: rawMessage({ text: "work body" }) }));
+    host.emit("plugin:settingsChanged", {});
+    await waitFor(async () => (await panel(plugin, "inbox.snapshot")).snapshot.messages.length === 2, {
+      label: "mail from both mailboxes",
+    });
+    const snapshot = (await panel(plugin, "inbox.snapshot")).snapshot;
+    for (const entry of snapshot.messages) {
+      const opened = await panel(plugin, "inbox.openMessage", { accountId: entry.accountId, key: entry.key });
+      assert.equal(opened.ok, true);
+    }
+    assert.equal(bodyCacheFiles(host).length, 2);
+
+    const removed = await panel(plugin, "inbox.removeAccount", { instanceId: "acc_1" });
+    assert.equal(removed.ok, true);
+    assert.deepEqual(
+      bodyCacheIndex(host).entries.map((entry) => entry.accountId),
+      ["acc_2"],
+      "only the removed mailbox is gone",
+    );
+    assert.equal(bodyCacheFiles(host).length, 1);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("the panel is told how much the cache holds, and can empty it", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    assert.deepEqual((await panel(plugin, "inbox.snapshot")).snapshot.cache, { bytes: 0, entries: 0 });
+    server.deliver(
+      message({ uid: 1, subject: "Weigh me", messageId: "<weight@example.com>", raw: rawMessage({ text: "weight" }) }),
+    );
+    const snapshot = await checkUntil(plugin, 1);
+    await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: snapshot.messages[0].key });
+
+    const shown = (await panel(plugin, "inbox.snapshot")).snapshot.cache;
+    assert.equal(shown.entries, 1);
+    assert.ok(shown.bytes > 0, `the panel shows a real size, saw ${shown.bytes}`);
+
+    const cleared = await panel(plugin, "inbox.clearBodyCache");
+    assert.equal(cleared.ok, true);
+    assert.deepEqual({ bytes: cleared.bytes, entries: cleared.entries }, { bytes: 0, entries: 0 });
+    assert.deepEqual(bodyCacheFiles(host), []);
+    assert.deepEqual((await panel(plugin, "inbox.snapshot")).snapshot.cache, { bytes: 0, entries: 0 });
+
+    // The mail itself is untouched: the next open simply downloads again.
+    const reopened = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: snapshot.messages[0].key });
+    assert.equal(reopened.ok, true);
+    assert.equal(server.bodyFetches.length, 2);
   } finally {
     await plugin.onUnload();
     rmSync(host.dataPath, { recursive: true, force: true });

@@ -43,7 +43,7 @@ keeping its own `LICENSE` and notice files inside its directory.
 | `minih.personal-knowledge` (`Personal Knowledge`) | 0.8.0 | minih-git | MIT | this repository |
 | `minih.selection-translate` (`Selection Translate`) | 0.3.2 | minih-git | MIT | this repository |
 | `minih.cache-keepwarm` (`Cache keep-warm`) | 0.1.0 | minih-git | MIT | this repository |
-| `minih.inbox-mail` (`Mail Assistant`) | 0.7.1 | minih-git | MIT | this repository |
+| `minih.inbox-mail` (`Mail Assistant`) | 0.8.0 | minih-git | MIT | this repository |
 | `minih.session-titles` (`Session Titles`) | 0.1.0 | minih-git | MIT | this repository |
 | `pi.file-manager` (`File Manager`) | 0.9.0 | Tioit-Wang | not declared by the author | not published by the author |
 
@@ -98,6 +98,21 @@ below a cosine floor (0.35 by default, `scoreThreshold` in `embedding.json`) no
 longer enters the fusion. It adds no permission, no data-format change, and no
 new Desktop requirement. See `docs/adr/0004-progressive-context-pack.md` in the
 plugin.
+
+`minih.inbox-mail` 0.8.0 makes opening a message cost one download instead of one
+per open: the bytes the server sent are kept in `body-cache/` inside the plugin's
+data folder — one file per message, named by a SHA-256 of the account and the
+message key, with an `index.json` that records each body's size and last-open time
+— so a second open, a reply, a forward and the agent's read or reply reuse them.
+That cache is plain text, not encrypted, capped at 200 MB (least recently opened
+first) and at 30 days counted from the last open, emptied by a **Clear body cache**
+button under the panel's mailbox list after asking, and pruned when a message is
+deleted or archived or when its mailbox is removed. A missing, damaged, expired or
+unwritable entry is a miss, never an error: the message is downloaded again.
+Opening an unread message from the cache still sends the one `STORE` of `\Seen`
+the panel always sent; a tool's read still changes no flag. No permission, Desktop
+requirement or stored-format change — and the safety notes now say where a body
+is kept instead of claiming it never reaches the disk.
 
 `minih.inbox-mail` 0.7.1 fixes the two ways out of the panel that stopped at
 "That request was not valid." / "请求不合法。": clicking a link in a message and

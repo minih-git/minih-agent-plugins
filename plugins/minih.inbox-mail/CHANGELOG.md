@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.8.0
+
+- **A message is downloaded once.** Opening a message keeps the bytes the server
+  sent in `<data folder>/body-cache/` — one file per message, named by a SHA-256 of
+  the account and the message key, with an `index.json` beside them that records
+  each body's size and when it was last opened. Opening the same message again
+  reads that file instead of asking the mailbox, and so do a reply, a forward, the
+  agent's read and the agent's reply. The in-memory copy of the last eight opened
+  messages is gone: there is one cache now (`lib/body-cache.js`).
+- **What that costs, in the same words everywhere.** Those bytes are plain text in
+  this plugin's data folder, not encrypted, protected exactly as the stored
+  envelopes beside them are. They stop at **200 MB** (the least recently opened
+  body goes first) and at **30 days** without being opened, the Inbox panel shows
+  the total under the mailbox list, and **Clear body cache** empties it after
+  asking. The manifest's safety notes, the `mail_read_message` description and the
+  README say exactly this in both languages — the old promise that a body is never
+  written to disk is gone, because it is no longer true.
+- **The cache follows the mail.** Deleting or archiving a message removes its body;
+  removing a mailbox removes every body of that mailbox. An entry is named with the
+  mailbox's `UIDVALIDITY` as well as the message key, so a rebuilt mailbox never
+  hands back an old body under a number that now means something else.
+- **A broken cache is not a broken mailbox.** A body that is missing, expired,
+  damaged or unwritable counts as a miss: the message is downloaded as before and
+  nothing is reported, because nothing went wrong for the user. A cache write
+  failure never fails an open, and two opens of the same message cannot corrupt the
+  file (one writer, temp file, rename).
+- **Reading is unchanged in what it changes.** Opening an unread message still
+  sends the one `UID STORE +FLAGS (\Seen)` the panel always sent, even when the
+  body came from disk; a tool's read still changes no flag at all. No new
+  permission, no Desktop version change, and the state file's format is untouched.
+
 ## 0.7.1
 
 - Fix **clicking a link in a message** and **Open web mailbox** doing nothing

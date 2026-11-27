@@ -7,6 +7,7 @@ const path = require("node:path");
 
 const accountsFile = require("./lib/accounts");
 const { createAgentTools } = require("./lib/agent-tools");
+const { createBodyCache, DIR_NAME: BODY_CACHE_DIR } = require("./lib/body-cache");
 const messages = require("./lib/messages");
 const providers = require("./lib/providers");
 const { normalizeSettings } = require("./lib/settings");
@@ -24,6 +25,14 @@ let settingsCache = normalizeSettings({});
 let rawSettings = {};
 let root = accountsFile.emptyRoot();
 let runtime = null;
+/**
+ * The bodies the user has opened, kept on this computer.
+ *
+ * It lives beside the state file (`body-cache/`) because it is the same kind of
+ * thing: data this plugin owns in its own folder. See `lib/body-cache.js` for what
+ * it keeps and for the two limits that bound it.
+ */
+let bodyCache = null;
 let subscriptions = [];
 /** The tools this plugin contributes to the agent, and their registration handle. */
 let agentTools = null;
@@ -217,6 +226,14 @@ async function onPanelInvoke(channel, payload) {
         return { ok: true, ...(await runtime.openWebmail(payload?.instanceId)) };
       case "inbox.openExternal":
         return { ok: true, ...(await runtime.openExternal(payload?.url)) };
+      // What "open a message" keeps on this computer. The host builds the settings
+      // page from the manifest and that page cannot hold a button, so emptying this
+      // from the panel is the only way a user can reclaim the space.
+      case "inbox.clearBodyCache": {
+        if (!bodyCache) throw coded("PLUGIN_NOT_LOADED", "the plugin is not loaded");
+        await bodyCache.clear();
+        return { ok: true, ...bodyCache.stats() };
+      }
       default:
         throw coded("UNSUPPORTED", `unknown panel channel: ${String(channel)}`);
     }
@@ -245,9 +262,15 @@ async function onLoad() {
   const instances = Array.isArray(slot?.instances) ? slot.instances : [];
   if (!stored) await migrateLegacy(instances);
 
+  // The body cache is read at load, not on the first open: it is one small file,
+  // and reading it here is what lets the panel show its size straight away.
+  bodyCache = createBodyCache({ dir: await dataPath(BODY_CACHE_DIR), log });
+  await bodyCache.load();
+
   runtime = createRuntime({
     host,
     root,
+    bodyCache,
     log,
     locale: () => locale,
     text,
@@ -321,6 +344,9 @@ async function onUnload() {
   subscriptions = [];
   await runtime?.unload().catch(() => undefined);
   runtime = null;
+  // Nothing to flush: the cache writes a body through one rename as it goes, so an
+  // unload only has to let go of the object.
+  bodyCache = null;
   await writing;
   await agentTools?.unregister().catch(() => undefined);
   agentTools = null;

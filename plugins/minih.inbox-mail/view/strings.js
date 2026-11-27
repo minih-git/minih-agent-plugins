@@ -62,6 +62,21 @@ const TEXT = {
     removeYes: "Remove",
     removeNo: "Cancel",
     accountError: "Last error",
+    // What opening a message leaves on this computer. The host's settings page is
+    // built from the manifest and cannot hold a button, so the size and the one
+    // action that empties it live here, under the mailbox list.
+    cacheTitle: "Body cache",
+    cacheLine: (size, count) => (count === 1 ? `${size} · 1 message` : `${size} · ${count} messages`),
+    cacheEmpty: "Bodies you open are kept on this computer, so a second open needs no download.",
+    cacheClear: "Clear body cache",
+    cacheClearing: "Clearing…",
+    cacheCleared: "Body cache cleared.",
+    cacheFailed: "Could not clear the body cache.",
+    cacheConfirmTitle: "Clear the body cache?",
+    cacheConfirmBody:
+      "Bodies you opened are stored on this computer in plain text, up to 200 MB and for 30 days. Clearing them frees that space; opening one of those messages again downloads it again.",
+    cacheConfirmYes: "Clear",
+    cacheConfirmNo: "Cancel",
     // List.
     searchPlaceholder: "Search sender, subject or preview ( / )",
     searchLabel: "Search this inbox",
@@ -324,6 +339,20 @@ const TEXT = {
     removeYes: "移除",
     removeNo: "取消",
     accountError: "最近一次错误",
+    // 打开一封邮件在这台电脑上留下的东西。宿主的设置页由 manifest 生成，放不了
+    // 按钮，所以占用大小和「清空」这个动作放在这里，邮箱列表下方。
+    cacheTitle: "正文缓存",
+    cacheLine: (size, count) => `${size} · ${count} 封`,
+    cacheEmpty: "你打开过的正文会留在本机，第二次打开不必再下载。",
+    cacheClear: "清除正文缓存",
+    cacheClearing: "正在清除…",
+    cacheCleared: "已清除正文缓存。",
+    cacheFailed: "没能清除正文缓存。",
+    cacheConfirmTitle: "清除正文缓存？",
+    cacheConfirmBody:
+      "你打开过的邮件正文以明文存在这台电脑上，最多 200 MB、保留 30 天。清除会释放这些空间，之后打开那些邮件会重新下载。",
+    cacheConfirmYes: "清除",
+    cacheConfirmNo: "取消",
     searchPlaceholder: "搜索发件人、主题或摘要（ / ）",
     searchLabel: "搜索这个收件箱",
     searchClear: "清空搜索",
