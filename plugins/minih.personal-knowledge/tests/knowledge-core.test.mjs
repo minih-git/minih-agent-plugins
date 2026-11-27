@@ -10,11 +10,15 @@ import { isolatedHome } from "./helpers/home.mjs";
 // Keep every fixture away from the real ~/.personal-knowledge (see helpers/home.mjs).
 await isolatedHome();
 
+const SANDBOX_EMBEDDING_PATH = process.env.PERSONAL_KNOWLEDGE_EMBEDDING_CONFIG;
 const fixedNow = () => new Date("2026-07-17T00:00:00Z");
 
+/** The shared fixture vault, with the vector channel off unless a test enables it. */
 async function fixture() {
   // Same vault as the `knowledge_context` snapshot test (helpers/context-fixture).
   const { root, vault, config } = await createContextVault();
+  // Deterministic and offline: no vector channel unless a test turns it on.
+  await writeFile(SANDBOX_EMBEDDING_PATH, '{"enabled": false}\n');
   const service = await new KnowledgeService({ vaultPath: vault, config, now: fixedNow }).initialize();
   return { root, vault, service };
 }
@@ -30,7 +34,7 @@ test("repository and topic routes produce a bounded context pack", async () => {
 
 test("context loads project notes before truncated default notes even on a small budget", async () => {
   const { service } = await fixture();
-  const context = await service.context({ cwd: "/workspace/demo/src", topic: "", maxChars: 6_000 });
+  const context = await service.context({ cwd: "/workspace/demo/src", topic: "", maxChars: 6_000, mode: "full" });
   assert.deepEqual(context.matchedProjects, ["Demo"]);
   const paths = context.notes.map((note) => note.path);
   assert.ok(paths[0].startsWith("01 Projects/"), "project notes must load first");
@@ -38,6 +42,19 @@ test("context loads project notes before truncated default notes even on a small
   assert.ok(paths.some((candidate) => candidate === "02 Areas/Preferences.md"), "default note still appears as a head summary");
   const preferences = context.notes.find((note) => note.path === "02 Areas/Preferences.md");
   assert.ok(preferences && preferences.content.length <= 4_000, "default notes are head-only summaries");
+});
+
+test("navigate leads with default notes and returns no body for routed notes", async () => {
+  const { service } = await fixture();
+  const context = await service.context({ cwd: "/workspace/demo/src", topic: "Demo server" });
+  assert.equal(context.mode, "navigate");
+  assert.equal(context.notes[0].path, "02 Areas/Preferences.md", "the default note leads");
+  assert.ok(context.notes[0].head.content.length > 0, "the default note keeps a head excerpt");
+  for (const note of context.notes) {
+    assert.equal(note.content, undefined, `${note.path} must not carry its body`);
+    assert.equal(typeof note.abstract, "string");
+    assert.ok(Array.isArray(note.outline));
+  }
 });
 
 test("write prunes backup snapshots past the retention window", async () => {

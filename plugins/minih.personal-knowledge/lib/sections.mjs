@@ -221,11 +221,12 @@ export function appendToSectionSpan(content, startLine, endLine, extra) {
 }
 
 /**
- * Character count of each outline entry's section: from its heading line to the
- * line before the next heading of the same or a higher level. `outline` comes
- * from `headingOutline(body)`, so line numbers index into `body`.
+ * Each outline entry's section, as `{ startLine, endLine, chars, text }`: the
+ * span runs from its heading line to the line before the next heading of the
+ * same or a higher level. `outline` comes from `headingOutline(body)`, so line
+ * numbers index into `body`.
  */
-export function sectionSizes(outline, body) {
+export function sectionSpans(outline, body) {
   const lines = splitLinesKeepingEnds(body ?? "");
   return outline.map((entry, position) => {
     let endLine = lines.length;
@@ -235,12 +236,19 @@ export function sectionSizes(outline, body) {
         break;
       }
     }
-    let chars = 0;
-    for (let line = entry.line; line < endLine && line < lines.length; line += 1) {
-      chars += lines[line].length;
-    }
-    return chars;
+    const spanLines = lines.slice(entry.line, Math.max(entry.line, endLine));
+    return {
+      startLine: entry.line,
+      endLine,
+      chars: spanLines.reduce((sum, line) => sum + line.length, 0),
+      text: spanLines.join(""),
+    };
   });
+}
+
+/** Character count of each outline entry's section (ADR 0004 §2, L1). */
+export function sectionSizes(outline, body) {
+  return sectionSpans(outline, body).map((span) => span.chars);
 }
 
 const ISO_DATE = /(\d{4}-\d{2}-\d{2})/;

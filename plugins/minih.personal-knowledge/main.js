@@ -1191,13 +1191,15 @@ async function startProfileScheduler(signal) {
 }
 
 /**
- * The retrieval tools, registered in this process (ADR 0003 §2).
+ * The retrieval tools, registered in this process (ADR 0003 §2). `knowledge_context`
+ * joined them in ADR 0004 §4: its sections come from the same retrieval
+ * channel, so in `host` mode its query vector can only be computed here too.
  *
  * `pi.embeddings.embed` exists only here, so in `host` mode a query can only be
- * turned into a vector here — the MCP server withholds `knowledge_search` and
- * `conversation_search` in that mode (it reads `embedding.json` at startup) and
- * this process serves them instead, over the same `KnowledgeService`, index,
- * and vector file.
+ * turned into a vector here — the MCP server withholds `knowledge_search`,
+ * `conversation_search`, and `knowledge_context` in that mode (it reads
+ * `embedding.json` at startup) and this process serves them instead, over the
+ * same `KnowledgeService`, index, and vector file.
  *
  * The two sets are named differently (`plugin_<id>_<tool>` here,
  * `plugin_<id>_<serverId>_<tool>` on the MCP side), and keeping the model from
@@ -1268,19 +1270,28 @@ async function unregisterKnowledgeTools() {
 }
 
 /**
- * Run one of the two retrieval tools with the query vector computed here. The
- * text the model reads is the same as the MCP tool's, so the two paths cannot
- * answer differently.
+ * Run one of the registered retrieval tools with the query vector computed
+ * here. The text the model reads is the same as the MCP tool's, because both
+ * call the same renderer (`renderMainProcessTool` / `renderToolResult`), so the
+ * two paths cannot answer differently (ADR 0003 §2, ADR 0004 §4).
  */
 async function runKnowledgeTool(name, args, render) {
   const input = args ?? {};
   const service = await ensurePanelService();
-  const embedQuery = async (text) => {
-    const [vector] = await service.embedding.embed([text]);
-    return vector;
-  };
+  // Without an embedding client there is no vector to add; the tools still
+  // answer from the lexical and graph channels.
+  const embedQuery = service.embedding
+    ? async (text) => {
+        const [vector] = await service.embedding.embed([text]);
+        return vector;
+      }
+    : null;
   if (name === "knowledge_search") {
     const value = await service.search(input, { embedQuery });
+    return render(name, value);
+  }
+  if (name === "knowledge_context") {
+    const value = await service.context(input, { embedQuery });
     return render(name, value);
   }
   const value = await service.conversationSearch(input);

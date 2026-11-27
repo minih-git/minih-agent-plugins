@@ -13,14 +13,15 @@ import { isolatedHome } from "./helpers/home.mjs";
 await isolatedHome();
 
 /**
- * The MCP server decides at startup whether it lists the two retrieval tools
- * (ADR 0003 §2). This spawns the real `mcp/server.mjs`, like
+/**
+ * The MCP server decides at startup whether it lists the retrieval tools
+ * (ADR 0003 §2, ADR 0004 §4). This spawns the real `mcp/server.mjs`, like
  * `scripts/probe-mcp.mjs`, with an `embedding.json` of each provider, and
  * asserts what the model would be offered.
  */
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const RETRIEVAL_TOOLS = ["knowledge_search", "conversation_search"];
+const RETRIEVAL_TOOLS = ["knowledge_search", "conversation_search", "knowledge_context"];
 
 /** One MCP exchange over stdio; resolves with every answer by id. */
 async function withServer(embedding, run) {
@@ -99,13 +100,17 @@ test("host mode keeps the retrieval tools away from the MCP server", async () =>
       for (const name of RETRIEVAL_TOOLS) {
         assert.ok(!names.includes(name), `${name} must not be listed in host mode`);
       }
-      assert.ok(names.includes("knowledge_read"), "the other tools stay");
-      assert.ok(names.includes("knowledge_context"));
+      for (const other of ["knowledge_read", "knowledge_write", "knowledge_stale", "knowledge_links"]) {
+        assert.ok(names.includes(other), `${other} stays on the MCP server`);
+      }
 
       // A direct call says where the tool lives instead of "unknown tool".
-      const refused = await call("tools/call", { name: "knowledge_search", arguments: { query: "x" } });
-      assert.match(refused.error?.message ?? "", /main process in host mode/);
-      assert.match(refused.error?.message ?? "", /knowledge_search/);
+      for (const name of RETRIEVAL_TOOLS) {
+        const arguments_ = name === "knowledge_context" ? { cwd: "/workspace/demo" } : { query: "x" };
+        const refused = await call("tools/call", { name, arguments: arguments_ });
+        assert.match(refused.error?.message ?? "", /main process in host mode/);
+        assert.match(refused.error?.message ?? "", new RegExp(name));
+      }
     },
   );
 });

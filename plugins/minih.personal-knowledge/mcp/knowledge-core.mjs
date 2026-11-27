@@ -28,7 +28,21 @@ import { composeNote, parseFrontmatter, patchFrontmatterSource } from "../lib/fr
 import { loadOntology } from "../lib/ontology.mjs";
 import { redactSensitiveContent, findSensitiveContent, redactionViolation } from "../lib/redact.mjs";
 import { expandWithGraph, reciprocalRankFusion, rerank, retrievalState } from "../lib/retrieval.mjs";
-import { appendToSectionSpan, locateSection, replaceSectionSpan } from "../lib/sections.mjs";
+import {
+  appendToSectionSpan,
+  cutAtSentence,
+  firstIsoDate,
+  firstParagraphAfterH1,
+  locateSection,
+  replaceSectionSpan,
+  sectionSpans,
+} from "../lib/sections.mjs";
+import {
+  CONTEXT_HEAD_LABEL_CHARS,
+  CONTEXT_PACK_ALLOWANCE,
+  renderContextNote,
+  renderContextSection,
+} from "./context-text.mjs";
 import { VaultIndex } from "../lib/vault-index.mjs";
 import { VectorIndex } from "../lib/vector-index.mjs";
 import { EMBED_BATCH } from "../lib/embeddings.mjs";
@@ -37,6 +51,15 @@ const SEARCH_EXTENSIONS = new Set([".md", ".base"]);
 const WRITE_EXTENSION = ".md";
 const DEFAULT_MAX_READ_CHARS = 24_000;
 const DEFAULT_MAX_CONTEXT_CHARS = 32_000;
+/** ADR 0004 §1: the smaller pack is the default, `full` keeps 32,000. */
+const DEFAULT_NAVIGATE_CONTEXT_CHARS = 12_000;
+/** L0 limits: a `summary` up to 320 characters, a first paragraph 256 (§2). */
+const ABSTRACT_SUMMARY_CHARS = 320;
+const ABSTRACT_BODY_CHARS = 256;
+/** L1 stops after this many headings (§2). */
+const OUTLINE_ENTRY_LIMIT = 60;
+const DEFAULT_SECTION_LIMIT = 6;
+const DEFAULT_SECTION_CHARS = 2_000;
 const MAX_NOTE_BYTES = 2 * 1024 * 1024;
 
 // Kept as re-exports so existing imports of this facade keep working.
@@ -677,28 +700,41 @@ export class KnowledgeService {
     return neighbors;
   }
 
-  async #searchRanked({ query, limit, scope, includeConversations = false, embedQuery = null }) {
+  /**
+   * Hybrid retrieval: one fusion of the lexical and vector channels (ADR 0001
+   * §6), at the granularity the caller needs (ADR 0004 §3).
+   *
+   * `granularity: "note"` keeps the best chunk per note, which is what
+   * `knowledge_search` ranks, expands through the graph, and reranks.
+   * `granularity: "chunk"` keeps every matching chunk, which is what
+   * `context()` needs to return the sections that match a topic instead of
+   * whole notes.
+   *
+   * A vector hit below the configured score floor never enters fusion: a
+   * scoped query with no relevant vectors used to fill `limit` with noise.
+   */
+  async #retrieve({ query, inScope, granularity = "note", channelLimit = 50, embedQuery = null }) {
     await this.index.refresh();
     const budget = this.embedding && !this.backgroundRefreshed ? 3000 : 0;
     if (budget > 0) {
       await this.ensureVectors({ budgetMs: budget });
       this.backgroundRefreshed = true;
     }
-    const inScope = (relative) =>
-      (!scope || relative === scope || relative.startsWith(`${scope}/`)) &&
-      (includeConversations || !isConversationPath(relative));
+    const keyFor = (relative, chunkIndex) =>
+      granularity === "chunk" ? `${relative}\u0000${chunkIndex}` : relative;
 
-    // Lexical channel: chunk-level BM25F grouped by note.
+    // Lexical channel: chunk-level BM25F, grouped by note or kept per chunk.
     const bm25 = this.#bm25For();
-    const lexicalHits = bm25.search(query, 50).filter(([doc]) => inScope(doc.path));
-    const lexicalByNote = new Map();
+    const lexicalHits = bm25.search(query, channelLimit).filter(([doc]) => inScope(doc.path));
+    const lexicalByKey = new Map();
     for (const [doc, score] of lexicalHits) {
-      const entry = lexicalByNote.get(doc.path) ?? { best: null, score: 0 };
-      if (!entry.best || score > entry.score) {
-        entry.best = doc;
-        entry.score = score;
-      }
-      lexicalByNote.set(doc.path, entry);
+      // Re-setting a key keeps its first position, so the insert order stays
+      // best-first and the fusion ranks by rank, not by score.
+      lexicalByKey.set(keyFor(doc.path, doc.chunkIndex), {
+        path: doc.path,
+        chunkIndex: doc.chunkIndex,
+        score,
+      });
     }
 
     // Another process may have written the index since this one started (a
@@ -712,12 +748,13 @@ export class KnowledgeService {
     // itself (`options.embedQuery`, ADR 0003 §2) supplies the vector instead:
     // in `host` mode this process has no `pi`, so only the plugin's main
     // process can compute it.
-    let vectorByNote = new Map();
+    const vectorByKey = new Map();
     let reason = this.embedding ? this.vectorReason ?? null : null;
     // A host model's query vector can only arrive from the caller; without one
     // the ranked search keeps its lexical and graph channels.
     const canEmbedHere =
       this.embedding && !this.embedding.recentlyUnreachable() && !this.#cannotEmbedHere();
+    const threshold = this.#scoreThreshold();
     if (this.embedding && (embedQuery || canEmbedHere)) {
       try {
         const [queryVector] = embedQuery
@@ -731,14 +768,18 @@ export class KnowledgeService {
                 ),
               ),
             ]);
-        const hits = this.vectors.search(queryVector, { limit: 50 }).filter(({ chunk }) => inScope(chunk.path));
+        const hits = this.vectors
+          .search(queryVector, { limit: channelLimit })
+          .filter(({ chunk, score }) => score >= threshold && inScope(chunk.path));
         for (const { chunk, score } of hits) {
-          const entry = vectorByNote.get(chunk.path) ?? { best: null, score: 0 };
-          if (!entry.best || score > entry.score) {
-            entry.best = chunk;
-            entry.score = score;
-          }
-          vectorByNote.set(chunk.path, entry);
+          const record = this.index.note(chunk.path);
+          const chunkIndex = record ? record.chunks.findIndex((item) => item.sha === chunk.sha) : -1;
+          vectorByKey.set(keyFor(chunk.path, chunkIndex), {
+            path: chunk.path,
+            chunkIndex,
+            chunk,
+            score,
+          });
         }
         reason = this.pendingChunkCount > 0 ? "pending" : null;
       } catch (error) {
@@ -746,14 +787,51 @@ export class KnowledgeService {
         // `markUnreachable` is the Ollama probe cache; a host rejection says
         // nothing about that endpoint, so it must not poison the next search.
         if (!this.embedding.isHost) this.embedding.markUnreachable();
-        vectorByNote = new Map();
+        vectorByKey.clear();
       }
     }
 
-    const fused = reciprocalRankFusion([
-      [...lexicalByNote.keys()],
-      [...vectorByNote.keys()],
-    ]);
+    const fused = reciprocalRankFusion([[...lexicalByKey.keys()], [...vectorByKey.keys()]]);
+    return {
+      fused,
+      lexicalByKey,
+      vectorByKey,
+      retrieval: retrievalState({
+        enabled: Boolean(this.embedding),
+        vectorReady: Boolean(this.vectors.vectors),
+        reason: reason && reason !== "pending" ? reason : null,
+        pendingChunks: this.pendingChunkCount,
+      }),
+    };
+  }
+
+  /** The cosine floor from `embedding.json` (ADR 0004 §3). */
+  #scoreThreshold() {
+    const configured = this.embeddingSettings?.scoreThreshold;
+    return typeof configured === "number" ? configured : 0.35;
+  }
+
+  /** The vector channel's state without running a retrieval. */
+  #vectorState() {
+    return retrievalState({
+      enabled: Boolean(this.embedding),
+      vectorReady: Boolean(this.vectors?.vectors),
+      reason: this.vectorReason ?? null,
+      pendingChunks: this.pendingChunkCount ?? 0,
+    });
+  }
+
+  async #searchRanked({ query, limit, scope, includeConversations = false, embedQuery = null }) {
+    const inScope = (relative) =>
+      (!scope || relative === scope || relative.startsWith(`${scope}/`)) &&
+      (includeConversations || !isConversationPath(relative));
+    const { fused, lexicalByKey, vectorByKey, retrieval } = await this.#retrieve({
+      query,
+      inScope,
+      granularity: "note",
+      embedQuery,
+    });
+
     const expanded = expandWithGraph(fused, (key) => this.#typedNeighbors(key));
     const ranked = rerank(expanded, {
       archived: (key) => {
@@ -777,12 +855,11 @@ export class KnowledgeService {
     for (const [relative] of ranked) {
       const record = this.index.note(relative);
       if (!record) continue;
-      const lexicalEntry = lexicalByNote.get(relative);
-      const vectorEntry = vectorByNote.get(relative);
-      const bestDoc = lexicalEntry?.best ?? null;
-      const bestChunk = bestDoc
-        ? record.chunks[bestDoc.chunkIndex]
-        : vectorEntry?.best ?? record.chunks[0] ?? null;
+      const lexicalEntry = lexicalByKey.get(relative);
+      const vectorEntry = vectorByKey.get(relative);
+      const bestChunk = lexicalEntry
+        ? record.chunks[lexicalEntry.chunkIndex]
+        : vectorEntry?.chunk ?? record.chunks[0] ?? null;
       const chunkText = bestChunk ? record.raw.slice(bestChunk.start, bestChunk.end) : record.raw;
       const matchedBy = [];
       if (lexicalEntry) matchedBy.push("lexical");
@@ -803,18 +880,12 @@ export class KnowledgeService {
       if (results.length >= limit) break;
     }
 
-    const pendingChunks = this.pendingChunkCount;
     return {
       query,
       mode: "ranked",
       count: results.length,
       results,
-      retrieval: retrievalState({
-        enabled: Boolean(this.embedding),
-        vectorReady: Boolean(this.vectors.vectors),
-        reason: reason && reason !== "pending" ? reason : null,
-        pendingChunks,
-      }),
+      retrieval,
     };
   }
 
@@ -880,13 +951,66 @@ export class KnowledgeService {
   }
 
   /**
+   * L0 (ADR 0004 §2): a note's one-line abstract, redacted.
+   *
+   * `metadata.summary` wins when it is a non-empty string — it is the one
+   * sentence the user wrote for this purpose — and is cut to 320 characters.
+   * Otherwise the first paragraph after the H1 stands in, cut to 256.
+   * Frontmatter text is never used as prose, and neither form reads the body.
+   */
+  abstractFor(record) {
+    const summary = record.metadata?.summary;
+    if (typeof summary === "string" && summary.trim() !== "") {
+      const text = redactSensitiveContent(summary.trim().replace(/\s+/g, " "));
+      return { abstract: cutAtSentence(text, ABSTRACT_SUMMARY_CHARS), abstractSource: "summary" };
+    }
+    const paragraph = firstParagraphAfterH1(record.frontmatter?.body ?? record.raw);
+    return {
+      abstract: cutAtSentence(redactSensitiveContent(paragraph), ABSTRACT_BODY_CHARS),
+      abstractSource: "body",
+    };
+  }
+
+  /**
+   * L1 (ADR 0004 §2): the heading outline with each section's character count
+   * and the first `YYYY-MM-DD` in its heading or body, at most 60 entries.
+   */
+  outlineFor(record) {
+    const body = record.frontmatter?.body ?? record.raw;
+    const outline = record.outline ?? [];
+    const spans = sectionSpans(outline, body);
+    const entries = outline.slice(0, OUTLINE_ENTRY_LIMIT).map((entry, index) => ({
+      level: entry.level,
+      text: redactSensitiveContent(entry.text),
+      chars: spans[index].chars,
+      date: firstIsoDate(entry.text) ?? firstIsoDate(spans[index].text),
+    }));
+    return { entries, truncated: outline.length > entries.length };
+  }
+
+  /**
    * Context routing (ADR 0001 §7): mapping-file projects first, then notes of
    * the project class whose `repo` is a path prefix of the working directory
    * (worktrees under `<repo>/.worktree/` match their repository), then alias
-   * matches against the topic.
+   * matches against the topic. Routing is the same in both modes.
+   *
+   * `mode: "navigate"` (default, ADR 0004) returns the routed notes as an
+   * abstract and an outline plus the sections that match `topic`, and never a
+   * whole routed note. `mode: "full"` is the 0.7.2 behavior byte for byte and
+   * is what a caller asks for when the user wants the notes themselves.
    */
-  async context({ cwd, topic = "", maxChars } = {}) {
-    const totalLimit = boundedInteger(maxChars, DEFAULT_MAX_CONTEXT_CHARS, 4_000, 100_000, "maxChars");
+  async context({ cwd, topic = "", maxChars, mode, sectionLimit, sectionChars } = {}, { embedQuery = null } = {}) {
+    const contextMode = mode ?? "navigate";
+    if (contextMode !== "navigate" && contextMode !== "full") {
+      throw new Error('mode must be "navigate" or "full".');
+    }
+    const totalLimit = boundedInteger(
+      maxChars,
+      contextMode === "navigate" ? DEFAULT_NAVIGATE_CONTEXT_CHARS : DEFAULT_MAX_CONTEXT_CHARS,
+      4_000,
+      100_000,
+      "maxChars",
+    );
     // Worktree-aware matching compares the cwd's real path so macOS `/var`
     // style symlinks and per-worktree checkouts resolve to their repository.
     // A cwd that does not exist (dry callers, tests) keeps its literal path.
@@ -964,6 +1088,39 @@ export class KnowledgeService {
       "config.contextPerNoteChars",
     );
 
+    // Archived conversations of this project: links and titles only, never
+    // content (ADR 0002 §5). A search for the details stays an explicit call.
+    let conversations = { project: null, count: 0, items: [] };
+    try {
+      const projectFolder = await this.#conversationProjectFolder({ workingPath, mappingProjects, metadataProjects });
+      conversations = await this.conversationsFor({ project: projectFolder, limit: 3 });
+    } catch {
+      // A missing or unreadable conversation folder is simply no history.
+    }
+    const matchedProjects = unique([
+      ...mappingProjects.map((project) => project.name),
+      ...metadataProjects.map((record) => record.title),
+    ]);
+    const matchedRoutes = routes.map((route) => route.name);
+
+    if (contextMode === "navigate") {
+      return this.#navigatePack({
+        workingPath,
+        topic,
+        requestedNotes,
+        summaryLimit,
+        totalLimit,
+        isDefaultNote,
+        matchedProjects,
+        matchedRoutes,
+        conversations,
+        sectionLimit,
+        sectionChars,
+        embedQuery,
+      });
+    }
+
+    // `full`: the 0.7.2 code path, moved under its branch unchanged.
     const notes = [];
     const missing = [];
     let remaining = totalLimit;
@@ -981,31 +1138,191 @@ export class KnowledgeService {
         missing.push({ path: requested, error: error.message });
       }
     }
-    // Archived conversations of this project: links and titles only, never
-    // content (ADR 0002 §5). A search for the details stays an explicit call.
-    let conversations = { project: null, count: 0, items: [] };
-    try {
-      const projectFolder = await this.#conversationProjectFolder({ workingPath, mappingProjects, metadataProjects });
-      conversations = await this.conversationsFor({ project: projectFolder, limit: 3 });
-    } catch {
-      // A missing or unreadable conversation folder is simply no history.
-    }
 
     return {
       cwd: workingPath || null,
       topic: topic || null,
+      mode: "full",
       conversations,
       conversationCaveat: conversations.count > 0 ? ARCHIVE_CAVEAT : null,
-      matchedProjects: unique([
-        ...mappingProjects.map((project) => project.name),
-        ...metadataProjects.map((record) => record.title),
-      ]),
-      matchedRoutes: routes.map((route) => route.name),
+      matchedProjects,
+      matchedRoutes,
       requestedNotes,
       notes,
       missing,
       truncated: remaining <= 0,
       noteOrder: "project/route notes first, then default notes (head-only)",
+    };
+  }
+
+  /**
+   * The `navigate` pack (ADR 0004 §2): default notes first (head excerpt plus
+   * L0/L1), then the routed notes as L0/L1, then the sections that match the
+   * topic. Each block is measured as the renderer will emit it, so the pack
+   * stops at `maxChars` instead of splitting a note or a section.
+   */
+  async #navigatePack({
+    workingPath,
+    topic,
+    requestedNotes,
+    summaryLimit,
+    totalLimit,
+    isDefaultNote,
+    matchedProjects,
+    matchedRoutes,
+    conversations,
+    sectionLimit,
+    sectionChars,
+    embedQuery,
+  }) {
+    const maxSections = boundedInteger(sectionLimit, DEFAULT_SECTION_LIMIT, 1, 12, "sectionLimit");
+    const maxSectionChars = boundedInteger(sectionChars, DEFAULT_SECTION_CHARS, 200, 10_000, "sectionChars");
+    const topicText = String(topic ?? "").trim();
+    const defaults = requestedNotes.filter((candidate) => isDefaultNote(candidate));
+    const routed = requestedNotes.filter((candidate) => !isDefaultNote(candidate));
+
+    const notes = [];
+    const missing = [];
+    let remaining = Math.max(0, totalLimit - CONTEXT_PACK_ALLOWANCE);
+    let truncated = false;
+
+    for (const requested of [...defaults, ...routed]) {
+      let record = null;
+      try {
+        const resolved = await this.findNote(requested);
+        record = this.index.note(resolved.relative);
+        if (!record) throw new Error(`Knowledge note not found: ${requested}`);
+      } catch (error) {
+        missing.push({ path: requested, error: error.message });
+        continue;
+      }
+      const { abstract, abstractSource } = this.abstractFor(record);
+      const { entries, truncated: outlineTruncated } = this.outlineFor(record);
+      const note = {
+        path: record.path,
+        title: record.title,
+        type: record.metadata.type ?? null,
+        status: record.metadata.status ?? null,
+        updated: record.metadata.updated ?? null,
+        verified: record.metadata.verified ?? null,
+        reviewInterval: record.metadata.review_interval ?? null,
+        sha256: record.sha256,
+        abstract,
+        abstractSource,
+        outline: entries,
+        outlineTruncated,
+        head: null,
+      };
+      let block = renderContextNote(note);
+      if (block.length + 2 > remaining) {
+        truncated = true;
+        break;
+      }
+      if (isDefaultNote(requested)) {
+        // The user asked for these notes on every call, so they keep a head
+        // excerpt within whatever is left after their L0/L1 (§2).
+        const safe = redactSensitiveContent(record.raw);
+        const headRoom = Math.min(
+          summaryLimit,
+          safe.length,
+          remaining - block.length - 2 - CONTEXT_HEAD_LABEL_CHARS,
+        );
+        if (headRoom > 0) {
+          note.head = { chars: headRoom, truncated: headRoom < safe.length, content: safe.slice(0, headRoom) };
+          block = renderContextNote(note);
+        } else {
+          truncated = true;
+        }
+      }
+      notes.push(note);
+      remaining -= block.length + 2;
+    }
+
+    // L2: only a real topic turns the retrieval on. Graph expansion stays a
+    // note-level behavior of `knowledge_search` (§3).
+    const sections = [];
+    let retrieval = this.#vectorState();
+    if (topicText && routed.length > 0) {
+      const scope = new Set(routed);
+      const { fused, lexicalByKey, vectorByKey, retrieval: state } = await this.#retrieve({
+        query: topicText,
+        inScope: (relative) => scope.has(relative),
+        granularity: "chunk",
+        embedQuery,
+      });
+      retrieval = state;
+      const seen = new Set();
+      for (const [key, score] of fused) {
+        if (sections.length >= maxSections) break;
+        const hit = lexicalByKey.get(key) ?? vectorByKey.get(key);
+        if (!hit) continue;
+        const record = this.index.note(hit.path);
+        const chunk = record?.chunks[hit.chunkIndex ?? -1];
+        if (!record || !chunk) continue;
+        // A chunk without a heading is the preamble (the frontmatter and
+        // whatever precedes the first heading). L2 is a section, so it is not
+        // one — and its text is not prose.
+        if (chunk.headingPath.length === 0) continue;
+        const dedupe = `${hit.path}\u0000${chunk.headingPath.join(" > ")}`;
+        if (seen.has(dedupe)) continue;
+        seen.add(dedupe);
+        const section = {
+          path: record.path,
+          title: record.title,
+          headingPath: chunk.headingPath,
+          ...this.#sectionSpanFor(record, chunk),
+          score: Number(score.toFixed(4)),
+          matchedBy: [lexicalByKey.has(key) ? "lexical" : null, vectorByKey.has(key) ? "vector" : null].filter(Boolean),
+          content: redactSensitiveContent(record.raw.slice(chunk.start, chunk.end)).slice(0, maxSectionChars),
+        };
+        const block = renderContextSection(section);
+        if (block.length + 2 > remaining) {
+          truncated = true;
+          break;
+        }
+        sections.push(section);
+        remaining -= block.length + 2;
+      }
+    }
+
+    return {
+      cwd: workingPath || null,
+      topic: topic || null,
+      mode: "navigate",
+      conversations,
+      conversationCaveat: conversations.count > 0 ? ARCHIVE_CAVEAT : null,
+      matchedProjects,
+      matchedRoutes,
+      requestedNotes,
+      notes,
+      sections,
+      missing,
+      truncated,
+      retrieval,
+      noteOrder: "default notes first (head + L0/L1), then routed notes (L0/L1), then sections by score",
+    };
+  }
+
+  /**
+   * Line numbers and section hash for one chunk, chosen so a later
+   * `knowledge_read {note, section}` or `knowledge_write {operation:
+   * "replaceSection"}` lands on the same span. When the heading path is not
+   * unique the chunk's own span and hash are what the caller gets.
+   */
+  #sectionSpanFor(record, chunk) {
+    const headingPath = chunk.headingPath ?? [];
+    if (headingPath.length > 0) {
+      const lookup = locateSection(record.raw, headingPath.join(" > "));
+      if (lookup.ok) {
+        const lines = record.raw.split(/(?<=\n)/);
+        const text = lines.slice(lookup.startLine, lookup.endLine).join("");
+        return { startLine: lookup.startLine + 1, endLine: lookup.endLine, sectionSha256: sha256(text) };
+      }
+    }
+    return {
+      startLine: 1 + (record.raw.slice(0, chunk.start).match(/\n/g)?.length ?? 0),
+      endLine: 1 + (record.raw.slice(0, Math.max(chunk.start, chunk.end - 1)).match(/\n/g)?.length ?? 0),
+      sectionSha256: chunk.sha,
     };
   }
 

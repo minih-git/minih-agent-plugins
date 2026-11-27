@@ -91,13 +91,32 @@ async function contextThroughMcp(arguments_) {
   }
 }
 
-test("knowledge_context renders the 0.7.2 text byte for byte", async () => {
+test("mode \"full\" renders the 0.7.2 text byte for byte", async () => {
+  const result = await contextThroughMcp({
+    cwd: "/workspace/demo/src",
+    topic: "Demo server",
+    maxChars: 20_000,
+    mode: "full",
+  });
+  const expected = await readFile(SNAPSHOT, "utf8");
+  assert.equal(result.content[0].text, expected);
+  assert.equal(result.structuredContent.mode, "full");
+  assert.equal(result.structuredContent.notes.length, 4);
+});
+
+test("the MCP server and the main process render the same navigate pack", async () => {
+  const { renderMainProcessTool } = await import("../mcp/tool-text.mjs");
   const result = await contextThroughMcp({
     cwd: "/workspace/demo/src",
     topic: "Demo server",
     maxChars: 20_000,
   });
-  const expected = await readFile(SNAPSHOT, "utf8");
-  assert.equal(result.content[0].text, expected);
-  assert.equal(result.structuredContent.notes.length, 4);
+  const value = result.structuredContent;
+  assert.equal(value.mode, "navigate");
+  assert.equal(
+    renderMainProcessTool("knowledge_context", value),
+    result.content[0].text,
+    "the two owners of the tool must not answer differently (ADR 0004 §4)",
+  );
+  assert.equal(value.estimatedTokens, result.content[0].text.match(/Estimated tokens: ([\d,]+)/)[1].replace(/,/g, "") * 1);
 });

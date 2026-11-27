@@ -83,3 +83,19 @@ token: abcdefghijklmnopqrstuvwxyz
   };
   return { root, vault, config };
 }
+
+/**
+ * A temporary vault holding exactly these files (`{ "path": "content" }`), for
+ * packs that need their own layout rather than the shared fixture.
+ */
+export async function createVault(files) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "personal-knowledge-ctx-"));
+  const vault = path.join(root, "Knowledge");
+  await mkdir(vault, { recursive: true });
+  for (const [name, content] of Object.entries(files)) {
+    const absolute = path.join(vault, name);
+    await mkdir(path.dirname(absolute), { recursive: true });
+    await writeFile(absolute, content);
+  }
+  return { root, vault };
+}

@@ -11,6 +11,7 @@ import {
   MAIN_PROCESS_TOOLS,
   TOOL_SCHEMAS,
   renderConversationSearch,
+  renderKnowledgeContext,
   renderKnowledgeSearch,
 } from "./tool-text.mjs";
 
@@ -31,16 +32,16 @@ async function readPluginVersion() {
   }
   return "0.0.0";
 }
-
 /**
- * Whether the plugin's main process owns the two retrieval tools right now.
+ * Whether the plugin's main process owns the retrieval tools right now.
  *
  * In `host` mode the query vector can only be computed where `pi.embeddings`
  * lives, so the main process registers those tools through
  * `pi.agent.registerTool`. Serving them from here as well would put two tools
  * with the same job in front of the model, and this one would lose the vector
  * channel — so they are withheld from `tools/list` for the whole life of this
- * process (ADR 0003 §2).
+ * process (ADR 0003 §2). ADR 0004 §4 adds `knowledge_context` to that set: its
+ * sections come from the same retrieval channel.
  *
  * The host reads `tools/list` once per connection and does not handle
  * `notifications/tools/list_changed`, so the decision has to be made here, at
@@ -82,17 +83,10 @@ const TOOL_DEFINITIONS = [
   {
     name: "knowledge_context",
     title: "Load Personal Knowledge Context",
-    description:
-      "Load the smallest relevant context pack from the user's knowledge vault (local Markdown, Obsidian-compatible) by matching a repository path and task topic. Call before non-trivial work involving the user's projects, preferences, stack, infrastructure, or prior decisions.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        cwd: { type: "string", description: "Current repository or working-directory path." },
-        topic: { type: "string", description: "Short task topic, including relevant aliases, domains, or IPs." },
-        maxChars: { type: "integer", minimum: 4000, maximum: 100000 },
-      },
-      additionalProperties: false,
-    },
+    // Shared with the main-process tool (ADR 0003 §2, ADR 0004 §4) so both
+    // paths offer the same schema and render the same text.
+    description: TOOL_SCHEMAS.knowledge_context.description,
+    inputSchema: TOOL_SCHEMAS.knowledge_context.inputSchema,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
@@ -261,30 +255,7 @@ function renderToolResult(name, value) {
   if (name === "knowledge_read") {
     return `# ${value.title}\nPath: ${value.path}\nSHA-256: ${value.sha256}\nTruncated: ${value.truncated}\n\n${value.content}`;
   }
-  if (name === "knowledge_context") {
-    const heading = [
-      `Matched projects: ${value.matchedProjects.join(", ") || "none"}`,
-      `Matched routes: ${value.matchedRoutes.join(", ") || "none"}`,
-    ].join("\n");
-    const conversations = value.conversations?.count
-      ? [
-          "",
-          "## Recent conversations",
-          `${value.conversationCaveat}`,
-          ...(value.conversations.items ?? []).map(
-            (item) => `- ${item.created} · ${item.title} · session ${item.sessionId}${item.goal ? ` — ${item.goal}` : ""}`,
-          ),
-          value.conversations.project ? `Project folder: ${value.conversations.project}` : "",
-          "Ask conversation_search for more, or conversation_read with a session id.",
-        ]
-          .filter((line) => line !== "")
-          .join("\n")
-      : "";
-    const notes = value.notes
-      .map((note) => `\n## ${note.title}\nPath: ${note.path}\nVerified: ${note.metadata.verified || "unverified"}\n\n${note.content}`)
-      .join("\n");
-    return `${heading}${conversations}${notes}`;
-  }
+  if (name === "knowledge_context") return renderKnowledgeContext(value);
   if (name === "knowledge_search") return renderKnowledgeSearch(value);
   if (name === "conversation_search") return renderConversationSearch(value);
   if (name === "conversation_read") {
@@ -309,7 +280,7 @@ async function handleRequest(message) {
       capabilities: { tools: {} },
       serverInfo: { name: "Personal Knowledge", version: manifest.version },
       instructions:
-        "Call knowledge_context before relevant work. Search archived conversations when the question is about earlier work, a past decision, or where a previous session stopped; knowledge_search leaves them out unless include: [\"conversations\"] is passed. Use knowledge_write only for durable confirmed facts; dry-run first and never store secrets.",
+        "Call knowledge_context before relevant work, with a narrow topic: the default pack returns abstracts, outlines, and the sections that match. Search archived conversations when the question is about earlier work, a past decision, or where a previous session stopped; knowledge_search leaves them out unless include: [\"conversations\"] is passed. Use knowledge_write only for durable confirmed facts; dry-run first and never store secrets.",
     });
     return;
   }
