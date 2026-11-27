@@ -170,7 +170,7 @@ function fakeAgentApi() {
   };
 }
 
-async function makeToolBackend({ settings = HOST, vaultNotes = null } = {}) {
+async function makeToolBackend({ settings = HOST, vaultNotes = null, projects = [] } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "personal-knowledge-host-tool-"));
   const vault = path.join(root, "Knowledge");
   const dataPath = path.join(root, "data");
@@ -191,7 +191,7 @@ async function makeToolBackend({ settings = HOST, vaultNotes = null } = {}) {
   }
   await writeFile(
     path.join(root, "repo-map.json"),
-    JSON.stringify({ vaultPath: vault, ignoreFolders: [], backupRetentionDays: 0 }),
+    JSON.stringify({ vaultPath: vault, ignoreFolders: [], backupRetentionDays: 0, projects }),
   );
   process.env.PERSONAL_KNOWLEDGE_CONFIG = path.join(root, "repo-map.json");
   process.env.PERSONAL_KNOWLEDGE_VAULT = vault;
@@ -354,5 +354,29 @@ test("whoever else owns the tools still answers when host mode is off", async ()
     settings: { enabled: true, provider: "ollama", baseUrl: "http://127.0.0.1:11434", model: "bge-m3", exclude: [] },
   });
   assert.equal(api.tools.size, 0, "no duplicate tool when the MCP server can embed itself");
+  await backend.onUnload();
+});
+
+test("in host mode knowledge_context takes its sections from the host query vector", async () => {
+  const cwd = process.cwd();
+  const { backend, api } = await makeToolBackend({
+    projects: [{ name: "Notes", repoPrefixes: [cwd], notes: ["Alpha.md"] }],
+  });
+  const tool = api.tools.get("knowledge_context");
+  assert.ok(tool, "the main process registers knowledge_context in host mode (ADR 0004 §4)");
+
+  await backend.onPanelInvoke("kg.index.rebuild", { mode: "incremental" });
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const status = await backend.onPanelInvoke("kg.index.status", {});
+    if (!status.running && status.stored > 0) break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  // "takings" appears in no note, so only the vector channel can put Alpha's
+  // section in the pack — and only this process can compute that vector.
+  const answer = await tool.execute({ cwd, topic: "takings" });
+  assert.match(answer, /Mode: navigate/);
+  assert.match(answer, /## Sections for "takings"/);
+  assert.match(answer, /Alpha\.md/, `expected a vector-matched section, got: ${answer}`);
   await backend.onUnload();
 });
