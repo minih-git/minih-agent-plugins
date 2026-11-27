@@ -179,6 +179,18 @@ function createRuntime(deps) {
   }
 
   /**
+   * The watcher this account dials through, or the refusal the panel translates.
+   *
+   * Asked where a connection is actually needed, not at the top of every action: a
+   * body the cache already holds can be shown with the mailbox away, so "not
+   * connected yet" now appears only when something has to be dialled.
+   */
+  function requireWatcher(record) {
+    if (!record.watcher) throw coded("ACCOUNT_OFFLINE", "this mailbox is not connected yet");
+    return record.watcher;
+  }
+
+  /**
    * An envelope the store does not hold, named by the UID a server search returned.
    *
    * The panel only ever opens mail its own list holds, but a tool call can ask
@@ -1025,19 +1037,19 @@ function createRuntime(deps) {
      * One message's body, for the panel or for an agent tool.
      *
      * The bytes are kept on this computer by `lib/body-cache.js`, so opening the
-     * same message a second time downloads nothing. Nothing else about opening
-     * changes:
+     * same message a second time downloads nothing — and, when there is nothing to
+     * write back to the mailbox, opens no connection either. Nothing else about
+     * opening changes:
      *
      * - the cache is a miss whenever it cannot answer — missing, expired, damaged,
      *   unwritable — and the body is downloaded exactly as before, so a broken cache
      *   is never something the user sees;
-     * - IMAP still asks the server for the mailbox's `UIDVALIDITY` before it hands
-     *   anything back, so a renumbered mailbox refuses a stale key instead of serving
-     *   whatever that number means now;
      * - `options.markRead` still separates the panel from the tools: the panel
      *   opening an unread message sends one `UID STORE +FLAGS (\Seen)` even when the
      *   body came from disk, while a tool's read changes no flag anywhere. A failed
-     *   mark is reported as `readError` and never costs the user the message.
+     *   mark is reported as `readError` and never costs the user the message;
+     * - an IMAP envelope whose era is known is answered from disk alone; one from
+     *   before the era was stored still asks the mailbox first.
      */
     async openMessage(input, options = {}) {
       const markRead = options.markRead !== false;
@@ -1046,7 +1058,6 @@ function createRuntime(deps) {
       const state = accountStateOf(record.instanceId);
       const envelope = envelopeFor(state, input);
       if (!envelope) throw coded("MESSAGE_NOT_FOUND", "this message is not in the list");
-      if (!record.watcher) throw coded("ACCOUNT_OFFLINE", "this mailbox is not connected yet");
       // A UID the store does not hold names a message the poll window never
       // covered; its own headers are the only place its subject and sender are.
       const stored = store.findEnvelope(state, envelope.key) !== null;
@@ -1060,7 +1071,7 @@ function createRuntime(deps) {
       let readError = null;
       if (record.protocol === "pop3") {
         if (!fetched) {
-          fetched = await record.watcher.fetchBody(envelope.key, {
+          fetched = await requireWatcher(record).fetchBody(envelope.key, {
             maxBytes: BODY_LIMIT,
             timeoutMs: BODY_TIMEOUT_MS,
           });
@@ -1075,7 +1086,14 @@ function createRuntime(deps) {
         // does not report flags on every server, and a message the user already
         // read must not be stored again.
         const alreadySeen = Array.isArray(envelope.flags) && envelope.flags.includes("\\Seen");
-        fetched = await record.watcher.withSession(async (session, box) => {
+        // A cached body answers without the mailbox when nothing has to be written
+        // back to it and the entry's era is known: its name carries the
+        // `UIDVALIDITY` (`bodyKeyOf`), and a mailbox that renumbers itself purges the
+        // envelopes it had listed (`watcher.reconcile`), so a hit is this message's
+        // own bytes. An envelope stored before that era was recorded has nothing to
+        // trust, so that one still asks — one connection, and still no download.
+        const settled = Boolean(cached) && Number.isInteger(envelope.uidValidity) && (alreadySeen || !markRead);
+        fetched = settled ? cached : await requireWatcher(record).withSession(async (session, box) => {
           // A cached body is this message's only while the era still matches: an
           // entry's name carries the `UIDVALIDITY` (`bodyKeyOf`), and a mailbox that
           // was rebuilt answers `MESSAGE_STALE` here rather than handing over bytes

@@ -344,8 +344,9 @@ async function onUnload() {
   subscriptions = [];
   await runtime?.unload().catch(() => undefined);
   runtime = null;
-  // Nothing to flush: the cache writes a body through one rename as it goes, so an
-  // unload only has to let go of the object.
+  // Nothing to flush beyond what is already queued: waiting for it means a reload
+  // (or a test that removes the data folder) cannot catch a write half way.
+  await bodyCache?.flush().catch(() => undefined);
   bodyCache = null;
   await writing;
   await agentTools?.unregister().catch(() => undefined);

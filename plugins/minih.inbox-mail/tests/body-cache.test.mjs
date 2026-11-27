@@ -333,3 +333,41 @@ test("a truncated body keeps saying it was truncated on every later open", async
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("the panel's size question is also when a long-running app drops expired bodies", async () => {
+  const dir = freshDir();
+  try {
+    let clock = 1_000_000;
+    const cache = createBodyCache({ dir, now: () => clock });
+    await cache.load();
+    await cache.write("acc_1", "uid:7:1", raw("stale"), { size: 5 });
+    clock += MAX_AGE_MS + 1;
+    // Nothing was written for a month, so no write will ever sweep: the panel's
+    // regular question about the size is the only clock this plugin has.
+    cache.stats();
+    await cache.flush();
+    assert.deepEqual(cache.stats(), { bytes: 0, entries: 0 });
+    assert.deepEqual(bodiesOf(dir), [], "the expired body left the disk without waiting for a write");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a body still being written is removed when its message is deleted meanwhile", async () => {
+  const dir = freshDir();
+  try {
+    const cache = createBodyCache({ dir, now: () => 1000 });
+    await cache.load();
+    const body = raw("racy");
+    // A delete that lands while the body is still on its way to disk must not lose
+    // to that write: the entry it left behind would be a body no message owns.
+    const stored = cache.write("acc_1", "uid:7:1", body, { size: body.length });
+    const removed = cache.remove("acc_1", "uid:7:1");
+    await Promise.all([stored, removed]);
+    assert.equal(await cache.read("acc_1", "uid:7:1"), null);
+    assert.deepEqual(indexOf(dir).entries, []);
+    assert.deepEqual(bodiesOf(dir), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

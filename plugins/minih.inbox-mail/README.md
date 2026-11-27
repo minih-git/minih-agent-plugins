@@ -26,11 +26,13 @@ everything else works the same for both.
 In the panel you get every account's recent mail in one list — grouped by day,
 with a one-line preview of each message, a search box and four filters — and one
 message at a time in a reading pane. A message body is downloaded the first time
-you open it and then kept on this computer, so opening it again downloads
-nothing; opening it marks it read — one `STORE` of `\Seen` after the body has
-actually arrived, never before. The star changes only when you click it,
-"mark unread" is always there to undo the read, and delete and archive act on the
-one message you picked (see below for exactly what they send).
+you open it and then kept on this computer, so opening it again downloads nothing
+— and a message you have already read opens with no connection at all, which is
+also how it works with the network down. Opening a message marks it read — one
+`STORE` of `\Seen` after the body has actually arrived, never before. The star
+changes only when you click it, "mark unread" is always there to undo the read,
+and delete and archive act on the one message you picked (see below for exactly
+what they send).
 
 ## Set it up
 
@@ -381,7 +383,10 @@ account is polled instead of connected:
   `BODY.PEEK[]<0.1048576>`, POP3: `RETR` with the same cap): truncated with a
   notice beyond that, and then kept in the body cache below, so a second open, a
   reply, a forward and an agent's read or reply all reuse those bytes instead of
-  downloading them again.
+  downloading them again. A message you have already read needs no connection at
+  all to open again — the cache's name for it carries the mailbox's
+  `UIDVALIDITY`, so a renumbered mailbox can never answer with another message's
+  bytes — and an unread one takes one short session that sends only the `STORE`.
   Attachments are listed by name and size; one is fetched only when you press
   **Save** on it — IMAP asks for that one MIME part
   (`UID FETCH <uid> BODY.PEEK[<part>]`, which never sets `\Seen`), POP3 fetches the

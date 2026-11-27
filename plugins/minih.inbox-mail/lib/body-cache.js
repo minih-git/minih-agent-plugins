@@ -90,6 +90,8 @@ function createBodyCache(options = {}) {
   let tempSeq = 0;
   /** Whether a deferred "this body was opened" write is already queued. */
   let touchQueued = false;
+  /** Whether the sweep the panel's size question triggers is already queued. */
+  let sweepQueued = false;
 
   function enqueue(run) {
     const next = queue.then(run, run);
@@ -336,11 +338,16 @@ function createBodyCache(options = {}) {
     return stored === true;
   }
 
-  /** Drop one entry, because the message it belongs to is gone. */
+  /**
+   * Drop one entry, because the message it belongs to is gone.
+   *
+   * The lookup happens inside the queue, not before it: a delete that arrives while
+   * the body is still being written must run *after* that write, or it would find
+   * nothing and leave behind an entry no message owns.
+   */
   async function remove(accountId, key) {
     await load();
     const id = identityOf(accountId, key);
-    if (!entries.has(id)) return false;
     return enqueue(async () => {
       const current = entries.get(id);
       if (!current) return false;
@@ -380,12 +387,38 @@ function createBodyCache(options = {}) {
     });
   }
 
-  /** What the panel shows: how much space these bodies take, and how many there are. */
+  /**
+   * What the panel shows: how much space these bodies take, and how many there are.
+   *
+   * The panel asks this every few seconds, and that question is the only regular
+   * clock this plugin has. It is therefore also where expired bodies are swept: an
+   * app left running for months without new mail would otherwise keep bodies older
+   * than 30 days until the next open happened to write something. The sweep runs on
+   * the queue, after this answer, so asking for the size never waits for a disk.
+   */
   function stats() {
+    if (!sweepQueued) {
+      for (const entry of entries.values()) {
+        if (!expired(entry)) continue;
+        sweepQueued = true;
+        enqueue(async () => {
+          sweepQueued = false;
+          const changed = await guarded(() => sweepLocked());
+          if (changed) await guarded(() => persistIndex());
+        });
+        break;
+      }
+    }
     return { bytes: totalBytes(), entries: entries.size };
   }
 
-  return { clear, clearAccount, load, read, remove, stats, write };
+  /** Let everything already queued finish: a test's clock, or a quiet moment before exit. */
+  async function flush() {
+    await load();
+    await queue;
+  }
+
+  return { clear, clearAccount, flush, load, read, remove, stats, write };
 }
 
 module.exports = {

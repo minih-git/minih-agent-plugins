@@ -1519,7 +1519,7 @@ test("a UIDVALIDITY change drops the old envelopes and refuses to delete one", a
   }
 });
 
-test("a stale envelope cannot be marked, starred or opened either", async () => {
+test("a renumbered mailbox refuses actions on a stale UID and answers an opened one from disk", async () => {
   const server = deletableServer();
   const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
   const plugin = await loadWith(host);
@@ -1543,13 +1543,28 @@ test("a stale envelope cannot be marked, starred or opened either", async () => 
     const opened = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: fresh.key });
     assert.equal(opened.ok, true);
 
-    // ...and when the mailbox is renumbered again, opening the old one is refused
-    // before any body is fetched.
+    // ...and when the mailbox is renumbered again, a body this panel already read is
+    // still that message's own bytes: its cache entry is named with the era it was
+    // written under, so opening it answers from disk with no connection at all.
     server.uidValidity = 77;
     const fetchedBefore = server.bodyFetches.length;
-    const stale = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: fresh.key });
-    assert.equal(stale.ok, false);
-    assert.equal(stale.code, "MESSAGE_STALE");
+    const connectsBefore = host.state.connects.length;
+    const cachedOpen = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: fresh.key });
+    assert.equal(cachedOpen.ok, true);
+    assert.match(cachedOpen.message.text, /Hello from the test mailbox/);
+    assert.equal(host.state.connects.length, connectsBefore, "a body already read needs no mailbox");
+    assert.equal(server.bodyFetches.length, fetchedBefore, "and nothing was downloaded");
+
+    // Everything that has to reach the server is still refused before it is sent...
+    const staleFlag = await panel(plugin, "inbox.setFlag", { accountId: "acc_1", key: fresh.key, flag: "flagged" });
+    assert.equal(staleFlag.ok, false);
+    assert.equal(staleFlag.code, "MESSAGE_STALE");
+
+    // ...and a body that was never read has nothing to answer with, so for that one
+    // the era check the session performs decides — still before any download.
+    const refused = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: "uid:42:2" });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.code, "MESSAGE_STALE");
     assert.equal(server.bodyFetches.length, fetchedBefore, "no body was downloaded for a stale UID");
   } finally {
     await plugin.onUnload();
@@ -2656,6 +2671,13 @@ test("mark all read rejects a changed UIDVALIDITY without changing server flags"
     server.deliver(message({ uid: 1, messageId: "<stale-bulk>" }));
     host.emit("plugin:settingsChanged", {});
     await waitFor(async () => (await panel(plugin, "inbox.snapshot")).snapshot.messages.length === 1);
+    // Wait for that poll to finish before renumbering the mailbox: a check still in
+    // flight would re-select the inbox under the new era, purge the stale envelope
+    // first, and leave this action with nothing to refuse.
+    await waitFor(
+      async () => (await panel(plugin, "inbox.snapshot")).snapshot.accounts[0]?.status?.phase === "connected",
+      { label: "the poll that listed the message to finish" },
+    );
     server.uidValidity += 1;
     const result = await panel(plugin, "inbox.markAllRead");
     assert.deepEqual(result.results, [{ accountId: "acc_1", marked: 0, code: "MESSAGE_STALE" }]);
@@ -3028,6 +3050,214 @@ test("the panel is told how much the cache holds, and can empty it", async () =>
     const reopened = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: snapshot.messages[0].key });
     assert.equal(reopened.ok, true);
     assert.equal(server.bodyFetches.length, 2);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+/**
+ * A cached body answers without the mailbox.
+ *
+ * The point of the cache is the wait, not the bytes: a connection here is connect,
+ * login, CAPABILITY, ID, SELECT, a LIST probe and a close, and it queues behind
+ * whatever poll the account is already running. So these tests count connections,
+ * not only body fetches — a second open that still dialled would have saved nothing
+ * a user can feel, and would not work with the network down at all.
+ */
+
+test("an opened read message reopens from disk without opening a connection", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(
+      message({
+        uid: 1,
+        subject: "Reopen",
+        messageId: "<reopen@example.com>",
+        raw: rawMessage({ text: "no second connection" }),
+      }),
+    );
+    const snapshot = await checkUntil(plugin, 1);
+    const target = snapshot.messages[0];
+    const first = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
+    assert.equal(first.ok, true);
+    assert.equal(server.bodyFetches.length, 1);
+    // Opening it marked it read, so there is nothing left to write to the mailbox.
+    assert.equal((await panel(plugin, "inbox.snapshot")).snapshot.messages[0].unread, false);
+    const connectsBefore = host.state.connects.length;
+    const storesBefore = server.stores.length;
+
+    const second = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
+    assert.equal(second.ok, true);
+    assert.equal(second.message.text.trim(), "no second connection");
+    assert.equal(host.state.connects.length, connectsBefore, "a read message reopens with no connection at all");
+    assert.equal(server.bodyFetches.length, 1, "and with no body fetch");
+    assert.equal(server.stores.length, storesBefore, "and with no STORE");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("a cached unread message still costs one connection, which sends only the STORE", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(
+      message({ uid: 1, subject: "Unread", messageId: "<unread@example.com>", raw: rawMessage({ text: "mark me" }) }),
+    );
+    const snapshot = await checkUntil(plugin, 1);
+    const target = snapshot.messages[0];
+    // The agent reads it first: the body is cached, the message stays unread.
+    const read = await host.state.tools
+      .get("mail_read_message")
+      .execute({ accountId: "acc_1", key: target.key }, {});
+    assert.match(read.text, /mark me/);
+    assert.equal(server.bodyFetches.length, 1);
+    assert.deepEqual(server.stores, []);
+    assert.equal((await panel(plugin, "inbox.snapshot")).snapshot.messages[0].unread, true);
+    const connectsBefore = host.state.connects.length;
+
+    // The panel opens it: one session to write the flag, and no second download.
+    const opened = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: target.key });
+    assert.equal(opened.ok, true);
+    assert.equal(opened.message.readError, null);
+    assert.equal(server.bodyFetches.length, 1, "the cached body was used as it is");
+    assert.deepEqual(server.stores, ["UID STORE 1 +FLAGS (\\Seen)"]);
+    assert.equal(host.state.connects.length, connectsBefore + 1, "marking it read takes exactly one connection");
+    assert.equal((await panel(plugin, "inbox.snapshot")).snapshot.messages[0].unread, false);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("an agent's second read of the same message opens no connection at all", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(
+      message({ uid: 1, subject: "Tool", messageId: "<tool@example.com>", raw: rawMessage({ text: "tool body" }) }),
+    );
+    const snapshot = await checkUntil(plugin, 1);
+    const target = snapshot.messages[0];
+    const read = host.state.tools.get("mail_read_message");
+    const first = await read.execute({ accountId: "acc_1", key: target.key }, {});
+    assert.match(first.text, /tool body/);
+    assert.equal(server.bodyFetches.length, 1);
+    const connectsBefore = host.state.connects.length;
+
+    const second = await read.execute({ accountId: "acc_1", key: target.key }, {});
+    assert.match(second.text, /tool body/);
+    assert.equal(host.state.connects.length, connectsBefore, "no connection for a cached tool read");
+    assert.equal(server.bodyFetches.length, 1);
+    assert.deepEqual(server.stores, [], "and still no STORE");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("a cached message opens while its mailbox has no connection, and an uncached one still says so", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(
+      message({ uid: 1, subject: "Kept", messageId: "<kept@example.com>", raw: rawMessage({ text: "kept body" }) }),
+    );
+    server.deliver(
+      message({
+        uid: 2,
+        subject: "Never opened",
+        messageId: "<never@example.com>",
+        raw: rawMessage({ text: "never body" }),
+      }),
+    );
+    const snapshot = await checkUntil(plugin, 2);
+    const kept = snapshot.messages.find((entry) => entry.subject === "Kept");
+    const never = snapshot.messages.find((entry) => entry.subject === "Never opened");
+    await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: kept.key });
+    assert.equal(server.bodyFetches.length, 1);
+
+    // The account loses its server, which is how the panel's own "needs a server"
+    // account looks: still listed, no watcher, so nothing can be dialled.
+    host.accounts[0].fields = { provider: "custom" };
+    host.emit("credentials:changed", { slotId: "mailbox" });
+    await waitFor(
+      async () => (await panel(plugin, "inbox.snapshot")).snapshot.accounts[0]?.status?.phase === "needs-server",
+      { label: "the account to lose its connection" },
+    );
+    const connectsBefore = host.state.connects.length;
+
+    const reopened = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: kept.key });
+    assert.equal(reopened.ok, true, "a cached body needs no mailbox");
+    assert.equal(reopened.message.text.trim(), "kept body");
+    assert.equal(host.state.connects.length, connectsBefore, "nothing was dialled");
+
+    const missing = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: never.key });
+    assert.equal(missing.ok, false, "a body that was never cached still needs the mailbox");
+    assert.equal(missing.code, "ACCOUNT_OFFLINE");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("a cached body under an envelope with no UIDVALIDITY is checked against the mailbox", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  let plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(
+      message({
+        uid: 1,
+        subject: "Old envelope",
+        messageId: "<old@example.com>",
+        raw: rawMessage({ text: "old envelope body" }),
+      }),
+    );
+    await checkUntil(plugin, 1);
+    // A 0.6-era envelope carried no UIDVALIDITY. Rewrite the state file the way an
+    // upgrade would leave it, then start the plugin again on the same folder.
+    await plugin.onUnload();
+    const file = join(host.dataPath, "accounts.json");
+    const saved = JSON.parse(readFileSync(file, "utf8"));
+    for (const entry of saved.accounts.acc_1.messages) entry.uidValidity = null;
+    writeFileSync(file, JSON.stringify(saved, null, 2), "utf8");
+    plugin = await loadWith(host);
+    await waitFor(async () => (await panel(plugin, "inbox.snapshot")).snapshot.messages.length === 1, {
+      label: "the reloaded list",
+    });
+    const stored = (await panel(plugin, "inbox.snapshot")).snapshot.messages[0];
+    const fetchedBefore = server.bodyFetches.length;
+
+    // The first open downloads and caches it under the era-less name...
+    const opened = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: stored.key });
+    assert.equal(opened.ok, true);
+    assert.equal(opened.message.text.trim(), "old envelope body");
+    assert.equal(server.bodyFetches.length, fetchedBefore + 1);
+    // ...and the second open cannot trust an era it does not have, so it asks the
+    // mailbox: one connection, and still no second download.
+    const connectsAfterFirst = host.state.connects.length;
+    const again = await panel(plugin, "inbox.openMessage", { accountId: "acc_1", key: stored.key });
+    assert.equal(again.ok, true);
+    assert.equal(again.message.text.trim(), "old envelope body");
+    assert.equal(server.bodyFetches.length, fetchedBefore + 1, "the cached bytes were reused");
+    assert.equal(
+      host.state.connects.length,
+      connectsAfterFirst + 1,
+      "an envelope without a UIDVALIDITY still checks the era on the server",
+    );
   } finally {
     await plugin.onUnload();
     rmSync(host.dataPath, { recursive: true, force: true });

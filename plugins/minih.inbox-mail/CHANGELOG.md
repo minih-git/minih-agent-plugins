@@ -9,6 +9,14 @@
   reads that file instead of asking the mailbox, and so do a reply, a forward, the
   agent's read and the agent's reply. The in-memory copy of the last eight opened
   messages is gone: there is one cache now (`lib/body-cache.js`).
+- **The wait is gone too, not only the bytes.** A message you have already read
+  opens with no connection at all — the cache's name for it carries the mailbox's
+  `UIDVALIDITY`, so a rebuilt mailbox cannot answer with another message's bytes —
+  and it opens that way with the account offline. An unread message still takes
+  exactly one short session, which sends only the `STORE` of `\Seen`; a tool's
+  read sends nothing and opens nothing. A cached body under an envelope from before
+  the era was recorded still asks the mailbox first, because there is nothing to
+  trust.
 - **What that costs, in the same words everywhere.** Those bytes are plain text in
   this plugin's data folder, not encrypted, protected exactly as the stored
   envelopes beside them are. They stop at **200 MB** (the least recently opened
