@@ -4,8 +4,8 @@
   "catalog_id": null,
   "name": "Minih-Agent-Desktop Plugins",
   "homepage": "https://gitea.hungraim.com/minih/minih-agent-plugins",
-  "updated_at": "2026-11-27T03:09:25Z",
-  "generated_at": "2026-11-27T03:09:25Z",
+  "updated_at": "2026-11-27T07:15:19Z",
+  "generated_at": "2026-11-27T07:15:19Z",
   "policy_version": null,
   "artifact_base_url": "https://gitea.hungraim.com/minih/minih-agent-plugins/raw/branch/main",
   "plugins": [
@@ -129,11 +129,11 @@
       },
       "versions": [
         {
-          "version": "0.7.0",
-          "publishedAt": "2026-11-27T01:30:45Z",
-          "shasum": "1b7c55c97e5fc32932b48d67efeb282ee4a69ba2fb8baa55e2931306d863cc21",
-          "url": "packages/minih.inbox-mail-0.7.0.piplug",
-          "sizeBytes": 1112908,
+          "version": "0.7.1",
+          "publishedAt": "2026-11-27T07:15:19Z",
+          "shasum": "12e62da8476a54db9dbf34e23b7a0b750402567780335aedc2a4ee27d14afbe8",
+          "url": "packages/minih.inbox-mail-0.7.1.piplug",
+          "sizeBytes": 1113755,
           "permissions": [
             "credentials.use",
             "fs.write",
