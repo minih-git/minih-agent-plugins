@@ -1,0 +1,62 @@
+Matched projects: Demo
+Matched routes: Infrastructure
+## Project - Demo
+Path: 01 Projects/Project - Demo.md
+Verified: 2026-01-01
+
+---
+title: Project - Demo
+type: project
+status: active
+verified: 2026-01-01
+review_interval: quarterly
+---
+# Demo
+
+Demo architecture and release workflow.
+
+
+## Demo Knowledge Map
+Path: 01 Projects/Demo/Knowledge Map.md
+Verified: unverified
+
+---
+title: Demo Knowledge Map
+type: moc
+status: active
+review_interval: quarterly
+---
+# Demo Knowledge Map
+
+Links to [[Project - Demo]].
+
+
+## Infrastructure
+Path: 03 Resources/Deploy/Infrastructure.md
+Verified: unverified
+
+---
+title: Infrastructure
+type: inventory
+status: active
+review_interval: monthly
+---
+# Infrastructure
+
+EasyTier center node.
+
+
+## Preferences
+Path: 02 Areas/Preferences.md
+Verified: 2026-07-01
+
+---
+title: Preferences
+type: area
+status: active
+verified: 2026-07-01
+review_interval: on-change
+---
+# Preferences
+
+Prefer evidence-backed work. See [[Project - Demo]].

@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { KnowledgeService } from "../mcp/knowledge-core.mjs";
+import { createContextVault } from "./helpers/context-fixture.mjs";
 import { isolatedHome } from "./helpers/home.mjs";
 // Keep every fixture away from the real ~/.personal-knowledge (see helpers/home.mjs).
 await isolatedHome();
@@ -12,77 +13,8 @@ await isolatedHome();
 const fixedNow = () => new Date("2026-07-17T00:00:00Z");
 
 async function fixture() {
-  const root = await mkdtemp(path.join(os.tmpdir(), "personal-knowledge-test-"));
-  const vault = path.join(root, "Knowledge");
-  await mkdir(path.join(vault, "02 Areas"), { recursive: true });
-  await mkdir(path.join(vault, "01 Projects", "Demo"), { recursive: true });
-  await mkdir(path.join(vault, "03 Resources", "Deploy"), { recursive: true });
-  await writeFile(path.join(vault, "02 Areas", "Preferences.md"), `---
-title: Preferences
-type: area
-status: active
-verified: 2026-07-01
-review_interval: on-change
----
-# Preferences
-
-Prefer evidence-backed work. See [[Project - Demo]].
-`);
-  await writeFile(path.join(vault, "01 Projects", "Project - Demo.md"), `---
-title: Project - Demo
-type: project
-status: active
-verified: 2026-01-01
-review_interval: quarterly
----
-# Demo
-
-Demo architecture and release workflow.
-`);
-  await writeFile(path.join(vault, "01 Projects", "Demo", "Knowledge Map.md"), `---
-title: Demo Knowledge Map
-type: moc
-status: active
-review_interval: quarterly
----
-# Demo Knowledge Map
-
-Links to [[Project - Demo]].
-`);
-  await writeFile(path.join(vault, "03 Resources", "Deploy", "Infrastructure.md"), `---
-title: Infrastructure
-type: inventory
-status: active
-review_interval: monthly
----
-# Infrastructure
-
-EasyTier center node.
-`);
-  await writeFile(path.join(vault, "Secret.md"), `---
-title: Secret
-type: test
----
-token: abcdefghijklmnopqrstuvwxyz
-`);
-  await writeFile(path.join(vault, "Dashboard.base"), "views: []\n");
-
-  const config = {
-    defaultNotes: ["02 Areas/Preferences.md"],
-    projects: [{
-      name: "Demo",
-      repoPrefixes: ["/workspace/demo"],
-      aliases: ["demo"],
-      notes: ["01 Projects/Project - Demo.md", "01 Projects/Demo/Knowledge Map.md"],
-    }],
-    topicRoutes: [{
-      name: "Infrastructure",
-      aliases: ["server", "easytier"],
-      notes: ["03 Resources/Deploy/Infrastructure.md"],
-    }],
-    ignoreFolders: ["Templates", "04 Archive"],
-    backupRetentionDays: 0,
-  };
+  // Same vault as the `knowledge_context` snapshot test (helpers/context-fixture).
+  const { root, vault, config } = await createContextVault();
   const service = await new KnowledgeService({ vaultPath: vault, config, now: fixedNow }).initialize();
   return { root, vault, service };
 }
