@@ -351,7 +351,7 @@ test("two mailboxes are watched on one connection each and listed together", asy
   }
 });
 
-test("an alert names its account, and de-duplication is per account", async () => {
+test("important mail reaches both inboxes without notification centre entries", async () => {
   const personal = createFakeServer({ uidNext: 1 });
   const work = createFakeServer({ uidNext: 1 });
   const host = fakeHost({
@@ -372,15 +372,10 @@ test("an alert names its account, and de-duplication is per account", async () =
     personal.deliver(message(entry));
     work.deliver(message(entry));
     host.emit("plugin:settingsChanged", {});
-    await waitFor(() => host.notifications.length === 2, { label: "one alert per account" });
-    const keys = host.notifications.map((row) => row.dedupeKey);
-    assert.equal(new Set(keys).size, 2, "the same Message-ID in two mailboxes is two rows");
-    assert.ok(keys.every((key) => key.includes("<same@example.com>")));
-    const bodies = host.notifications.map((row) => row.body);
-    assert.ok(bodies.some((body) => body.includes("owner@qq.com")));
-    assert.ok(bodies.some((body) => body.includes("someone@163.com")));
-    assert.equal(host.notifications.every((row) => row.kind === "alert"), true);
-    assert.deepEqual(host.notifications[0].link, { view: "inbox" }, "a row opens the inbox page");
+    await waitFor(async () => (await panel(plugin, "inbox.snapshot")).snapshot.messages.length === 2, {
+      label: "mail from both accounts",
+    });
+    assert.deepEqual(host.notifications, [], "even important mail stays out of the notification centre");
   } finally {
     await plugin.onUnload();
     rmSync(host.dataPath, { recursive: true, force: true });
@@ -551,65 +546,17 @@ test("a message that is already read is not stored again", async () => {
   }
 });
 
-test("every notification opens the Inbox panel, and its view id is the declared one", async () => {
-  const manifest = JSON.parse(readFileSync(join(PLUGIN_ROOT, "manifest.json"), "utf8"));
-  const viewId = manifest.contributes.views[0].id;
-  const main = freshPlugin();
-
-  // One code path writes the link for every row (alert, digest, setup notice,
-  // provider notice), so the constant is what the four kinds share. The digest is
-  // the one kind a test cannot wait for (its interval has a one-minute floor), and
-  // it goes through this same `postRow`.
-  assert.deepEqual(main.NOTIFICATION_LINK, { view: viewId });
-  assert.equal(Object.keys(main.NOTIFICATION_LINK).length, 1, "the host accepts exactly one target");
-
-  // An account with no provider posts the "choose a service" row.
-  const idle = createFakeServer({ uidNext: 1 });
-  const first = fakeHost({
-    instances: [oneAccount("ceo@example.com")],
-    servers: { "mailbox#acc_1": idle },
-  });
-  const providerPlugin = await loadWith(first);
-  try {
-    await waitFor(() => first.notifications.some((row) => row.dedupeKey.includes(":provider:")), {
-      label: "the provider notice",
-    });
-    assert.deepEqual(first.notifications.at(-1).link, { view: viewId });
-  } finally {
-    await providerPlugin.onUnload();
-    rmSync(first.dataPath, { recursive: true, force: true });
-  }
-
-  // A working account: an alert, then the setup notice once it cannot connect.
-  const inbox = createFakeServer({ uidNext: 1 });
-  const second = fakeHost({
-    instances: [oneAccount("ceo@qq.com")],
-    servers: { "mailbox#acc_1": inbox },
-    settings: { importantSenders: "boss@example.com" },
-  });
-  const plugin = await loadWith(second);
-  try {
-    await waitForPolls(second);
-    inbox.deliver(message({ uid: 1, from: { name: "Boss", address: "boss@example.com" } }));
-    second.emit("plugin:settingsChanged", {});
-    await waitFor(() => second.notifications.some((row) => row.kind === "alert"), { label: "the alert" });
-
-    // The next poll is refused outright: this is the notice a rejected sign-in
-    // produces, which is one of the rows a click has to lead somewhere.
-    second.pi.net.tcp.connect = async () => {
-      throw coded("CREDENTIAL_REJECTED", "the mailbox refused the sign-in");
-    };
-    second.emit("plugin:settingsChanged", {});
-    await waitFor(() => second.notifications.some((row) => row.dedupeKey.includes(":credentials:")), {
-      label: "the setup notice",
-    });
-
-    for (const row of second.notifications) {
-      assert.deepEqual(row.link, { view: viewId }, `${row.kind} must open the inbox page`);
+test("no mailbox and a mailbox with no provider stay out of the notification centre", async () => {
+  for (const instances of [[], [oneAccount("ceo@example.com")]]) {
+    const host = fakeHost({ instances });
+    const plugin = await loadWith(host);
+    try {
+      assert.deepEqual(host.notifications, []);
+      assert.equal((await panel(plugin, "inbox.snapshot")).snapshot.accounts.length, instances.length);
+    } finally {
+      await plugin.onUnload();
+      rmSync(host.dataPath, { recursive: true, force: true });
     }
-  } finally {
-    await plugin.onUnload();
-    rmSync(second.dataPath, { recursive: true, force: true });
   }
 });
 
@@ -680,15 +627,10 @@ test("an account with no provider says so once, and the panel cannot pick one", 
   });
   const plugin = await loadWith(host);
   try {
-    await waitFor(() => host.notifications.length >= 1, { label: "the provider notice" });
     const snapshot = (await panel(plugin, "inbox.snapshot")).snapshot;
     assert.equal(snapshot.accounts[0].provider, null);
     assert.equal(snapshot.accounts[0].status.phase, "needs-provider");
-    const notice = host.notifications.find((row) => row.dedupeKey.includes(":provider:"));
-    assert.ok(notice, "a mailbox that cannot connect has to say why");
-    assert.match(notice.body, /ceo@example\.com/);
-    // The hint names the account form, which is where the provider is chosen now.
-    assert.match(notice.body, /Custom server/);
+    assert.deepEqual(host.notifications, []);
     assert.equal(host.state.connects.length, 0, "nothing is dialled on a guess");
 
     // The old panel channel is gone on purpose: the choice belongs to the host's
@@ -736,7 +678,10 @@ test("a provider that needs OAuth2 is refused instead of connected", async () =>
   );
   const plugin = await loadWith(host);
   try {
-    await waitFor(() => host.notifications.length >= 1, { label: "the setup notice" });
+    await waitFor(async () => (await panel(plugin, "inbox.snapshot")).snapshot.accounts[0]?.status?.lastError?.includes("PROVIDER_NEEDS_OAUTH"), {
+      label: "the account error",
+    });
+    assert.deepEqual(host.notifications, []);
     const snapshot = (await panel(plugin, "inbox.snapshot")).snapshot;
     assert.equal(snapshot.accounts[0].provider.id, "outlook");
     assert.equal(snapshot.accounts[0].provider.available, false);
@@ -1162,20 +1107,17 @@ test("an account's proxy is published, and a proxy failure is explained once", a
       throw coded("PROXY_AUTH_FAILED", "the proxy rejected the credentials");
     };
     host.emit("plugin:settingsChanged", {});
-    await waitFor(() => host.notifications.some((row) => row.dedupeKey.includes(":credentials:")), {
-      label: "the proxy notice",
+    await waitFor(async () => (await panel(plugin, "inbox.snapshot")).snapshot.accounts[0]?.status?.lastError?.includes("PROXY_AUTH_FAILED"), {
+      label: "the proxy account error",
     });
-    const notice = host.notifications.find((row) => row.dedupeKey.includes(":credentials:"));
-    assert.match(notice.body, /127\.0\.0\.1:7897/);
-    assert.match(notice.body, /username or password/);
-    assert.deepEqual(notice.link, { view: "inbox" });
+    assert.deepEqual(host.notifications, []);
   } finally {
     await plugin.onUnload();
     rmSync(host.dataPath, { recursive: true, force: true });
   }
 });
 
-test("a POP3 mailbox is polled, announced once, and offers no read or star state", async () => {
+test("a POP3 mailbox is polled without notifications and keeps local read state", async () => {
   const server = createFakePop3Server({ messages: [popMessage({ uidl: "AAA", subject: "already here" })] });
   const host = fakeHost({
     instances: [
@@ -1203,11 +1145,7 @@ test("a POP3 mailbox is polled, announced once, and offers no read or star state
     const checked = await panel(plugin, "inbox.check", { instanceId: "acc_1" });
     assert.equal(checked.ok, true);
     assert.equal(checked.handled, 1);
-    await waitFor(() => host.notifications.length === 1, { label: "the alert" });
-    const alert = host.notifications[0];
-    assert.equal(alert.kind, "alert");
-    assert.match(alert.body, /Boss/);
-    assert.ok(alert.dedupeKey.includes("pop3:BBB"), "the UIDL is what makes a replay impossible");
+    assert.deepEqual(host.notifications, [], "POP3 mail stays in the Inbox panel too");
 
     const snapshot = (await panel(plugin, "inbox.snapshot")).snapshot;
     const account = snapshot.accounts[0];
@@ -2596,6 +2534,150 @@ test("a server that cannot search UTF-8 is named in the answer instead of failin
     assert.match(result.accounts[0].note, /what this computer already stored/);
     assert.equal(result.messages.length, 1);
     assert.equal(result.messages[0].subject, "发票 2026-04");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+
+test("mark all read includes uncached IMAP mail, preserves stars and persists the list", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(message({ uid: 1, messageId: "<cached>", flags: ["\\Flagged"] }));
+    await panel(plugin, "inbox.check");
+    host.emit("plugin:settingsChanged", {});
+    await waitFor(async () => (await panel(plugin, "inbox.snapshot")).snapshot.messages.length === 1, {
+      label: "cached message",
+    });
+    server.deliver(message({ uid: 2, messageId: "<uncached>" }));
+    const result = await panel(plugin, "inbox.markAllRead", { accountId: "acc_1" });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.results, [{ accountId: "acc_1", marked: 2 }]);
+    assert.deepEqual(server.entries[0].flags, ["\\Flagged", "\\Seen"]);
+    assert.deepEqual(server.entries[1].flags, ["\\Seen"]);
+    assert.equal((await panel(plugin, "inbox.snapshot")).snapshot.messages[0].unread, false);
+    assert.ok(readState(host).accounts.acc_1.messages[0].flags.includes("\\Seen"));
+    assert.deepEqual(host.notifications, []);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("mark all read reports per-account failure without changing failed local flags", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({
+    instances: [oneAccount(), { instanceId: "acc_2", username: "nobody@example.com" }],
+    servers: { "mailbox#acc_1": server },
+  });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(message({ uid: 1, messageId: "<one>" }));
+    await panel(plugin, "inbox.check", { instanceId: "acc_1" });
+    const result = await panel(plugin, "inbox.markAllRead");
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.results, [
+      { accountId: "acc_1", marked: 1 },
+      { accountId: "acc_2", marked: 0, code: "ACCOUNT_OFFLINE" },
+    ]);
+    const invalid = await panel(plugin, "inbox.markAllRead", { accountId: "missing" });
+    assert.equal(invalid.ok, false);
+    assert.equal(invalid.code, "ACCOUNT_NOT_FOUND");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+
+test("mark all read keeps POP3 read marks locally without a network mutation", async () => {
+  const server = createFakePop3Server({ messages: [] });
+  const host = fakeHost({
+    instances: [{ instanceId: "acc_1", username: "owner@example.com",
+      fields: { server: "pop.example.com", port: "995", protocol: "pop3", security: "tls" } }],
+    servers: { "mailbox#acc_1": server },
+  });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(popMessage({ uidl: "A", subject: "one" }));
+    server.deliver(popMessage({ uidl: "B", subject: "two" }));
+    host.emit("plugin:settingsChanged", {});
+    await waitFor(async () => (await panel(plugin, "inbox.snapshot")).snapshot.messages.length === 2);
+    const connects = host.state.connects.length;
+    const result = await panel(plugin, "inbox.markAllRead", { accountId: "acc_1" });
+    assert.deepEqual(result.results, [{ accountId: "acc_1", marked: 2 }]);
+    assert.equal(host.state.connects.length, connects);
+    assert.ok((await panel(plugin, "inbox.snapshot")).snapshot.messages.every((item) => !item.unread));
+    assert.deepEqual(readState(host).accounts.acc_1.pop3.read.sort(), ["pop3:A", "pop3:B"]);
+    assert.deepEqual((await panel(plugin, "inbox.markAllRead")).results, [{ accountId: "acc_1", marked: 0 }]);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("mark all read batches uncached mail and does not write for an empty inbox", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    assert.deepEqual((await panel(plugin, "inbox.markAllRead")).results, [{ accountId: "acc_1", marked: 0 }]);
+    assert.equal(server.stores.length, 0);
+    for (let uid = 1; uid <= 205; uid += 1) server.deliver(message({ uid, messageId: `<batch-${uid}>` }));
+    const result = await panel(plugin, "inbox.markAllRead");
+    assert.deepEqual(result.results, [{ accountId: "acc_1", marked: 205 }]);
+    assert.deepEqual(server.stores.map((line) => line.split(" ")[2].split(",").length), [100, 100, 5]);
+    assert.ok(server.entries.every((entry) => entry.flags.includes("\\Seen")));
+    assert.deepEqual(host.notifications, []);
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+test("mark all read rejects a changed UIDVALIDITY without changing server flags", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(message({ uid: 1, messageId: "<stale-bulk>" }));
+    host.emit("plugin:settingsChanged", {});
+    await waitFor(async () => (await panel(plugin, "inbox.snapshot")).snapshot.messages.length === 1);
+    server.uidValidity += 1;
+    const result = await panel(plugin, "inbox.markAllRead");
+    assert.deepEqual(result.results, [{ accountId: "acc_1", marked: 0, code: "MESSAGE_STALE" }]);
+    assert.equal(server.stores.length, 0);
+    assert.deepEqual((await panel(plugin, "inbox.snapshot")).snapshot.messages, [], "stale envelopes are discarded");
+  } finally {
+    await plugin.onUnload();
+    rmSync(host.dataPath, { recursive: true, force: true });
+  }
+});
+
+
+test("a refused bulk STORE leaves server and local mail unread", async () => {
+  const server = createFakeServer({ uidNext: 1 });
+  const host = fakeHost({ instances: [oneAccount()], servers: { "mailbox#acc_1": server } });
+  const plugin = await loadWith(host);
+  try {
+    await waitForPolls(host);
+    server.deliver(message({ uid: 1, messageId: "<refused-bulk>" }));
+    host.emit("plugin:settingsChanged", {});
+    await waitFor(async () => (await panel(plugin, "inbox.snapshot")).snapshot.messages.length === 1);
+    server.failStore = true;
+    const result = await panel(plugin, "inbox.markAllRead");
+    assert.deepEqual(result.results, [{ accountId: "acc_1", marked: 0, code: "IMAP_NO" }]);
+    assert.equal(server.entries[0].flags.includes("\\Seen"), false);
+    assert.equal((await panel(plugin, "inbox.snapshot")).snapshot.messages[0].unread, true);
+    assert.equal(readState(host).accounts.acc_1.messages[0].flags.includes("\\Seen"), false);
   } finally {
     await plugin.onUnload();
     rmSync(host.dataPath, { recursive: true, force: true });

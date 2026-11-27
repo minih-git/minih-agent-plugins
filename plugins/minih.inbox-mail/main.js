@@ -1,35 +1,6 @@
 "use strict";
 
-/**
- * Mail Assistant (`minih.inbox-mail`) — Minih-Agent-Desktop plugin entry.
- *
- * The plugin watches the mailboxes the user added (each a host-owned credential
- * instance) and turns what arrives into notification-centre entries:
- * one `alert` for a message the rules consider important, one rolling `digest`
- * per account for everything else. The Inbox panel in the sidebar shows the same
- * accounts together, opens one message body when the user clicks it, and changes
- * a read or star flag only when the user clicks that.
- *
- * An account is a listed provider (IMAP) or a mail server the user typed (IMAP or
- * POP3); the four non-secret fields of such a server come back in
- * `credentials.list`, and the endpoint itself never leaves the host's credential
- * store, which is what keeps the password bound to the server the user named.
- *
- * Division of responsibility with the host:
- *
- *   - the host holds the credentials (`credentials.use`), opens and keeps each
- *     socket (`net.tcp`), owns the timer (`scheduler`), stores the rows
- *     (`notify.center`) and opens the browser (`shell.openExternal`);
- *   - this file owns the plugin's own data file, the account list it derives from
- *     the host's, and the two surfaces the plugin exposes: the `check-now`
- *     command and the panel channels (`onPanelInvoke`).
- *
- * What is stored, and nothing else: per account the UID cursor (`UIDVALIDITY` +
- * highest handled UID), the Message-IDs already reported (bounded), the digest
- * queue, the last error, and the envelope of the newest messages the panel shows.
- * A message body is fetched only when the user opens that message, is kept in
- * memory for the answer, and never reaches this file.
- */
+/** Mail Assistant: mailbox polling, explicit panel actions and agent tools. */
 
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -44,23 +15,7 @@ const { version: PLUGIN_VERSION } = require("./package.json");
 
 const STATE_FILE = accountsFile.FILE;
 const LEGACY_FILE = accountsFile.LEGACY_FILE;
-/** The command the palette offers. Notifications do not point at it: see below. */
 const COMMAND_ID = "check-now";
-/**
- * What every notification row opens: the Inbox panel.
- *
- * A row is either "mail arrived" or "this account cannot connect", and both are
- * read on the inbox page — the new message is in the list, the broken account is
- * a card with its reason. Pointing a row at the `check-now` command instead, as
- * 0.2.0 did, turned a click into "look again" without showing anything, which is
- * exactly the bug the user reported. The command stays in the palette (and the
- * panel has its own "Check now"), it is just not what a notification does.
- */
-const VIEW_ID = "inbox";
-/** The one link every row carries, exported so a test can assert it. */
-const NOTIFICATION_LINK = Object.freeze({ view: VIEW_ID });
-/** One row for "no mailbox at all", updated in place instead of added again. */
-const CREDENTIALS_KEY = "minih.inbox-mail:credentials";
 
 let host = null;
 let locale = "en";
@@ -73,8 +28,6 @@ let subscriptions = [];
 /** The tools this plugin contributes to the agent, and their registration handle. */
 let agentTools = null;
 let writing = Promise.resolve();
-/** Rows posted once per load, so a retry loop cannot fill the notification list. */
-const postedRows = new Set();
 
 function text() {
   return messages.messages(locale);
@@ -196,83 +149,6 @@ async function migrateLegacy(instances) {
   return true;
 }
 
-/** Every row this plugin writes opens the Inbox panel. */
-function postRow(row) {
-  // A queued handler can run after the plugin was unloaded, and a row on a closed
-  // host is not an error worth logging.
-  if (!host) return Promise.resolve();
-  return host.notify
-    .center({ ...row, link: NOTIFICATION_LINK })
-    .catch((error) => log("warn", `could not post a ${row.kind}: ${error?.message ?? error}`));
-}
-
-/**
- * Say once per plugin load why nothing is arriving for one account.
- *
- * The notification centre is the surface a user sees without opening the panel,
- * so a mailbox that cannot connect has to explain itself there. Re-posting the
- * same dedupe key updates that row instead of filling the list.
- */
-function postSetupNotice(account, error) {
-  const key = `${CREDENTIALS_KEY}:${account?.instanceId ?? "none"}`;
-  if (postedRows.has(key)) return Promise.resolve();
-  postedRows.add(key);
-  const strings = text();
-  return postRow({
-    kind: "alert",
-    title: messages.clamp(strings.needsSetup, messages.MAX_TITLE),
-    body: messages.clamp(messages.setupReason(error?.code, strings, account?.proxy ?? null), messages.MAX_BODY),
-    dedupeKey: key,
-  });
-}
-
-/** One row for a mailbox that still needs its provider chosen in the panel. */
-function postProviderNotice(account) {
-  const key = `${CREDENTIALS_KEY}:provider:${account.instanceId}`;
-  if (postedRows.has(key)) return Promise.resolve();
-  postedRows.add(key);
-  const strings = text();
-  return postRow({
-    kind: "alert",
-    title: messages.clamp(strings.needsProvider, messages.MAX_TITLE),
-    body: messages.clamp(strings.needsProviderBody(account.label || account.email), messages.MAX_BODY),
-    dedupeKey: key,
-  });
-}
-
-/**
- * One explanation when the plugin has no mailbox at all.
- *
- * A fresh install has nothing to watch, and a plugin that stays silent looks
- * broken. This is the one row the 0.1.0 release posted for a missing credential,
- * kept under the same key so an upgrade replaces it rather than adding a second.
- */
-function postNoAccountNotice() {
-  if (postedRows.has(CREDENTIALS_KEY)) return Promise.resolve();
-  postedRows.add(CREDENTIALS_KEY);
-  const strings = text();
-  return postRow({
-    kind: "alert",
-    title: messages.clamp(strings.needsSetup, messages.MAX_TITLE),
-    body: messages.clamp(messages.setupReason("CREDENTIAL_NOT_CONFIGURED", strings), messages.MAX_BODY),
-    dedupeKey: CREDENTIALS_KEY,
-  });
-}
-
-async function announceAccounts() {
-  const list = runtime?.accounts ?? [];
-  if (!list.length) {
-    await postNoAccountNotice();
-    return;
-  }
-  for (const account of list) {
-    // An account with its own server has nothing to pick: it is connected by the
-    // endpoint in its credential instance, so the "choose a provider" row would
-    // be asking for something that is already answered.
-    if (!account.provider && !account.custom) await postProviderNotice(account);
-  }
-}
-
 /** The `check-now` command: look at every connected account, then say what happened. */
 async function onCommand() {
   if (!runtime) throw coded("PLUGIN_INVALID", "the plugin is not loaded");
@@ -302,12 +178,10 @@ async function onPanelInvoke(channel, payload) {
       }
       case "inbox.addAccount": {
         const result = await runtime.addAccount();
-        await announceAccounts();
         return { ok: true, ...result };
       }
       case "inbox.removeAccount": {
         const result = await runtime.removeAccount(payload?.instanceId);
-        await announceAccounts();
         return { ok: true, ...result };
       }
       case "inbox.check": {
@@ -316,6 +190,8 @@ async function onPanelInvoke(channel, payload) {
       }
       case "inbox.openMessage":
         return { ok: true, message: await runtime.openMessage(payload ?? {}) };
+      case "inbox.markAllRead":
+        return { ok: true, ...(await runtime.markAllRead(payload ?? {})) };
       case "inbox.setFlag":
         return { ok: true, ...(await runtime.setFlag(payload ?? {})) };
       // Since 0.4.0 the panel can also walk back through a mailbox, and it can
@@ -377,12 +253,9 @@ async function onLoad() {
     text,
     settings: () => normalizeSettings(settingsCache),
     persist,
-    postRow,
-    postSetupNotice,
     clientId: { name: "Minih Agent Inbox Mail", vendor: "minih", version: PLUGIN_VERSION },
   });
   await runtime.load();
-  await announceAccounts();
   // The agent can read this mailbox on the user's behalf: four tools, two of them
   // reads the host lets a scheduled run use without a card, two of them sends the
   // host asks about every time (`lib/agent-tools.js`).
@@ -398,8 +271,7 @@ async function onLoad() {
   });
 
   if (typeof host.commands?.register === "function") {
-    // The palette entry: the same check as the panel's button, and no longer the
-    // target of a notification.
+    // The palette entry performs the same check as the panel's button.
     await host.commands.register({
       id: COMMAND_ID,
       title: text().commandTitle,
@@ -428,7 +300,6 @@ async function onLoad() {
         void (async () => {
           try {
             await runtime?.refresh();
-            await announceAccounts();
           } catch (error) {
             log("warn", `could not re-read the mailbox list: ${error?.message ?? error}`);
           }
@@ -453,8 +324,7 @@ async function onUnload() {
   await writing;
   await agentTools?.unregister().catch(() => undefined);
   agentTools = null;
-  postedRows.clear();
   host = null;
 }
 
-module.exports = { NOTIFICATION_LINK, onLoad, onPanelInvoke, onUnload };
+module.exports = { onLoad, onPanelInvoke, onUnload };

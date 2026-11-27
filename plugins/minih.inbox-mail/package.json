@@ -1,8 +1,8 @@
 {
   "name": "@minih-plugin/minih.inbox-mail",
   "private": true,
-  "version": "0.6.0",
-  "description": "Mail Assistant — watch your mailboxes (a listed provider, a mail server you type in, or either one through an HTTP/SOCKS5 proxy), notify only what matters, work through them in one Inbox panel, and let the agent read, reply and write through four tools: two bounded reads that change nothing (usable in a scheduled automation) and two sends the host asks about first.",
+  "version": "0.7.0",
+  "description": "Mail Assistant — watch your mailboxes (a listed provider, a mail server you type in, or either one through an HTTP/SOCKS5 proxy), keep mail in the Inbox panel without notification-centre entries, mark all as read, work through them in one Inbox panel, and let the agent read, reply and write through four tools: two bounded reads that change nothing (usable in a scheduled automation) and two sends the host asks about first.",
   "scripts": {
     "test": "node --test tests/*.test.mjs"
   }

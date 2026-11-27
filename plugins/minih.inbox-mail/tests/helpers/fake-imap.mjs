@@ -591,7 +591,8 @@ export function createFakeServer(options = {}) {
         } else if (upper.startsWith("UID FETCH")) {
           fetchReply(tag, /\s(\S+)\s+\(/.exec(command)?.[1] ?? "", command);
         } else if (upper.startsWith("UID STORE")) {
-          storeReply(tag, command);
+          if (server.failStore) push(`${tag} NO STORE refused\r\n`);
+          else storeReply(tag, command);
         } else if (upper.startsWith("UID MOVE")) {
           moveReply(tag, command, "MOVE");
         } else if (upper.startsWith("UID COPY")) {

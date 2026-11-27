@@ -259,3 +259,23 @@ test("a bare date is the local calendar day, for the filter and for IMAP", () =>
   assert.equal(imapDate(new Date(2026, 3, 1)), "1-Apr-2026");
   assert.equal(agentTools.parseDate("2026-04-01", "since").getHours(), 0);
 });
+
+
+test("bulk read validates a bounded UID set and preserves other flags", async () => {
+  const server = createFakeServer({ uidNext: 3 });
+  server.add(message({ uid: 1, flags: ["\\Flagged"] }));
+  server.add(message({ uid: 2 }));
+  const session = connect(server, { timeoutMs: 500 });
+  try {
+    await session.select("INBOX");
+    for (const invalid of [[], [0], ["1"], [1.5], Array.from({ length: 101 }, (_, i) => i + 1)]) {
+      await assert.rejects(() => session.markRead(invalid), { code: "INVALID_ARGUMENT" });
+    }
+    assert.equal(server.stores.length, 0);
+    await session.markRead([1, 2]);
+    assert.deepEqual(server.entries[0].flags, ["\\Flagged", "\\Seen"]);
+    assert.deepEqual(server.entries[1].flags, ["\\Seen"]);
+  } finally {
+    await session.close();
+  }
+});

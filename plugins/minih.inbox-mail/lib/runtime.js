@@ -30,7 +30,6 @@ const body = require("./body");
 const compose = require("./compose");
 const { createGate } = require("./gate");
 const mailboxes = require("./mailboxes");
-const messages = require("./messages");
 const mime = require("./mime");
 const pop3 = require("./pop3");
 const { createPop3Watcher } = require("./pop3-watcher");
@@ -406,63 +405,6 @@ function createRuntime(deps) {
     return pop3.createClient(wrapTransport(handle.connectionId), { log });
   }
 
-  function notifyAlert(account, message) {
-    const strings = deps.text();
-    const accountLabel = account.label || account.instanceId;
-    return deps.postRow({
-      kind: "alert",
-      title: messages.clamp(message.subject || strings.noSubject, messages.MAX_TITLE),
-      body: messages.alertBody(message, strings, deps.locale(), accountLabel),
-      // The account is part of the key: two mailboxes can legitimately hold the
-      // same Message-ID — a message addressed to both of them, or a forward —
-      // and one row must not suppress the other.
-      dedupeKey: messages.clamp(`${account.instanceId}:${store.messageKey(message)}`, 240),
-    });
-  }
-
-  function notifyDigest(account, entries) {
-    if (!entries.length) return Promise.resolve();
-    const strings = deps.text();
-    const accountLabel = account.label || account.instanceId;
-    return deps.postRow({
-      kind: "digest",
-      title: messages.digestTitle(entries.length, strings, accountLabel),
-      body: messages.digestBody(entries, strings, accountLabel),
-      // One rolling row per account: each account keeps its own interval anchor,
-      // and merging them would need a queue that belongs to no account.
-      dedupeKey: messages.clamp(`minih.inbox-mail:digest:${account.instanceId}`, 240),
-    });
-  }
-
-  function onAccountError(account, error) {
-    const code = String(error?.code ?? "");
-    if (
-      code === "CREDENTIAL_NOT_CONFIGURED" ||
-      code === "CREDENTIAL_REJECTED" ||
-      code === "CREDENTIAL_UNSUPPORTED" ||
-      code === "CREDENTIAL_UNAVAILABLE" ||
-      code === "CREDENTIAL_INSTANCE_REQUIRED" ||
-      code === "PROVIDER_NEEDS_OAUTH" ||
-      // A server the user typed can fail in ways a preset cannot: it may not
-      // offer STARTTLS at all, or its certificate may not verify. Those are
-      // account settings to fix, not transients to retry silently.
-      code === "STARTTLS_UNAVAILABLE" ||
-      code === "TLS_FAILED" ||
-      code === "TLS_CERTIFICATE" ||
-      // A proxy the user configured is an account setting too: the host never
-      // falls back to a direct connection, so this has to be visible once.
-      code === "PROXY_FAILED" ||
-      code === "PROXY_AUTH_FAILED" ||
-      code === "UNSUPPORTED"
-    ) {
-      void deps.postSetupNotice(account, error);
-      return;
-    }
-    if (code === "PERMISSION_DENIED") {
-      log("warn", `the host refused the mailbox connection: ${error.message}`);
-    }
-  }
-
   function startAccount(record) {
     if (record.watcher) return;
     const snapshot = record;
@@ -471,11 +413,7 @@ function createRuntime(deps) {
       state: accountStateOf(record.instanceId),
       persist: () => deps.persist(),
       settings: () => deps.settings(),
-      notify: {
-        alert: (message) => notifyAlert(snapshot, message),
-        digest: (entries) => notifyDigest(snapshot, entries),
-      },
-      onError: (error) => onAccountError(snapshot, error),
+      onError: (error) => log("warn", `mailbox check failed: ${error?.code ?? "FAILED"}`),
       log,
       now: () => Date.now(),
       timers: { setTimeout, clearTimeout },
@@ -1158,6 +1096,64 @@ function createRuntime(deps) {
         truncated: fetched.truncated,
         size: fetched.size,
       };
+    },
+
+    /** Explicitly mark the selected inboxes read, reporting partial failures. */
+    async markAllRead(input) {
+      const selected = input?.accountId === undefined
+        ? [...accounts.values()]
+        : [requireAccount(input.accountId)];
+      const results = [];
+      for (const record of selected) {
+        let marked = 0;
+        try {
+          const state = accountStateOf(record.instanceId);
+          if (record.protocol === "pop3") {
+            for (const envelope of state.messages) {
+              if (!store.hasReadLocally(state, envelope.key)) {
+                store.markReadLocally(state, envelope.key);
+                marked += 1;
+              }
+            }
+          } else {
+            if (!record.watcher) throw coded("ACCOUNT_OFFLINE", "this mailbox is not connected yet");
+            const envelopes = [...state.messages];
+            await record.watcher.withSession(async (session, box) => {
+              // Refuse a stale list before changing anything on the server.
+              for (const envelope of envelopes) requireCurrentEra(envelope, box);
+              const uids = await session.searchNew({ unseen: true });
+              if (accounts.get(record.instanceId) !== record) {
+                throw coded("ACCOUNT_NOT_FOUND", "this mailbox changed during the operation");
+              }
+              for (let offset = 0; offset < uids.length; offset += 100) {
+                const batch = uids.slice(offset, offset + 100);
+                await session.markRead(batch);
+                if (accounts.get(record.instanceId) !== record) {
+                  throw coded("ACCOUNT_NOT_FOUND", "this mailbox changed during the operation");
+                }
+                const changed = new Set(batch);
+                for (const envelope of state.messages) {
+                  if (changed.has(envelope.uid)) {
+                    store.setFlags(state, envelope.key, store.applyFlag(envelope.flags, "seen"));
+                  }
+                }
+                marked += batch.length;
+                await deps.persist();
+              }
+              // A flag may already have been changed by another mail client.
+              for (const envelope of envelopes) {
+                store.setFlags(state, envelope.key, store.applyFlag(envelope.flags, "seen"));
+              }
+            });
+          }
+          await deps.persist();
+          results.push({ accountId: record.instanceId, marked });
+        } catch (error) {
+          log("warn", `mark all read failed: ${error?.code ?? "FAILED"}`);
+          results.push({ accountId: record.instanceId, marked, code: String(error?.code ?? "FAILED") });
+        }
+      }
+      return { results };
     },
 
     /**

@@ -724,6 +724,15 @@ function createSession(transport, options = {}) {
       });
     },
 
+    /** Add Seen to one bounded batch without replacing any other flag. */
+    async markRead(uids) {
+      if (!Array.isArray(uids) || !uids.length || uids.length > 100 ||
+          uids.some((uid) => !Number.isSafeInteger(uid) || uid < 1)) {
+        throw Object.assign(new Error("markRead needs 1 to 100 positive UIDs"), { code: "INVALID_ARGUMENT" });
+      }
+      await command(`UID STORE ${uids.join(",")} +FLAGS.SILENT (\\Seen)`);
+    },
+
     /**
      * Set or clear one flag on one message: `UID STORE <uid> +FLAGS (…)`.
      *

@@ -43,7 +43,7 @@ keeping its own `LICENSE` and notice files inside its directory.
 | `minih.personal-knowledge` (`Personal Knowledge`) | 0.7.2 | minih-git | MIT | this repository |
 | `minih.selection-translate` (`Selection Translate`) | 0.3.2 | minih-git | MIT | this repository |
 | `minih.cache-keepwarm` (`Cache keep-warm`) | 0.1.0 | minih-git | MIT | this repository |
-| `minih.inbox-mail` (`Mail Assistant`) | 0.6.0 | minih-git | MIT | this repository |
+| `minih.inbox-mail` (`Mail Assistant`) | 0.7.0 | minih-git | MIT | this repository |
 | `minih.session-titles` (`Session Titles`) | 0.1.0 | minih-git | MIT | this repository |
 | `pi.file-manager` (`File Manager`) | 0.9.0 | Tioit-Wang | not declared by the author | not published by the author |
 
@@ -86,6 +86,14 @@ requesting its graph, so cloud hydration is not held inside a 30-second bridge
 call. Read failures show the real error with retry, never demo data. File reads
 use a bounded parallel batch, and vault configuration stays available while
 indexing. No permission or data-format changes are needed.
+
+`minih.inbox-mail` 0.7.0 adds **Mark all as read** for the selected mailbox or
+all inboxes: IMAP includes unseen inbox mail beyond the displayed list, in batches
+of at most 100 UIDs, while POP3 marks collected mail on this computer only. Search
+and filters do not narrow this explicit action, other flags stay intact, and failed
+accounts are reported individually. Mail, digests and account errors no longer
+create notification-centre entries; the plugin drops `notify.center`, keeps account
+errors in the Inbox panel, and leaves existing notification history untouched.
 
 `minih.inbox-mail` 0.6.0 is the resident assistant's first information source
 and a small mail client of its own: it watches your mailboxes and writes what

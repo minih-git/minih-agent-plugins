@@ -1273,6 +1273,15 @@ input {
 }
 
 @media (max-width: 699px) {
+  .topbar {
+    flex-wrap: wrap;
+  }
+
+  .topbar-actions {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+
   .columns {
     grid-template-columns: minmax(0, 1fr);
   }

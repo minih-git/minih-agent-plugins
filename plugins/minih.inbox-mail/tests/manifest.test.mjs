@@ -32,13 +32,13 @@ const HOSTNAME = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/;
 const CONTRIB_ID = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 const localized = (value) => Boolean(value && typeof value === "object" && value.en && value["zh-CN"]);
 
-test("the plugin is published as minih.inbox-mail 0.6.0, named Mail Assistant, versioned with its package", () => {
+test("the plugin is published as minih.inbox-mail 0.7.0, named Mail Assistant, versioned with its package", () => {
   assert.equal(manifest.schemaVersion, 1);
   assert.equal(manifest.id, "minih.inbox-mail", "the id is what installed users' data hangs off");
   assert.equal(manifest.name, "Mail Assistant");
   assert.equal(manifest.i18n.en.name, "Mail Assistant");
   assert.equal(manifest.i18n["zh-CN"].name, "邮件助手");
-  assert.equal(manifest.version, "0.6.0");
+  assert.equal(manifest.version, "0.7.0");
   assert.equal(manifest.version, pkg.version);
   assert.equal(manifest.main, "main.js");
   assert.ok(exists(manifest.main), "the entry point must be in the tree");
@@ -53,7 +53,6 @@ test("it asks for exactly the capabilities it uses, including writing and sendin
     "fs.write",
     "mail.send",
     "net.tcp",
-    "notify.center",
     "shell.openExternal",
     "ui.view",
   ]);
@@ -284,7 +283,7 @@ test("the plugin polls itself instead of asking the host for a schedule", () => 
   assert.equal(manifest.permissions.includes("scheduler"), false);
 });
 
-test("the command a notification links to is declared and registered", () => {
+test("the check command is declared and registered", () => {
   const ids = manifest.contributes.commands.map((command) => command.id);
   assert.deepEqual(ids, ["check-now"]);
   assert.match(mainSource, /const COMMAND_ID = "check-now";/);

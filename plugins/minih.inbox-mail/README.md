@@ -1,8 +1,10 @@
 # Mail Assistant
 
-Watches your mailboxes — as many as you add — and does three things with them: puts
-only the mail you care about into the app's notification centre, shows all of them
-in one **Inbox** panel in the sidebar, and sends mail from that same panel.
+Watches your mailboxes — as many as you add — shows them in one **Inbox** panel
+in the sidebar, and sends mail from that same panel. Mail arrivals, digests and
+account setup or connection errors no longer create notification-centre entries;
+mail and account status remain visible in the panel. Existing notification history
+is not deleted.
 
 Since 0.6.0 it also hands the agent four tools — search mail, read one message,
 reply, and write — so a conversation, or an automation you set up in the app, can
@@ -20,14 +22,6 @@ A mailbox is either one of the providers listed below or **a mail server you typ
 in yourself** — IMAP or POP3, implicit TLS or STARTTLS — which is what makes a
 company mailbox usable. A POP3 mailbox is polled and has no read or star state;
 everything else works the same for both.
-
-In the notification centre you get:
-
-- **alert** — one entry per message that comes from an important sender, matches
-  one of your keywords, or was marked urgent by the sender. The entry names the
-  account it came from.
-- **digest** — everything else, rolled up into one entry per account every N
-  minutes. The same entry is updated instead of piling up.
 
 In the panel you get every account's recent mail in one list — grouped by day,
 with a one-line preview of each message, a search box and four filters — and one
@@ -330,10 +324,10 @@ The importance rule calls no model, so it is short enough to predict:
 
 | Situation | Result |
 | --- | --- |
-| the sender is on your **important senders** list | alert |
-| the subject or the sender's name contains one of your **keywords** | alert |
-| the message carries `Importance: high`, `X-Priority: 1` or `X-MSMail-Priority: High` | alert |
-| anything else | digest, every *digest interval* minutes |
+| the sender is on your **important senders** list | important in the panel |
+| the subject or the sender's name contains one of your **keywords** | important in the panel |
+| the message carries `Importance: high`, `X-Priority: 1` or `X-MSMail-Priority: High` | important in the panel |
+| anything else | ordinary in the panel |
 
 An important-sender entry can be a full address (`boss@example.com`), a domain
 (`@example.com`, which matches everyone there) or a bare word, which matches the
@@ -409,11 +403,9 @@ account is polled instead of connected:
   only learns which accounts exist, their addresses, whether they are filled, and
   — for a server you typed — its host, port, protocol and transport.
 
-If a mailbox cannot connect, one entry appears in the notification centre saying
-why, and it is updated in place rather than repeated. That includes the two
-failures only a typed server can have: a server that does not offer `STARTTLS`,
-and a certificate that does not verify. A mailbox that still needs its provider
-gets one entry telling you to pick one in the panel.
+If a mailbox cannot connect, its account row in the Inbox panel explains why.
+No notification-centre entry is created, including for missing credentials,
+providers, TLS/STARTTLS failures or proxy errors.
 
 ## How it waits
 
@@ -432,11 +424,8 @@ minutes, on its own schedule — a broken mailbox never delays another one. A ma
 whose `UIDVALIDITY` changed starts a fresh baseline instead of replaying itself.
 POP3 accounts follow the same rhythm and their server's `LOGIN-DELAY`.
 
-Clicking a notification — an alert, a digest, or the row that says an account
-cannot connect — opens the **Inbox** panel, where the message or the broken account
-is. It does not run a check: that is what **Check now** in the palette (and the
-button in the panel) is for, and both poll every account immediately instead of
-waiting for the interval.
+**Check now** in the palette or panel polls the accounts immediately instead of
+waiting for the interval. It does not publish notifications.
 
 ## Upgrading from 0.1.0
 
@@ -448,11 +437,22 @@ belonged to, so the old file is left alone and each account baselines itself.
 
 ## What it changes
 
-Nothing, until you ask for it. Sending, saving an attachment, and delete/archive
-are the only operations that leave a trace, each one after a click of yours. Delete
+Opening a message marks it read after its body arrives. Other changes require
+your explicit action, including **Mark all as read**, sending, saving attachments
+and delete/archive. Delete
 and archive act on the one message you clicked, and this plugin never sends a
 mailbox-wide `EXPUNGE` — the command that would also remove messages other clients
 flagged for deletion.
+
+**Mark all as read** applies to the selected account, or all accounts when
+**All inboxes** is selected. Search, filters and the 200-envelope display limit do
+not narrow it. IMAP searches the entire inbox for unseen UIDs, then adds `\Seen`
+in batches of at most 100; other flags are preserved, bodies are not fetched, and
+mail arriving after the search is not included. POP3 marks only the messages
+already collected on this computer, without a server change. The button is locked
+while running. Successful accounts are saved even if another account fails; the
+panel names failed accounts and their reasons. A changed UIDVALIDITY refuses the
+action instead of marking renumbered messages.
 
 | Action | IMAP | POP3 |
 | --- | --- | --- |

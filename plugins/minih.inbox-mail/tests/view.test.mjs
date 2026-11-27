@@ -517,3 +517,18 @@ test("nothing in the panel still claims attachments are never downloaded or mail
   assert.equal(strings("zh-CN").attachments, "附件");
   assert.doesNotMatch(indexSource, /only listed|not downloaded/i);
 });
+
+
+test("the bulk-read toolbar wraps on narrow panels and has localized action copy", () => {
+  assert.match(indexSource, /id="btn-read-all"/);
+  assert.match(appSource, /nodes\.readAll\.addEventListener\("click"/);
+  assert.match(styleSource, /@media \(max-width: 699px\) \{\s*\.topbar \{\s*flex-wrap: wrap;/);
+  assert.match(styleSource, /\.topbar-actions \{\s*flex-wrap: wrap;\s*max-width: 100%;/);
+  for (const locale of ["en", "zh-CN"]) {
+    const table = strings(locale);
+    for (const key of ["markAllRead", "markAllReadHint", "markingAllRead", "allMarkedRead", "markAllReadFailed"]) {
+      assert.equal(typeof table[key], "string", `${locale}.${key}`);
+      assert.ok(table[key].length);
+    }
+  }
+});

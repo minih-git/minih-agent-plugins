@@ -89,6 +89,7 @@ const nodes = {
   banner: document.getElementById("banner"),
   compose: document.getElementById("btn-compose"),
   composeLayer: document.getElementById("compose"),
+  readAll: document.getElementById("btn-read-all"),
   check: document.getElementById("btn-check"),
   add: document.getElementById("btn-add"),
   accounts: document.getElementById("accounts"),
@@ -333,6 +334,10 @@ function renderStatic() {
   nodes.counts.textContent = state.snapshot ? table.messages(state.snapshot.messages.length) : "";
   nodes.sidebar.title = table.sidebarToggle;
   nodes.check.textContent = table.check;
+  nodes.readAll.textContent = state.busy ? table.markingAllRead : table.markAllRead;
+  nodes.readAll.title = table.markAllReadHint;
+  nodes.readAll.setAttribute("aria-label", table.markAllReadHint);
+  nodes.readAll.disabled = state.busy || !state.snapshot?.accounts.length;
   nodes.compose.textContent = table.compose.newMessage;
   nodes.compose.title = table.composeHint;
   nodes.compose.setAttribute("aria-label", table.composeHint);
@@ -1369,6 +1374,36 @@ async function checkAccount(account) {
   }
 }
 
+async function markAllRead() {
+  if (state.busy) return;
+  state.busy = true;
+  const accountId = state.accountId;
+  render();
+  try {
+    const result = await call("inbox.markAllRead", accountId === "all" ? {} : { accountId });
+    const failed = result.results.filter((entry) => entry.code);
+    const reader = state.reader;
+    if (reader?.status === "ready") {
+      const entry = result.results.find((item) => item.accountId === reader.message.accountId && !item.code);
+      if (entry) {
+        reader.message = { ...reader.message, readLocally: true,
+          flags: [...new Set([...(reader.message.flags ?? []), "\\Seen"])] };
+      }
+    }
+    await refresh({ quiet: true });
+    const details = failed.map((entry) => {
+      const account = state.snapshot?.accounts.find((item) => item.instanceId === entry.accountId);
+      return `${account?.label || entry.accountId}: ${codeText(state.locale, entry.code)}`;
+    });
+    setBanner(failed.length ? `${t().markAllReadFailed} ${details.join("; ")}` : t().allMarkedRead, failed.length > 0);
+  } catch (error) {
+    setBanner(describe(error, t().markAllReadFailed), true);
+  } finally {
+    state.busy = false;
+    render();
+  }
+}
+
 async function checkNow() {
   const table = t();
   try {
@@ -1530,6 +1565,7 @@ function wire() {
   nodes.searchClear.append(icon("close"));
   nodes.sidebar.setAttribute("aria-label", t().sidebarToggle);
   nodes.searchClear.setAttribute("aria-label", t().searchClear);
+  nodes.readAll.addEventListener("click", () => void markAllRead());
   nodes.check.addEventListener("click", () => void checkNow());
   nodes.add.addEventListener("click", () => void addAccount());
   // The composer is created once: building it per open would rebuild every field

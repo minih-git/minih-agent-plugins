@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.0
+
+- Add **Mark all as read** for the selected inbox or all inboxes: server-wide
+  unseen IMAP UIDs in bounded batches, local-only collected POP3 messages, and
+  per-account failure reporting. Search and filters do not narrow the action.
+- Stop publishing mail, digest, setup and connection notifications to the
+  notification centre; remove the `notify.center` permission. Account errors
+  remain in the Inbox panel. Existing notification history is unchanged.
+
 ## 0.6.0
 
 - **The plugin is now called Mail Assistant** (`邮件助手`), in the marketplace, in

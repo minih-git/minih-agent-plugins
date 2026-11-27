@@ -262,7 +262,7 @@ function createPop3Watcher(deps) {
   }
 
   async function flushDigest(settings, force) {
-    if (!state.pending.length) return false;
+    if (!deps.notify || !state.pending.length) return false;
     const elapsed = state.pendingSince === null ? 0 : now() - state.pendingSince;
     if (!force && elapsed < settings.digestMinutes * 60_000) return false;
     const entries = store.takeDigest(state);
@@ -323,10 +323,10 @@ function createPop3Watcher(deps) {
             cc: message.cc,
             hasAttachments: message.hasAttachments,
           });
-          if (verdict.level === "alert") {
+          if (deps.notify && verdict.level === "alert") {
             store.rememberSeen(state, message.key);
             await notify("alert", message);
-          } else {
+          } else if (deps.notify) {
             store.queueDigest(
               state,
               {
