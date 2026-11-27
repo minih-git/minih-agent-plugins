@@ -213,3 +213,81 @@ test("Ontology.validate tolerates notes without frontmatter", () => {
   assert.ok(issues.some((issue) => issue.code === "FRONTMATTER_INVALID"));
   assert.ok(issues.some((issue) => issue.code === "UNKNOWN_TYPE"));
 });
+
+test("a missing summary is a warning for entity notes and nothing else", async () => {
+  const { service } = await fixture();
+  const report = await service.lintVault();
+  const byCode = (code) => report.issues.filter((issue) => issue.code === code);
+  const missing = byCode("SUMMARY_MISSING").map((issue) => issue.path);
+  assert.ok(missing.includes("01 Projects/Project - Demo.md"), "a project note should say what it holds");
+  assert.ok(missing.includes("01 Projects/Demo/Runbook.md"), "a procedure resolves through its alias");
+  assert.ok(!missing.includes("Map.md"), "navigation notes are exempt");
+  assert.ok(!missing.includes("Incident.md"), "events are exempt");
+  assert.equal(byCode("SUMMARY_INVALID").length, 0);
+  for (const issue of byCode("SUMMARY_MISSING")) {
+    assert.equal(issue.severity, "warning");
+  }
+});
+
+test("summary must be a string of at most 320 characters", async () => {
+  const { service } = await fixture();
+  const project = await service.read({ note: "01 Projects/Project - Demo.md" });
+  const notAString = await service.write({
+    path: project.path,
+    frontmatter: { summary: 42 },
+    operation: "patchFrontmatter",
+    expectedSha256: project.sha256,
+  });
+  assert.ok(notAString.warnings.some((issue) => issue.code === "SUMMARY_INVALID"));
+
+  const current = await service.read({ note: "01 Projects/Project - Demo.md" });
+  const tooLong = await service.write({
+    path: current.path,
+    frontmatter: { summary: "甲".repeat(321) },
+    operation: "patchFrontmatter",
+    expectedSha256: current.sha256,
+  });
+  assert.ok(tooLong.warnings.some((issue) => issue.code === "SUMMARY_INVALID"));
+
+  const exact = await service.read({ note: "01 Projects/Project - Demo.md" });
+  const fine = await service.write({
+    path: exact.path,
+    frontmatter: { summary: "甲".repeat(320) },
+    operation: "patchFrontmatter",
+    expectedSha256: exact.sha256,
+  });
+  assert.ok(!fine.warnings.some((issue) => issue.code === "SUMMARY_INVALID"), "320 characters is allowed");
+  assert.ok(!fine.warnings.some((issue) => issue.code === "SUMMARY_MISSING"));
+});
+
+test("a write reports the missing summary and enforce never blocks on it", async () => {
+  const { service } = await fixture({ enforcement: "enforce" });
+  const content = `---
+title: New Project
+type: project
+status: active
+repo: /repo/new
+lint_ignore: [ORPHAN]
+---
+# New Project
+
+Body.
+`;
+  const preview = await service.write({ path: "New Project.md", content, create: true });
+  assert.equal(preview.dryRun, true);
+  assert.ok(preview.warnings.some((issue) => issue.code === "SUMMARY_MISSING"), "a dry run reports it");
+
+  const created = await service.write({ path: "New Project.md", content, create: true, dryRun: false });
+  assert.equal(created.action, "create", "enforce does not block on a warning");
+  assert.ok(created.warnings.some((issue) => issue.code === "SUMMARY_MISSING"), "the real write reports it too");
+
+  const read = await service.read({ note: "New Project.md" });
+  const withSummary = await service.write({
+    path: "New Project.md",
+    frontmatter: { summary: "一句话说清这个笔记讲什么。" },
+    operation: "patchFrontmatter",
+    expectedSha256: read.sha256,
+    dryRun: false,
+  });
+  assert.ok(!withSummary.warnings.some((issue) => issue.code === "SUMMARY_MISSING"), "a summary ends the warning");
+});

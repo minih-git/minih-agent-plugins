@@ -1537,9 +1537,17 @@ export class KnowledgeService {
         chars: normalizedContent.length,
       };
       const afterIssues = this.issuesFor(afterRecord);
-      warnings = this.ontology.newIssues(beforeIssues, afterIssues);
-      if (this.ontology.enforcement === "enforce" && warnings.length > 0) {
-        const codes = warnings.map((issue) => issue.code).join(", ");
+      const introduced = this.ontology.newIssues(beforeIssues, afterIssues);
+      // A missing `summary` describes what the note lacks rather than an error
+      // the write introduces, so it is reported on every write and never
+      // blocks one — not even under `enforce` (ADR 0004 §6).
+      const missingSummary = afterIssues.filter(
+        (issue) => issue.code === "SUMMARY_MISSING" && !introduced.includes(issue),
+      );
+      warnings = [...introduced, ...missingSummary];
+      const blocking = warnings.filter((issue) => issue.severity !== "warning");
+      if (this.ontology.enforcement === "enforce" && blocking.length > 0) {
+        const codes = blocking.map((issue) => issue.code).join(", ");
         throw new Error(`ONTOLOGY_VIOLATION: the write introduces new issues: ${codes}`);
       }
     }

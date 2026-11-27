@@ -64,8 +64,10 @@ predicates:
   related: { domain: [any], range: [any], cardinality: many }
 
 # Plain attributes, never predicates: `repo` (string or list of absolute
-# paths) and `source` (path, URL, or session id) carry no class semantics.
-attributes: [repo, source]
+# paths), `source` (path, URL, or session id), and `summary` (one sentence,
+# at most 320 characters) carry no class semantics. `summary` is the L0 of a
+# note in `knowledge_context` (ADR 0004 §2, §6).
+attributes: [repo, source, summary]
 
 stabilities: [stable, mixed, volatile, historical]
 

@@ -25,10 +25,28 @@ export const ISSUE_CODES = [
   "RANGE_VIOLATION",
   "CARDINALITY_VIOLATION",
   "FRONTMATTER_INVALID",
+  "SUMMARY_INVALID",
+  "SUMMARY_MISSING",
   "OVERSIZE",
   "ORPHAN",
   "STALE",
 ];
+
+/** A `summary` longer than this is not the one line L0 stands for (ADR 0004 §6). */
+export const SUMMARY_MAX_CHARS = 320;
+
+/**
+ * The classes whose notes are read as current state, and therefore should say
+ * in one sentence what they hold. Events and navigation notes are exempt.
+ */
+export const SUMMARY_CLASSES = new Set([
+  "project",
+  "topic",
+  "procedure",
+  "reference",
+  "convention",
+  "environment",
+]);
 
 function mergeOntology(base, override) {
   const merged = { ...base };
@@ -142,6 +160,28 @@ export class Ontology {
 
     if (metadata.stability !== undefined && metadata.stability !== "" && !this.stabilities.has(String(metadata.stability))) {
       issues.push({ code: "UNKNOWN_STABILITY", detail: `stability "${metadata.stability}" is not in [${[...this.stabilities].join(", ")}]` });
+    }
+
+    // `summary` is the note's L0 (ADR 0004 §6): a string of at most 320
+    // characters. A note that should have one but does not is a warning —
+    // it describes what the note lacks, not an error the write introduces.
+    if (metadata.summary !== undefined && metadata.summary !== null) {
+      const summary = metadata.summary;
+      if (typeof summary !== "string") {
+        issues.push({ code: "SUMMARY_INVALID", detail: "summary must be a string" });
+      } else if (summary.length > SUMMARY_MAX_CHARS) {
+        issues.push({
+          code: "SUMMARY_INVALID",
+          detail: `${summary.length} characters exceed ${SUMMARY_MAX_CHARS}`,
+        });
+      }
+    }
+    if (cls && SUMMARY_CLASSES.has(cls) && (typeof metadata.summary !== "string" || metadata.summary.trim() === "")) {
+      issues.push({
+        code: "SUMMARY_MISSING",
+        detail: "no summary; one sentence describing what this note holds",
+        severity: "warning",
+      });
     }
 
     // Predicates: wikilink values checked for target, domain, range, cardinality.
