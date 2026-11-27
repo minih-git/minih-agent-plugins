@@ -35,3 +35,30 @@ export function tokenize(text) {
   }
   return tokens;
 }
+
+/**
+ * CJK-aware size estimate (ADR 0004 §5): one token per CJK character, a
+ * quarter token for everything else, rounded up. The `chars / 4` habit
+ * understates Chinese text by about four times, which is what made the old
+ * context pack look affordable.
+ */
+const CJK_RANGES = [
+  [0x3000, 0x9fff], // CJK punctuation, kana-adjacent symbols, ideographs
+  [0xf900, 0xfaff], // CJK compatibility ideographs
+  [0xff00, 0xffef], // fullwidth forms
+  [0xac00, 0xd7af], // Hangul syllables
+  [0x3040, 0x30ff], // hiragana and katakana
+];
+
+function isCjk(codePoint) {
+  return CJK_RANGES.some(([start, end]) => codePoint >= start && codePoint <= end);
+}
+
+export function estimateTokens(text) {
+  const value = String(text ?? "");
+  let tokens = 0;
+  for (const character of value) {
+    tokens += isCjk(character.codePointAt(0)) ? 1 : 0.25;
+  }
+  return Math.ceil(tokens);
+}

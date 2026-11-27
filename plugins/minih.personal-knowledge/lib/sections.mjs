@@ -219,3 +219,96 @@ export function appendToSectionSpan(content, startLine, endLine, extra) {
   const tail = lines.slice(bodyEnd, insertAt);
   return head.concat([separator, addition], tail, lines.slice(endLine)).join("");
 }
+
+/**
+ * Character count of each outline entry's section: from its heading line to the
+ * line before the next heading of the same or a higher level. `outline` comes
+ * from `headingOutline(body)`, so line numbers index into `body`.
+ */
+export function sectionSizes(outline, body) {
+  const lines = splitLinesKeepingEnds(body ?? "");
+  return outline.map((entry, position) => {
+    let endLine = lines.length;
+    for (let next = position + 1; next < outline.length; next += 1) {
+      if (outline[next].level <= entry.level) {
+        endLine = outline[next].line;
+        break;
+      }
+    }
+    let chars = 0;
+    for (let line = entry.line; line < endLine && line < lines.length; line += 1) {
+      chars += lines[line].length;
+    }
+    return chars;
+  });
+}
+
+const ISO_DATE = /(\d{4}-\d{2}-\d{2})/;
+
+/** The first `YYYY-MM-DD` in a text, or `null`. */
+export function firstIsoDate(text) {
+  const match = ISO_DATE.exec(String(text ?? ""));
+  return match ? match[1] : null;
+}
+
+const PARAGRAPH_SKIP = /^(#{1,6}\s|> \[!|!\[|<!--)/;
+
+/**
+ * The first paragraph after the H1 (ADR 0004 §2, the `body` form of L0).
+ *
+ * Blank lines, headings, callout headers (`> [!`), image lines, and HTML
+ * comments are skipped, so a note that opens with a callout or a banner still
+ * yields prose. Without an H1 the body is read from its first line.
+ */
+export function firstParagraphAfterH1(body) {
+  const lines = splitLinesKeepingEnds(body ?? "");
+  let start = 0;
+  const h1 = lines.findIndex((line) => /^#\s+\S/.test(line));
+  if (h1 >= 0) start = h1 + 1;
+  const paragraph = [];
+  let inComment = false;
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index].replace(/\r?\n$/, "");
+    const trimmed = line.trim();
+    if (inComment) {
+      if (trimmed.includes("-->")) inComment = false;
+      continue;
+    }
+    if (trimmed === "") {
+      if (paragraph.length > 0) break;
+      continue;
+    }
+    if (trimmed.startsWith("<!--")) {
+      inComment = !trimmed.includes("-->");
+      continue;
+    }
+    if (PARAGRAPH_SKIP.test(trimmed)) {
+      if (paragraph.length > 0) break;
+      continue;
+    }
+    paragraph.push(trimmed);
+  }
+  return paragraph.join(" ").replace(/\s+/g, " ").trim();
+}
+
+const SENTENCE_END = /[。．！？!?]|\.(?=\s|$)/g;
+
+/**
+ * Cut `text` to at most `max` characters, preferring a sentence end.
+ *
+ * A boundary in the second half of the limit is used as is; anything earlier
+ * (or none at all) is a hard cut ending in `…`, so a one-character sentence at
+ * the start of a long paragraph cannot shrink the abstract to nothing.
+ */
+export function cutAtSentence(text, max) {
+  const value = String(text ?? "");
+  if (value.length <= max) return value;
+  const head = value.slice(0, max);
+  let boundary = -1;
+  SENTENCE_END.lastIndex = 0;
+  for (let match = SENTENCE_END.exec(head); match; match = SENTENCE_END.exec(head)) {
+    boundary = match.index;
+  }
+  if (boundary >= Math.floor(max / 2)) return head.slice(0, boundary + 1).trimEnd();
+  return `${value.slice(0, max - 1).trimEnd()}…`;
+}
