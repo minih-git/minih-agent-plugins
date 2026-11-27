@@ -40,7 +40,7 @@ keeping its own `LICENSE` and notice files inside its directory.
 
 | Plugin | Version | Author | License | Upstream |
 | --- | --- | --- | --- | --- |
-| `minih.personal-knowledge` (`Personal Knowledge`) | 0.7.2 | minih-git | MIT | this repository |
+| `minih.personal-knowledge` (`Personal Knowledge`) | 0.8.0 | minih-git | MIT | this repository |
 | `minih.selection-translate` (`Selection Translate`) | 0.3.2 | minih-git | MIT | this repository |
 | `minih.cache-keepwarm` (`Cache keep-warm`) | 0.1.0 | minih-git | MIT | this repository |
 | `minih.inbox-mail` (`Mail Assistant`) | 0.7.0 | minih-git | MIT | this repository |
@@ -86,6 +86,18 @@ requesting its graph, so cloud hydration is not held inside a 30-second bridge
 call. Read failures show the real error with retry, never demo data. File reads
 use a bounded parallel batch, and vault configuration stays available while
 indexing. No permission or data-format changes are needed.
+
+0.8.0 changes what `knowledge_context` returns by default: instead of the first
+24,000 characters of every matched note (20–30k tokens for a project note), it
+returns each note's one-sentence abstract and its outline, plus only the
+sections that match the given topic — a 12,000-character pack. The model reads
+any other heading with `knowledge_read {note, section}`; `mode: "full"` keeps
+the old whole-note output byte for byte. Notes gain an optional `summary`
+property (at most 320 characters) that becomes that abstract, and a vector hit
+below a cosine floor (0.35 by default, `scoreThreshold` in `embedding.json`) no
+longer enters the fusion. It adds no permission, no data-format change, and no
+new Desktop requirement. See `docs/adr/0004-progressive-context-pack.md` in the
+plugin.
 
 `minih.inbox-mail` 0.7.0 adds **Mark all as read** for the selected mailbox or
 all inboxes: IMAP includes unseen inbox mail beyond the displayed list, in batches
