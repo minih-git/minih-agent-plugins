@@ -43,6 +43,10 @@ Use these properties for durable knowledge when applicable:
 - `stability`: `stable`, `mixed`, `volatile`, or `historical`.
 - `review_interval`: `monthly`, `quarterly`, `on-change`, or `none`.
 - `project`: wikilink to the canonical project overview for project topic notes.
+- `summary`: one sentence, at most 320 characters, saying what the note holds
+  now. It is the note's L0 — what `knowledge_context` shows before the body —
+  so write it on every new project, topic, procedure, reference, convention, or
+  environment note; a missing one is a warning, never a write error.
 
 Do not treat `updated` as proof that a fact was verified. A source-code check does not prove current production runtime state.
 
