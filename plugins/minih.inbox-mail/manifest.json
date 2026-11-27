@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "minih.inbox-mail",
   "name": "Mail Assistant",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Watch your mailboxes in the Inbox panel without notification-centre entries. Mark all mail as read in one click: all unseen IMAP inbox mail or locally collected POP3 mail. An Inbox panel shows all accounts together, groups the list by day, previews each message in one line, searches and filters it, opens a message body only when you click it — which marks that one message read — and changes the star, deletes or archives only the message you clicked. Write a new message, reply, reply to all or forward from the same panel, attach files, and send through the app, which logs in with the account's own password and files a copy in the mailbox's Sent folder. Save an attachment from a message you opened to wherever the save dialog points. Each mailbox is either a known provider or a mail server you type in yourself (IMAP or POP3, TLS or STARTTLS); a POP3 mailbox is polled and has no read or star state. No model is called by the plugin itself, and it also gives the agent four tools — search mail, read one message, reply, and write — so a conversation, or an app automation you set up, can work through the mailbox: reading through a tool never marks a message read, and the two sending tools ask you first.",
   "author": "minih-git",
   "categories": [

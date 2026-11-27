@@ -43,7 +43,7 @@ keeping its own `LICENSE` and notice files inside its directory.
 | `minih.personal-knowledge` (`Personal Knowledge`) | 0.8.0 | minih-git | MIT | this repository |
 | `minih.selection-translate` (`Selection Translate`) | 0.3.2 | minih-git | MIT | this repository |
 | `minih.cache-keepwarm` (`Cache keep-warm`) | 0.1.0 | minih-git | MIT | this repository |
-| `minih.inbox-mail` (`Mail Assistant`) | 0.7.0 | minih-git | MIT | this repository |
+| `minih.inbox-mail` (`Mail Assistant`) | 0.7.1 | minih-git | MIT | this repository |
 | `minih.session-titles` (`Session Titles`) | 0.1.0 | minih-git | MIT | this repository |
 | `pi.file-manager` (`File Manager`) | 0.9.0 | Tioit-Wang | not declared by the author | not published by the author |
 
@@ -98,6 +98,13 @@ below a cosine floor (0.35 by default, `scoreThreshold` in `embedding.json`) no
 longer enters the fusion. It adds no permission, no data-format change, and no
 new Desktop requirement. See `docs/adr/0004-progressive-context-pack.md` in the
 plugin.
+
+`minih.inbox-mail` 0.7.1 fixes the two ways out of the panel that stopped at
+"That request was not valid." / "请求不合法。": clicking a link in a message and
+**Open web mailbox**. Both gave the host the address as an object, while
+`shell.openExternal` takes the URL string, so the host refused the call before
+the browser was asked. Nothing else changes; no permission, stored format or
+Desktop requirement moves.
 
 `minih.inbox-mail` 0.7.0 adds **Mark all as read** for the selected mailbox or
 all inboxes: IMAP includes unseen inbox mail beyond the displayed list, in batches

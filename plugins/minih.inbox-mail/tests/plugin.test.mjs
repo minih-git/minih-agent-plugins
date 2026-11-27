@@ -244,10 +244,14 @@ function fakeHost({ instances = [], settings = {}, locale = "en", servers = {}, 
         return { id: `row-${notifications.length}` };
       },
     },
+    // The host's contract is a bare URL string (`shell.openExternal: (url:
+    // string) => Promise<void>`). Refusing anything else here is what makes a
+    // caller that wraps the URL in an object fail in the test instead of only
+    // in the app, where the host answers "INVALID_ARGUMENT".
     shell: {
-      openExternal: async ({ url }) => {
+      openExternal: async (url) => {
+        if (typeof url !== "string") throw coded("INVALID_ARGUMENT", "the URL must be a string");
         opened.push(url);
-        return { ok: true };
       },
     },
     commands: {

@@ -1503,7 +1503,7 @@ function createRuntime(deps) {
       if (typeof host.shell?.openExternal !== "function") {
         throw coded("UNSUPPORTED", "this app version cannot open a browser");
       }
-      await host.shell.openExternal({ url: provider.webmail });
+      await host.shell.openExternal(provider.webmail);
       return { url: provider.webmail };
     },
 
@@ -1516,7 +1516,7 @@ function createRuntime(deps) {
       if (typeof host.shell?.openExternal !== "function") {
         throw coded("UNSUPPORTED", "this app version cannot open a browser");
       }
-      await host.shell.openExternal({ url: target });
+      await host.shell.openExternal(target);
       return { url: target };
     },
   };

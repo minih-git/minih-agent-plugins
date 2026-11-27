@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.1
+
+- Fix **clicking a link in a message** and **Open web mailbox** doing nothing
+  but showing "That request was not valid." / "请求不合法。". Both handed the
+  address to the host as `{ url }`, while `shell.openExternal` takes the URL
+  string itself, so the host refused every call as `INVALID_ARGUMENT` before
+  the browser was ever asked. The panel's test host now takes a string and
+  refuses anything else, so the same mistake fails a test instead of waiting
+  for a user to find it.
+
 ## 0.7.0
 
 - Add **Mark all as read** for the selected inbox or all inboxes: server-wide
