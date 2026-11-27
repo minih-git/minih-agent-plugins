@@ -3,9 +3,9 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
-// In host mode the two retrieval tools are served by the plugin's main process
-// instead (ADR 0003 §2), so the MCP server must not list them.
-const MAIN_PROCESS_TOOLS = ["conversation_search", "knowledge_search"];
+// In host mode the retrieval tools are served by the plugin's main process
+// instead (ADR 0003 §2, ADR 0004 §4), so the MCP server must not list them.
+const MAIN_PROCESS_TOOLS = ["conversation_search", "knowledge_context", "knowledge_search"];
 const REQUIRED_TOOLS = [
   "conversation_read",
   "conversation_search",
@@ -147,13 +147,30 @@ try {
     if (!probeCwd) throw new Error("--config requires --cwd <repo path> for the routing assertion.");
     const context = await client.request("tools/call", {
       name: "knowledge_context",
-      arguments: { cwd: probeCwd, topic: probeTopic, maxChars: 12_000 },
+      arguments: { cwd: probeCwd, topic: probeTopic },
     });
     const matched = context.structuredContent?.matchedProjects ?? [];
     if (context.isError || matched.length < 1) {
       throw new Error(`knowledge_context did not resolve a project mapping for ${probeCwd}.`);
     }
     console.log(`context matched: ${matched.join(", ")}`);
+
+    // ADR 0004 verification: the default pack and the whole-note pack side by
+    // side, so the size difference is measured rather than assumed.
+    for (const mode of ["navigate", "full"]) {
+      const answer = await client.request("tools/call", {
+        name: "knowledge_context",
+        arguments: { cwd: probeCwd, topic: probeTopic, mode },
+      });
+      if (answer.isError) {
+        throw new Error(`knowledge_context ${mode} failed: ${answer.content?.[0]?.text ?? "no text"}`);
+      }
+      const text = answer.content?.[0]?.text ?? "";
+      const value = answer.structuredContent ?? {};
+      console.log(
+        `context ${mode}: ${text.length} chars · estimatedTokens ${value.estimatedTokens ?? "n/a"} · vector ${value.retrieval?.vector ?? "n/a"} · sections ${value.sections?.length ?? "n/a"} · truncated ${value.truncated ?? "n/a"}`,
+      );
+    }
   }
 
   const stale = await client.request("tools/call", {
